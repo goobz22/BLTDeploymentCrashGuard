@@ -133,7 +133,13 @@ namespace BLTDeploymentCrashGuard
     [HarmonyPatch(typeof(DeploymentMissionController), "OnMissionTick")]
     internal static class DeploymentTickHoldPatch
     {
-        private const float MaxHoldSeconds = 90f;
+        // Short grace window: on co-op clients the player agent can arrive via network
+        // replication moments after the scene loads. But when the roster is simply
+        // broken (host-solo sp-native battles), no amount of waiting produces an agent
+        // — proven 2026-08-18: a 90s hold expired and SetupTeams still NRE'd. Keep the
+        // wait short so broken deployments stall seconds, not minutes; the finalizers
+        // carry the crash protection either way.
+        private const float MaxHoldSeconds = 15f;
 
         private static DeploymentMissionController _tracked;
         private static float _heldSeconds;

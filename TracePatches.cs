@@ -98,6 +98,31 @@ namespace BLTDeploymentCrashGuard
 
         private static void SettlementEncounterPrefix(object[] __args)
         {
+            // AI parties enter settlements constantly; only the player's encounters are
+            // diagnostic signal (the AI flood drowned the log on 2026-08-18).
+            try
+            {
+                bool involvesMainParty = false;
+                if (__args != null)
+                {
+                    foreach (object arg in __args)
+                    {
+                        TaleWorlds.CampaignSystem.Party.MobileParty party = arg as TaleWorlds.CampaignSystem.Party.MobileParty;
+                        if (party != null && party.IsMainParty)
+                        {
+                            involvesMainParty = true;
+                            break;
+                        }
+                    }
+                }
+                if (!involvesMainParty)
+                {
+                    return;
+                }
+            }
+            catch
+            {
+            }
             Log.Info("[TRACE] EncounterManager.StartSettlementEncounter " + FormatArgs(__args) + CallStack());
         }
 
