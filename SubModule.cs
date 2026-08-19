@@ -8,32 +8,35 @@ using TaleWorlds.MountAndBlade;
 namespace BLTDeploymentCrashGuard
 {
     /// <summary>
-    /// Companion crash guard for BannerlordTogether siege/battle deployment.
+    /// Companion guard for BannerlordTogether battles.
     ///
-    /// Root cause it protects against: the native DeploymentMissionController runs
-    /// SetupTeams() on the first mission tick where Mission.Scene != null, and that
-    /// method dereferences Mission.InitialPlayerAgent without a null check:
+    /// Root problem (proven 2026-08-18, host-solo co-op): the mod's battle-mission
+    /// pipeline leaves the player's side without any mission troops — the native
+    /// DeploymentMissionController.SetupTeams() then dereferences the never-created
+    /// Mission.InitialPlayerAgent and crashes to desktop:
     ///
     ///     Agent initialPlayerAgent = base.Mission.InitialPlayerAgent;
     ///     initialPlayerAgent.Controller = AgentControllerType.None;   // NRE
     ///
-    /// Mission._initialPlayerAgent is only assigned when an agent is built with
-    /// Controller == Player. BannerlordTogether defers/replicates player-side spawns
-    /// over the network in its SP-native co-op battles, so on sieges the player agent
-    /// often does not exist yet when the scene finishes loading -> guaranteed crash.
-    ///
-    /// Fix strategy, three layers:
-    ///  1. Hold the deployment tick (skip OnMissionTick) until InitialPlayerAgent
-    ///     exists, so native team setup runs against a valid state. Capped so a
-    ///     mission that never gets a player agent (e.g. spectator) cannot softlock.
+    /// Layers:
+    ///  1. SoloVanillaBattles (default ON): remove foreign Harmony patches from the
+    ///     battle/deployment/spawn methods so battles run pure vanilla while hosting
+    ///     solo. See SoloVanillaBattles.cs.
     ///  2. Finalizer on SetupTeams: suppress any escaping exception (a throw here is
     ///     always an instant crash-to-desktop).
     ///  3. Finalizer on FinishDeployment: suppress + best-effort completion of the
     ///     method's tail steps so the battle stays playable instead of freezing.
+    ///
+    /// (v1 also had a "hold the tick until InitialPlayerAgent exists" prefix. Removed:
+    /// vanilla creates the player agent INSIDE SetupTeams' own spawn step, so the hold
+    /// could never succeed — it only delayed every deployment. Evidence: 2026-08-18
+    /// 23:04:41, a 90s hold expired and SetupTeams still NRE'd.)
     /// </summary>
     public class SubModule : MBSubModuleBase
     {
-        private const string HarmonyId = "bltogether.deployment.crashguard";
+        internal const string HarmonyId = "bltogether.deployment.crashguard";
+
+        private static Harmony _harmony;
         private static bool _patched;
 
         protected override void OnSubModuleLoad()
@@ -46,6 +49,21 @@ namespace BLTDeploymentCrashGuard
         {
             base.OnBeforeInitialModuleScreenSetAsRoot();
             ApplyPatches();
+            // All modules have loaded and applied their patches by now.
+            SoloVanillaBattles.Sweep(_harmony, "module-screen");
+        }
+
+        protected override void OnGameStart(Game game, IGameStarter gameStarterObject)
+        {
+            base.OnGameStart(game, gameStarterObject);
+            SoloVanillaBattles.Sweep(_harmony, "game-start");
+        }
+
+        public override void OnMissionBehaviorInitialize(Mission mission)
+        {
+            base.OnMissionBehaviorInitialize(mission);
+            // Per-mission re-sweep: catches patches (re)applied after game start.
+            SoloVanillaBattles.Sweep(_harmony, "mission-init");
         }
 
         private static void ApplyPatches()
@@ -56,11 +74,11 @@ namespace BLTDeploymentCrashGuard
             }
             try
             {
-                Harmony harmony = new Harmony(HarmonyId);
-                harmony.PatchAll(typeof(SubModule).Assembly);
-                TracePatches.Apply(harmony);
+                _harmony = new Harmony(HarmonyId);
+                _harmony.PatchAll(typeof(SubModule).Assembly);
+                TracePatches.Apply(_harmony);
                 _patched = true;
-                Log.Info("patches applied (deployment tick hold + SetupTeams/FinishDeployment crash guards + trace)");
+                Log.Info("patches applied (SetupTeams/FinishDeployment crash guards + trace); soloVanillaBattles=" + SoloVanillaBattles.Enabled.ToString().ToLowerInvariant());
             }
             catch (Exception ex)
             {
@@ -123,99 +141,7 @@ namespace BLTDeploymentCrashGuard
     }
 
     /// <summary>
-    /// Layer 1: while team setup has not happened yet and the scene is ready, skip the
-    /// deployment controller's tick until the player agent exists. Native SetupTeams()
-    /// then runs against a fully valid mission state — this is the actual fix; the
-    /// finalizers below are backstops.
-    /// Skipping the original does not skip BannerlordTogether's own postfix on this
-    /// method (Harmony postfixes still run), so its ready-gate/drain logic keeps working.
-    /// </summary>
-    [HarmonyPatch(typeof(DeploymentMissionController), "OnMissionTick")]
-    internal static class DeploymentTickHoldPatch
-    {
-        // Short grace window: on co-op clients the player agent can arrive via network
-        // replication moments after the scene loads. But when the roster is simply
-        // broken (host-solo sp-native battles), no amount of waiting produces an agent
-        // — proven 2026-08-18: a 90s hold expired and SetupTeams still NRE'd. Keep the
-        // wait short so broken deployments stall seconds, not minutes; the finalizers
-        // carry the crash protection either way.
-        private const float MaxHoldSeconds = 15f;
-
-        private static DeploymentMissionController _tracked;
-        private static float _heldSeconds;
-        private static bool _holding;
-        private static bool _capReleased;
-
-        private static bool Prefix(DeploymentMissionController __instance, float dt)
-        {
-            try
-            {
-                if (!ReferenceEquals(_tracked, __instance))
-                {
-                    _tracked = __instance;
-                    _heldSeconds = 0f;
-                    _holding = false;
-                    _capReleased = false;
-                }
-
-                if (__instance.TeamSetupOver)
-                {
-                    // done with this controller — drop the static reference so the
-                    // finished mission isn't kept reachable between battles
-                    _tracked = null;
-                    _holding = false;
-                    _heldSeconds = 0f;
-                    _capReleased = false;
-                    return true;
-                }
-
-                if (_capReleased)
-                {
-                    return true; // cap already fired for this controller — never re-hold or re-log
-                }
-
-                Mission mission = __instance.Mission;
-                if (mission == null || mission.Scene == null)
-                {
-                    return true; // native tick no-ops in this state anyway
-                }
-
-                if (mission.InitialPlayerAgent != null)
-                {
-                    if (_holding)
-                    {
-                        Log.Info(string.Format("player agent arrived after holding {0:0.0}s — releasing native team setup", _heldSeconds));
-                        _holding = false;
-                    }
-                    return true;
-                }
-
-                // Scene is ready but no player-controlled agent exists yet.
-                _heldSeconds += dt;
-                if (!_holding)
-                {
-                    _holding = true;
-                    Log.Info("holding native deployment team setup: Mission.InitialPlayerAgent is null (waiting for player spawn/replication)");
-                }
-                if (_heldSeconds >= MaxHoldSeconds)
-                {
-                    Log.Info(string.Format("held {0:0.0}s without a player agent — releasing; crash-guard finalizers take over", _heldSeconds));
-                    _holding = false;
-                    _capReleased = true;
-                    return true;
-                }
-                return false;
-            }
-            catch (Exception ex)
-            {
-                Log.Info("tick-hold prefix error (passing through): " + ex);
-                return true;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Layer 2: an exception escaping SetupTeams() is an unconditional crash-to-desktop
+    /// An exception escaping SetupTeams() is an unconditional crash-to-desktop
     /// (it unwinds through Mission.OnTick into the engine). Suppress and log instead.
     /// </summary>
     [HarmonyPatch(typeof(DeploymentMissionController), "SetupTeams")]
@@ -234,11 +160,10 @@ namespace BLTDeploymentCrashGuard
     }
 
     /// <summary>
-    /// Layer 3: FinishDeployment dereferences Mission.InitialPlayerAgent too (and the
-    /// field is re-nulled if the player agent is ever removed). On an escaping
-    /// exception, run the method's remaining tail steps best-effort so the battle
-    /// unfreezes (AI ticking back on, dying re-enabled, controller removed), then
-    /// suppress.
+    /// FinishDeployment dereferences Mission.InitialPlayerAgent too (and the field is
+    /// re-nulled if the player agent is ever removed). On an escaping exception, run
+    /// the method's remaining tail steps best-effort so the battle unfreezes
+    /// (AI ticking back on, dying re-enabled, controller removed), then suppress.
     /// </summary>
     [HarmonyPatch(typeof(DeploymentMissionController), "FinishDeployment")]
     internal static class FinishDeploymentCrashGuardPatch
