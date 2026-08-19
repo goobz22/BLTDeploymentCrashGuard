@@ -346,8 +346,8 @@ namespace BLTDeploymentCrashGuard
                 string configPath = Path.Combine(moduleRoot, ConfigFileName);
                 if (!File.Exists(configPath))
                 {
-                    File.WriteAllText(configPath, "{\n  \"battleMode\": \"auto\"\n}\n");
-                    Log.Info("[BATTLE-MODE] wrote default " + ConfigFileName + " (battleMode=auto)");
+                    File.WriteAllText(configPath, "{\n  \"battleMode\": \"auto\",\n  \"timeAlwaysFlows\": true\n}\n");
+                    Log.Info("[BATTLE-MODE] wrote default " + ConfigFileName + " (battleMode=auto, timeAlwaysFlows=true)");
                     return "auto";
                 }
                 string text = File.ReadAllText(configPath);

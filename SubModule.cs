@@ -86,6 +86,7 @@ namespace BLTDeploymentCrashGuard
                 TracePatches.Apply(_harmony);
                 ControlTrace.Apply(_harmony);
                 TimeTrace.Apply(_harmony);
+                TimeFlowPatch.Apply(_harmony);
                 _patched = true;
                 Log.Info("patches applied (crash guards + trace + control trace + time trace); battleMode=" + BattleMode.ConfigMode);
             }
