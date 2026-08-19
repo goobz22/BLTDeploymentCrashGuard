@@ -38,11 +38,19 @@ if not exist "%GAME%\Modules" (
 )
 
 set "MOD=%GAME%\Modules\BLTDeploymentCrashGuard"
-echo Installing into: %MOD%
-mkdir "%MOD%\bin\Win64_Shipping_Client" 2>nul
+set "DLLDIR=%MOD%\bin\Win64_Shipping_Client"
+echo Installing into: "%MOD%"
+mkdir "%DLLDIR%" 2>nul
+
+rem If the game is running it locks the loaded DLL; a rename is still allowed,
+rem so move the old file aside and download the new one next to it.
+if exist "%DLLDIR%\BLTDeploymentCrashGuard.dll" (
+  del /f /q "%DLLDIR%\BLTDeploymentCrashGuard.dll.prev" >nul 2>&1
+  ren "%DLLDIR%\BLTDeploymentCrashGuard.dll" "BLTDeploymentCrashGuard.dll.prev" >nul 2>&1
+)
 
 curl -fsSL -o "%MOD%\SubModule.xml" "%REPO%/dist/SubModule.xml" || goto :fail
-curl -fsSL -o "%MOD%\bin\Win64_Shipping_Client\BLTDeploymentCrashGuard.dll" "%REPO%/dist/BLTDeploymentCrashGuard.dll" || goto :fail
+curl -fsSL -o "%DLLDIR%\BLTDeploymentCrashGuard.dll" "%REPO%/dist/BLTDeploymentCrashGuard.dll" || goto :fail
 
 echo.
 echo ============================================================
@@ -55,5 +63,6 @@ exit /b 0
 
 :fail
 echo.
-echo ERROR: download failed. Check your internet connection and try again.
+echo ERROR: install failed. Check your internet connection; if Bannerlord is
+echo running, close it and run this again.
 exit /b 1
