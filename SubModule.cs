@@ -56,9 +56,11 @@ namespace BLTDeploymentCrashGuard
             }
             try
             {
-                new Harmony(HarmonyId).PatchAll(typeof(SubModule).Assembly);
+                Harmony harmony = new Harmony(HarmonyId);
+                harmony.PatchAll(typeof(SubModule).Assembly);
+                TracePatches.Apply(harmony);
                 _patched = true;
-                Log.Info("patches applied (deployment tick hold + SetupTeams/FinishDeployment crash guards)");
+                Log.Info("patches applied (deployment tick hold + SetupTeams/FinishDeployment crash guards + trace)");
             }
             catch (Exception ex)
             {

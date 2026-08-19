@@ -35,6 +35,10 @@
       <HintPath>$(GameBin)\TaleWorlds.Core.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="TaleWorlds.CampaignSystem">
+      <HintPath>$(GameBin)\TaleWorlds.CampaignSystem.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="TaleWorlds.Engine">
       <HintPath>$(GameBin)\TaleWorlds.Engine.dll</HintPath>
       <Private>false</Private>
