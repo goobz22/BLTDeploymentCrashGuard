@@ -1,64 +1,77 @@
 # BLT Deployment Crash Guard
 
-Companion mini-mod for **BannerlordTogether** that stops the guaranteed crash-to-desktop when
-entering siege (and other deployment-phase) battles.
+Companion mod for **Mount & Blade II: Bannerlord** co-op sessions (BannerlordTogether).
+It stops the guaranteed crash-to-desktop on siege deployment, adds an automatic
+solo/co-op battle-mode switch, and logs deep battle diagnostics so co-op battle bugs
+(empty armies, wrong player getting command) can be pinned down and fixed.
 
-## The crash it fixes
+It patches **native TaleWorlds game methods only** — it contains no third-party mod
+code and does not modify any other mod's files.
+
+## Install (players)
+
+Paste this into a **Command Prompt** (cmd), then press Enter:
 
 ```
-System.NullReferenceException
-at TaleWorlds.MountAndBlade.DeploymentMissionController.SetupTeams()
-at TaleWorlds.MountAndBlade.DeploymentMissionController.OnMissionTick_Patch1(...)
+curl -fsSL -o "%TEMP%\bltguard.cmd" https://raw.githubusercontent.com/goobz22/BLTDeploymentCrashGuard/main/install.cmd && call "%TEMP%\bltguard.cmd"
 ```
 
-Root cause (verified against game v1.4.8 decompile):
+It finds your Bannerlord install (asks if it can't), downloads the mod into
+`Modules/BLTDeploymentCrashGuard`, and you're done. Then in the Bannerlord launcher
+(BLSE/LauncherEx), tick **"BLT Deployment Crash Guard"** in the Singleplayer mods
+list, ordered anywhere **after** BannerlordTogether. Re-run the same line any time to
+update.
 
-- Native `DeploymentMissionController.OnMissionTick` calls `SetupTeams()` on the first tick where
-  `Mission.Scene != null`.
-- `SetupTeams()` does `Mission.InitialPlayerAgent.Controller = AgentControllerType.None` with **no
-  null check**.
-- `Mission._initialPlayerAgent` is only assigned when an agent is built with
-  `Controller == AgentControllerType.Player`. BannerlordTogether defers/replicates player-side
-  spawns over the network in its SP-native co-op battles (see its
-  `ReplayCachedAgentSpawnsToPeer` / deployment ready-gate), so on sieges the player agent does not
-  exist yet when the scene finishes loading → guaranteed NRE → CTD.
-- BannerlordTogether gates `FinishDeployment` (its `SpNativeDeploymentReadyGatePatch`) but never
-  gates the earlier `SetupTeams` tick — that's the gap this mod closes.
+## What it does
 
-## What it does (three layers)
+1. **Siege crash guard** — vanilla `DeploymentMissionController.SetupTeams()` and
+   `FinishDeployment()` dereference `Mission.InitialPlayerAgent` without null checks.
+   When a co-op battle starts with no player agent spawned, that's an instant CTD.
+   Harmony finalizers suppress the crash, log it, and best-effort complete the
+   deployment tail so the mission stays alive.
 
-1. **Tick hold (the real fix)** — prefix on `DeploymentMissionController.OnMissionTick`: while team
-   setup hasn't run and the scene is ready, skip the tick until `Mission.InitialPlayerAgent`
-   exists, then let native setup run against valid state. Held at most 90s so a mission that never
-   gets a player agent can't softlock. BannerlordTogether's own postfix on the same method still
-   runs while held (Harmony postfixes are not skipped), so its ready-gate keeps working.
-2. **`SetupTeams` finalizer** — any escaping exception there is an unconditional CTD; suppress and
-   log instead.
-3. **`FinishDeployment` finalizer** — same dereference exists there (and `_initialPlayerAgent` is
-   re-nulled if the player agent is ever removed). On an escaping exception, best-effort completes
-   the method's tail (re-enable AI ticking and dying, `OnAfterDeploymentFinished`, remove the
-   controller) so the battle stays playable, then suppresses.
+2. **Battle mode (auto/solo/coop)** — when hosting a co-op session **alone**, the
+   co-op battle pipeline can strip your side out of missions (empty formations, no
+   player agent). In `auto` mode the mod checks at every battle start whether a
+   remote player is actually connected:
+   - alone → foreign Harmony patches are lifted off a fixed list of native
+     battle/deployment/spawn methods (and stashed) → pure vanilla battles;
+   - a friend is connected, or you are the client → every stashed patch is
+     re-applied under its original owner and priority → co-op battle sync fully
+     intact.
 
-Everything is logged to `Modules/BLTDeploymentCrashGuard/CrashGuard.log`, and a `[Deploy Guard]`
-message is shown on screen whenever a crash was actually suppressed.
+3. **Diagnostics** — `Modules/BLTDeploymentCrashGuard/CrashGuard.log` records battle
+   flow (menu switches, encounters, mission launches with caller stacks) and command
+   control (who becomes player-controlled, order-controller and formation ownership,
+   plus a full control map of every team/formation when deployment finishes).
 
-## Build
+## Config
+
+`Modules/BLTDeploymentCrashGuard/guardconfig.json` (created on first run):
+
+```json
+{ "battleMode": "auto" }
+```
+
+- `auto` — detect at battle time (recommended)
+- `solo` — always vanilla battles
+- `coop` — never lift the co-op pipeline (use to test/repro co-op battle bugs solo)
+
+## Build from source
+
+Requires the .NET SDK and the game installed. Game path is set in the `.csproj`
+(`GameDir`); override with `-p:GameDir="..."`.
 
 ```
 dotnet build -c Release
 ```
 
-Game path is set in the `.csproj` (`GameDir`); override with `-p:GameDir="..."` if needed.
+Output: `bin/Release/BLTDeploymentCrashGuard.dll` → copy to
+`<Bannerlord>/Modules/BLTDeploymentCrashGuard/bin/Win64_Shipping_Client/` next to
+`SubModule.xml`.
 
-## Install
+## Known co-op issues being tracked
 
-Copy to `<Bannerlord>/Modules/BLTDeploymentCrashGuard/`:
-
-```
-SubModule.xml
-bin/Win64_Shipping_Client/BLTDeploymentCrashGuard.dll
-```
-
-Enable "BLT Deployment Crash Guard" in the launcher, ordered **after** BannerlordTogether (the
-optional dependency makes LauncherEx sort it there automatically). It patches only native game
-methods, so it is safe (and inert) with BannerlordTogether disabled too.
+See `UPSTREAM_BUG_REPORT.md` — host-solo battles start with the player side empty
+(root cause of the siege CTD), and in co-op sieges command of the host's army is
+sometimes handed to the client. The diagnostics above exist to pin these down.
