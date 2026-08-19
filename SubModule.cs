@@ -83,8 +83,9 @@ namespace BLTDeploymentCrashGuard
                 _harmony.PatchAll(typeof(SubModule).Assembly);
                 TracePatches.Apply(_harmony);
                 ControlTrace.Apply(_harmony);
+                TimeTrace.Apply(_harmony);
                 _patched = true;
-                Log.Info("patches applied (crash guards + trace + control trace); battleMode=" + BattleMode.ConfigMode);
+                Log.Info("patches applied (crash guards + trace + control trace + time trace); battleMode=" + BattleMode.ConfigMode);
             }
             catch (Exception ex)
             {
