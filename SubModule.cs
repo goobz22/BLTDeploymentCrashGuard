@@ -39,6 +39,11 @@ namespace BLTDeploymentCrashGuard
         private static Harmony _harmony;
         private static bool _patched;
 
+        internal static Harmony HarmonyInstance
+        {
+            get { return _harmony; }
+        }
+
         protected override void OnSubModuleLoad()
         {
             base.OnSubModuleLoad();
@@ -50,20 +55,20 @@ namespace BLTDeploymentCrashGuard
             base.OnBeforeInitialModuleScreenSetAsRoot();
             ApplyPatches();
             // All modules have loaded and applied their patches by now.
-            SoloVanillaBattles.Sweep(_harmony, "module-screen");
+            BattleMode.DecideAndApply(_harmony, "module-screen");
         }
 
         protected override void OnGameStart(Game game, IGameStarter gameStarterObject)
         {
             base.OnGameStart(game, gameStarterObject);
-            SoloVanillaBattles.Sweep(_harmony, "game-start");
+            BattleMode.DecideAndApply(_harmony, "game-start");
         }
 
         public override void OnMissionBehaviorInitialize(Mission mission)
         {
             base.OnMissionBehaviorInitialize(mission);
-            // Per-mission re-sweep: catches patches (re)applied after game start.
-            SoloVanillaBattles.Sweep(_harmony, "mission-init");
+            // Per-mission re-check: a friend joining/leaving flips the mode here too.
+            BattleMode.DecideAndApply(_harmony, "mission-init");
         }
 
         private static void ApplyPatches()
@@ -77,8 +82,9 @@ namespace BLTDeploymentCrashGuard
                 _harmony = new Harmony(HarmonyId);
                 _harmony.PatchAll(typeof(SubModule).Assembly);
                 TracePatches.Apply(_harmony);
+                ControlTrace.Apply(_harmony);
                 _patched = true;
-                Log.Info("patches applied (SetupTeams/FinishDeployment crash guards + trace); soloVanillaBattles=" + SoloVanillaBattles.Enabled.ToString().ToLowerInvariant());
+                Log.Info("patches applied (crash guards + trace + control trace); battleMode=" + BattleMode.ConfigMode);
             }
             catch (Exception ex)
             {
