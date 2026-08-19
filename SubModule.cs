@@ -55,12 +55,14 @@ namespace BLTDeploymentCrashGuard
             base.OnBeforeInitialModuleScreenSetAsRoot();
             ApplyPatches();
             // All modules have loaded and applied their patches by now.
+            TimeEnforcementGuard.Apply(_harmony);
             BattleMode.DecideAndApply(_harmony, "module-screen");
         }
 
         protected override void OnGameStart(Game game, IGameStarter gameStarterObject)
         {
             base.OnGameStart(game, gameStarterObject);
+            TimeEnforcementGuard.Apply(_harmony); // retry in case the co-op assembly loaded late
             BattleMode.DecideAndApply(_harmony, "game-start");
         }
 

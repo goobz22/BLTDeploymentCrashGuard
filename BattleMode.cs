@@ -383,6 +383,43 @@ namespace BLTDeploymentCrashGuard
         private static bool _searched;
         private static Type _sessionType;
 
+        /// <summary>Find a type by simple name in the co-op mod's assembly (null if absent).</summary>
+        internal static Type FindCoopType(string simpleName)
+        {
+            try
+            {
+                foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    if (assembly.GetName().Name != "BannerlordTogether")
+                    {
+                        continue;
+                    }
+                    Type[] types;
+                    try
+                    {
+                        types = assembly.GetTypes();
+                    }
+                    catch (ReflectionTypeLoadException loadEx)
+                    {
+                        types = loadEx.Types;
+                    }
+                    foreach (Type type in types)
+                    {
+                        if (type != null && type.Name == simpleName)
+                        {
+                            return type;
+                        }
+                    }
+                    return null;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Info("[PEER-DETECT] type lookup failed for " + simpleName + ": " + ex.Message);
+            }
+            return null;
+        }
+
         private static Type SessionType
         {
             get
@@ -390,39 +427,7 @@ namespace BLTDeploymentCrashGuard
                 if (!_searched)
                 {
                     _searched = true;
-                    try
-                    {
-                        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-                        {
-                            string name = assembly.GetName().Name;
-                            if (name != "BannerlordTogether")
-                            {
-                                continue;
-                            }
-                            Type[] types;
-                            try
-                            {
-                                types = assembly.GetTypes();
-                            }
-                            catch (ReflectionTypeLoadException loadEx)
-                            {
-                                types = loadEx.Types;
-                            }
-                            foreach (Type type in types)
-                            {
-                                if (type != null && type.Name == "CoopSession")
-                                {
-                                    _sessionType = type;
-                                    break;
-                                }
-                            }
-                            break;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Info("[PEER-DETECT] session type lookup failed: " + ex.Message);
-                    }
+                    _sessionType = FindCoopType("CoopSession");
                 }
                 return _sessionType;
             }
