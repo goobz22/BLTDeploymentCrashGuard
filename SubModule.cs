@@ -136,6 +136,7 @@ namespace BLTDeploymentCrashGuard
         private static DeploymentMissionController _tracked;
         private static float _heldSeconds;
         private static bool _holding;
+        private static bool _capReleased;
 
         private static bool Prefix(DeploymentMissionController __instance, float dt)
         {
@@ -146,11 +147,23 @@ namespace BLTDeploymentCrashGuard
                     _tracked = __instance;
                     _heldSeconds = 0f;
                     _holding = false;
+                    _capReleased = false;
                 }
 
                 if (__instance.TeamSetupOver)
                 {
+                    // done with this controller — drop the static reference so the
+                    // finished mission isn't kept reachable between battles
+                    _tracked = null;
+                    _holding = false;
+                    _heldSeconds = 0f;
+                    _capReleased = false;
                     return true;
+                }
+
+                if (_capReleased)
+                {
+                    return true; // cap already fired for this controller — never re-hold or re-log
                 }
 
                 Mission mission = __instance.Mission;
@@ -180,6 +193,7 @@ namespace BLTDeploymentCrashGuard
                 {
                     Log.Info(string.Format("held {0:0.0}s without a player agent — releasing; crash-guard finalizers take over", _heldSeconds));
                     _holding = false;
+                    _capReleased = true;
                     return true;
                 }
                 return false;
