@@ -118,6 +118,7 @@ namespace BLTDeploymentCrashGuard
                 {
                     _tripped = true;
                     _lastSuppressedTick = now;
+                    SelfHealing.RecordFire("encounter-loop-guard");
                     Log.Info("[ENCOUNTER-GUARD] LOOP BROKEN: " + TripCount + " encounter-request applications within " + (WindowMs / 1000) + "s — suppressing (auto-retry every " + (RetryAfterMs / 1000) + "s)");
                     Log.Screen("broke a stuck encounter loop (details in CrashGuard.log)");
                     return false;

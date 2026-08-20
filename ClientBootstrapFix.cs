@@ -36,6 +36,7 @@ namespace BLTDeploymentCrashGuard
     {
         private static bool _applied;
         private static bool _primeLogged;
+        private static bool _standDownLogged;
         private static bool _resolved;
         private static bool _resolveOk;
 
@@ -82,6 +83,7 @@ namespace BLTDeploymentCrashGuard
                 _applied = true;
                 Log.Info("[CLIENT-FIX] co-op action-cache bootstrap fix active (prevents client half-load / BootstrapAborted)");
                 Diag.Report("client-bootstrap-fix", true, "");
+                SelfHealing.RegisterTest(SelfTest);
             }
             catch (Exception ex)
             {
@@ -150,7 +152,20 @@ namespace BLTDeploymentCrashGuard
                 {
                     return true; // not ready — run their original wait logic unchanged
                 }
+                // SELF-DISABLE: if the action-cache mirrors are already primed, the audit
+                // will pass on its own — BT (or a future TaleWorlds build) fixed the
+                // false-negative, so stand down and let their original verify run.
+                if (MirrorsAlreadyPrimed())
+                {
+                    if (!_standDownLogged)
+                    {
+                        _standDownLogged = true;
+                        Log.Info("[CLIENT-FIX] action-cache mirrors already primed — bug not present, standing down (BT/engine handles it)");
+                    }
+                    return true;
+                }
                 int primed = PrimeActionIndexCacheMirrors();
+                SelfHealing.RecordFire("client-bootstrap-fix");
                 if (_verifiedField != null)
                 {
                     _verifiedField.SetValue(null, true);
@@ -171,10 +186,52 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
+        /// <summary>Decision-logic self-test: every reflection target the fix depends on
+        /// must have resolved (the thing most likely to break when BT updates), and the
+        /// self-disable probe must be callable without throwing. Proves the fix's wiring
+        /// is intact independent of the live game reaching the bootstrap path.</summary>
+        private static SelfHealing.TestResult SelfTest()
+        {
+            bool wiring = _createMethod != null && _indexProp != null && _getActionCodeWithName != null
+                && _getNumActionCodes != null && _getNumAnimations != null && _isAnyAnimationLoadingFromDisk != null
+                && _verifiedField != null;
+            bool probeOk;
+            try { MirrorsAlreadyPrimed(); probeOk = true; } catch { probeOk = false; }
+            bool pass = wiring && probeOk;
+            return SelfHealing.TestResult.Of("client-bootstrap-fix.wiring", pass,
+                pass ? "all reflection targets resolved; self-disable probe callable"
+                     : "MISSING targets (BT updated?) wiring=" + wiring + " probe=" + probeOk);
+        }
+
         private static int ActionCode(string name)
         {
             object value = _getActionCodeWithName.Invoke(null, new object[] { name });
             return value is int ? (int)value : -1;
+        }
+
+        /// <summary>Probe for the self-disable path: is the action-cache mirror sentinel
+        /// already primed? If so the bug is absent (BT/engine handles it) and we stand down.</summary>
+        private static bool MirrorsAlreadyPrimed()
+        {
+            try
+            {
+                FieldInfo sentinel = _actionCacheType.GetField("act_inventory_idle_start",
+                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+                if (sentinel == null)
+                {
+                    return false; // can't tell — treat as bug-present (safe: we still gate on NativeCatalogReady)
+                }
+                object value = sentinel.GetValue(null);
+                if (value == null)
+                {
+                    return false;
+                }
+                return (int)_indexProp.GetValue(value, null) >= 0;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         /// <summary>Their exact readiness gate, reproduced so we never force-pass before

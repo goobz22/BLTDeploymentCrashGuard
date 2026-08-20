@@ -52,6 +52,7 @@ namespace BLTDeploymentCrashGuard
             }
             try
             {
+                SelfHealing.RecordFire("hero-creation-guard");
                 Settlement fallback = null;
                 if (clan != null)
                 {

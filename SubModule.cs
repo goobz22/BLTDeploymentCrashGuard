@@ -90,6 +90,32 @@ namespace BLTDeploymentCrashGuard
             RoleTrace.Tick();           // self-throttled to once per second; logs on change
             LogStreamer.Tick();         // self-throttled to one upload per minute
             BootstrapWatch.Tick();      // self-throttled to one scan per 2 minutes
+            ReportGuardActivity();      // self-throttled; logs which guards fired
+        }
+
+        private static int _lastActivityTick;
+        private static string _lastActivity = "";
+
+        private static void ReportGuardActivity()
+        {
+            try
+            {
+                int now = Environment.TickCount;
+                if (_lastActivityTick != 0 && now - _lastActivityTick < 120000 && now >= _lastActivityTick)
+                {
+                    return;
+                }
+                _lastActivityTick = now;
+                string summary = SelfHealing.FireSummary();
+                if (summary != _lastActivity)
+                {
+                    _lastActivity = summary;
+                    Log.Info(summary);
+                }
+            }
+            catch
+            {
+            }
         }
 
         private static void ApplyPatches()
@@ -118,6 +144,7 @@ namespace BLTDeploymentCrashGuard
                 EncounterLoopGuard.Apply(_harmony);
                 MapClickSpeedKeeper.Apply(_harmony);
                 ClientHeroCreationGuard.Apply(_harmony);
+                ClanScreenCrashGuard.Apply(_harmony);
 
                 // Verbose tracers — off unless troubleshooting (guardconfig tracing=true).
                 if (GuardConfig.Bool("tracing", false))
@@ -133,6 +160,10 @@ namespace BLTDeploymentCrashGuard
 
                 Log.Info("patches applied; battleMode=" + BattleMode.ConfigMode + " tracing=" + GuardConfig.Bool("tracing", false).ToString().ToLowerInvariant());
                 Log.Info(Diag.HealthSummary());
+                if (GuardConfig.Bool("selfTest", false))
+                {
+                    SelfHealing.RunSelfTests();
+                }
             }
             catch (Exception ex)
             {
@@ -361,6 +392,7 @@ namespace BLTDeploymentCrashGuard
             {
                 return null;
             }
+            SelfHealing.RecordFire("setup-teams-guard");
             Log.Info("SUPPRESSED crash in DeploymentMissionController.SetupTeams: " + __exception);
             Log.Screen("prevented a deployment-setup crash (details in Modules/BLTDeploymentCrashGuard/CrashGuard.log)");
             return null;
@@ -382,6 +414,7 @@ namespace BLTDeploymentCrashGuard
             {
                 return null;
             }
+            SelfHealing.RecordFire("finish-deployment-guard");
             Log.Info("SUPPRESSED crash in DeploymentMissionController.FinishDeployment: " + __exception);
             try
             {

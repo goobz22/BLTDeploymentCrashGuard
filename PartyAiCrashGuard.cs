@@ -107,6 +107,7 @@ namespace BLTDeploymentCrashGuard
             }
             try
             {
+                SelfHealing.RecordFire("party-ai-guard");
                 MobileParty party = PartyOf(__instance);
                 bestAiBehavior = AiBehavior.Hold;
                 behaviorObject = null;
@@ -135,6 +136,7 @@ namespace BLTDeploymentCrashGuard
             }
             try
             {
+                SelfHealing.RecordFire("party-ai-guard");
                 Log.Info("[AI-GUARD] SUPPRESSED crash in EncounterManager.HandleEncounterForMobileParty for " +
                          (mobileParty != null ? mobileParty.StringId : "?") + ": " + __exception.Message);
             }

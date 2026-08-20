@@ -90,6 +90,7 @@ namespace BLTDeploymentCrashGuard
   ""shareTimeControl"": true,   ""_shareTimeControl"": ""host auto-grants the client time control so either player can pause/play/fast-forward"",
 
   ""tracing"": false,           ""_tracing"": ""true enables verbose diagnostic tracers (mission/menu/control/time/coop-battle/role). Off for normal play; on for troubleshooting"",
+  ""selfTest"": false,          ""_selfTest"": ""true runs each guard's decision-logic self-test at startup and logs PASS/FAIL (proves the fix wiring survived a BT update)"",
 
   ""logStreamBin"": """",        ""_logStreamBin"": ""a filebin.net bin id; when set, the log auto-uploads to filebin.net/<bin> every ~60s for remote debugging""
 }
