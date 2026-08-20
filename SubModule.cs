@@ -74,6 +74,12 @@ namespace BLTDeploymentCrashGuard
             BattleMode.DecideAndApply(_harmony, "mission-init");
         }
 
+        protected override void OnApplicationTick(float dt)
+        {
+            base.OnApplicationTick(dt);
+            PlayerIdentityGuard.Tick(); // self-throttled to one check per second
+        }
+
         private static void ApplyPatches()
         {
             if (_patched)
