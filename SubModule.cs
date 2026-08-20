@@ -87,6 +87,7 @@ namespace BLTDeploymentCrashGuard
             Log.RefreshRole();          // self-throttled to once per 5s
             PlayerIdentityGuard.Tick(); // self-throttled to one check per second
             ShareTimeControl.Tick();    // self-throttled to once per 3s; host-only
+            RoleTrace.Tick();           // self-throttled to once per second; logs on change
             LogStreamer.Tick();         // self-throttled to one upload per minute
             BootstrapWatch.Tick();      // self-throttled to one scan per 2 minutes
         }
@@ -110,6 +111,7 @@ namespace BLTDeploymentCrashGuard
                 MapClickSpeedKeeper.Apply(_harmony);
                 ClientHeroCreationGuard.Apply(_harmony);
                 CoopBattleTrace.Apply(_harmony);
+                RoleTrace.Apply(_harmony);
                 _patched = true;
                 Log.Info("patches applied (crash guards + trace + control trace + time trace); battleMode=" + BattleMode.ConfigMode);
             }
