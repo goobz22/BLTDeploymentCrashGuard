@@ -60,23 +60,28 @@ namespace BLTDeploymentCrashGuard
                 Type coop = PeerDetection.FindCoopType("CoopSubModule");
                 if (coop == null)
                 {
-                    return; // co-op mod absent or not loaded yet — Apply is retried later
+                    // BannerlordTogether not loaded — nothing to fix, not a failure.
+                    Diag.Report("client-bootstrap-fix", true, "no BT present");
+                    return; // retried later in case the co-op assembly loaded late
                 }
                 if (!ResolveEngineTypes())
                 {
                     Log.Info("[CLIENT-FIX] could not resolve engine action-cache types — fix INACTIVE");
+                    Diag.Report("client-bootstrap-fix", false, "engine action-cache types not resolved", critical: true);
                     return;
                 }
                 MethodInfo verify = AccessTools.Method(coop, "TryVerifyNativeActionCacheWhenCampaignMapReady");
                 if (verify == null)
                 {
                     Log.Info("[CLIENT-FIX] verify method not found — co-op bootstrap fix INACTIVE (mod version changed?)");
+                    Diag.Report("client-bootstrap-fix", false, "BT verify method not found (BT updated?)", critical: true);
                     return;
                 }
                 _verifiedField = AccessTools.Field(coop, "_nativeActionCacheVerified");
                 harmony.Patch(verify, new HarmonyMethod(typeof(ClientBootstrapFix), nameof(VerifyPrefix)));
                 _applied = true;
                 Log.Info("[CLIENT-FIX] co-op action-cache bootstrap fix active (prevents client half-load / BootstrapAborted)");
+                Diag.Report("client-bootstrap-fix", true, "");
             }
             catch (Exception ex)
             {

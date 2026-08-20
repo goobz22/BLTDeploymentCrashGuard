@@ -58,7 +58,35 @@ curl -fsSL -o "%TEMP%\bltshare.cmd" https://raw.githubusercontent.com/goobz22/BL
 It uploads `CrashGuard.log` to a 24-hour file host and puts the link on your
 clipboard — send that link to whoever is debugging.
 
+## Troubleshooting
+
+- **Which build am I running?** The first line of `CrashGuard.log` each launch is
+  `===== BLT Deployment Crash Guard vX.Y.Z (build …) session=… =====`, and the startup
+  `MOD HEALTH:` line reports whether every fix resolved. If a core fix shows as NOT resolved,
+  BannerlordTogether was likely updated and this mod needs a matching update.
+- **Is it this mod or BannerlordTogether?** Set `"safeMode": true` in guardconfig.json and
+  restart — that disables everything this mod does, so you can compare.
+- **Collect everything for a bug report** in one link:
+  ```
+  curl -fsSL -o "%TEMP%\bltdiag.cmd" https://raw.githubusercontent.com/goobz22/BLTDeploymentCrashGuard/main/collect-diagnostics.cmd && call "%TEMP%\bltdiag.cmd"
+  ```
+  Bundles `CrashGuard.log`, `guardconfig.json`, BT's `bt-sync-*.txt`, and the newest crash
+  report into a zip and uploads it (link to clipboard).
+
 ## Config
+
+`Modules/BLTDeploymentCrashGuard/guardconfig.json` (auto-written with all keys documented):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `safeMode` | `false` | `true` disables ALL guards/fixes/tracers (isolate this mod vs BT) |
+| `battleMode` | `auto` | `auto` \| `solo` (always vanilla battles) \| `coop` (always co-op sync) |
+| `timeAlwaysFlows` | `true` | campaign time does not auto-pause when your party idles |
+| `shareTimeControl` | `true` | host auto-grants the client time control (either player controls speed) |
+| `tracing` | `false` | verbose diagnostic tracers — off for play, on for troubleshooting |
+| `logStreamBin` | `""` | a filebin.net bin id; when set, the log auto-uploads for remote debugging |
+
+## Legacy config notes
 
 `Modules/BLTDeploymentCrashGuard/guardconfig.json` (created on first run):
 

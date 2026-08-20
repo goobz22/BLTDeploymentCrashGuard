@@ -100,20 +100,39 @@ namespace BLTDeploymentCrashGuard
             }
             try
             {
+                Log.Info(Diag.Banner());
+                if (GuardConfig.Bool("safeMode", false))
+                {
+                    _patched = true;
+                    Log.Info("SAFE MODE — all guards/fixes/tracers DISABLED via guardconfig.json safeMode=true. Set it to false and restart to re-enable.");
+                    Log.Screen("SAFE MODE active — this mod is doing nothing (guardconfig.json)");
+                    return;
+                }
+
                 _harmony = new Harmony(HarmonyId);
                 _harmony.PatchAll(typeof(SubModule).Assembly);
-                TracePatches.Apply(_harmony);
-                ControlTrace.Apply(_harmony);
-                TimeTrace.Apply(_harmony);
+
+                // Always-on guards and fixes.
                 TimeFlowPatch.Apply(_harmony);
                 PartyAiCrashGuard.Apply(_harmony);
                 EncounterLoopGuard.Apply(_harmony);
                 MapClickSpeedKeeper.Apply(_harmony);
                 ClientHeroCreationGuard.Apply(_harmony);
-                CoopBattleTrace.Apply(_harmony);
-                RoleTrace.Apply(_harmony);
+
+                // Verbose tracers — off unless troubleshooting (guardconfig tracing=true).
+                if (GuardConfig.Bool("tracing", false))
+                {
+                    TracePatches.Apply(_harmony);
+                    ControlTrace.Apply(_harmony);
+                    TimeTrace.Apply(_harmony);
+                    CoopBattleTrace.Apply(_harmony);
+                    RoleTrace.Apply(_harmony);
+                    Log.Info("tracing ENABLED (guardconfig tracing=true) — verbose diagnostic logging is on");
+                }
                 _patched = true;
-                Log.Info("patches applied (crash guards + trace + control trace + time trace); battleMode=" + BattleMode.ConfigMode);
+
+                Log.Info("patches applied; battleMode=" + BattleMode.ConfigMode + " tracing=" + GuardConfig.Bool("tracing", false).ToString().ToLowerInvariant());
+                Log.Info(Diag.HealthSummary());
             }
             catch (Exception ex)
             {
@@ -122,12 +141,95 @@ namespace BLTDeploymentCrashGuard
         }
     }
 
+    /// <summary>
+    /// Version/build identity, per-launch session id, and a startup HEALTH SUMMARY.
+    /// Because every hook is by-name reflection, a BannerlordTogether update can
+    /// silently break our patches; each module reports resolved/missing to Diag, and
+    /// the summary surfaces "N/M active, MISSING: ..." on launch (and on screen if a
+    /// critical fix failed to resolve), so version drift is never silent.
+    /// </summary>
+    internal static class Diag
+    {
+        internal const string Version = "1.1.0";
+
+        internal static readonly string SessionId = GenerateSessionId();
+
+        private static readonly System.Collections.Generic.List<string> _healthy = new System.Collections.Generic.List<string>();
+        private static readonly System.Collections.Generic.List<string> _degraded = new System.Collections.Generic.List<string>();
+        private static bool _criticalMissing;
+
+        private static string GenerateSessionId()
+        {
+            // No Guid dependency needed; TickCount + pid is unique enough per launch.
+            int pid = 0;
+            try { pid = System.Diagnostics.Process.GetCurrentProcess().Id; } catch { }
+            return (Environment.TickCount ^ (pid << 8)).ToString("x8");
+        }
+
+        internal static string BuildTime()
+        {
+            try
+            {
+                return File.GetLastWriteTime(typeof(Diag).Assembly.Location).ToString("yyyy-MM-dd HH:mm");
+            }
+            catch
+            {
+                return "unknown";
+            }
+        }
+
+        internal static string Banner()
+        {
+            return "===== BLT Deployment Crash Guard v" + Version + " (build " + BuildTime() + ") session=" + SessionId + " =====";
+        }
+
+        /// <summary>A module reports its hook resolution. critical=true means the fix is
+        /// load-bearing (e.g. the client bootstrap fix) and its absence is shown on screen.</summary>
+        internal static void Report(string component, bool ok, string detail, bool critical = false)
+        {
+            if (ok)
+            {
+                _healthy.Add(component);
+            }
+            else
+            {
+                _degraded.Add(component + (string.IsNullOrEmpty(detail) ? "" : " (" + detail + ")"));
+                if (critical)
+                {
+                    _criticalMissing = true;
+                }
+            }
+        }
+
+        internal static string HealthSummary()
+        {
+            string summary = "MOD HEALTH: " + _healthy.Count + " active";
+            if (_degraded.Count > 0)
+            {
+                summary += ", " + _degraded.Count + " NOT resolved -> " + string.Join("; ", _degraded.ToArray()) +
+                           "  (likely a BannerlordTogether update renamed a method — check for a mod update)";
+                if (_criticalMissing)
+                {
+                    Log.Screen("WARNING: a core BLT-guard fix did not load (BT may have updated) — see CrashGuard.log");
+                }
+            }
+            else
+            {
+                summary += ", all resolved";
+            }
+            return summary;
+        }
+    }
+
     internal static class Log
     {
+        private const long MaxLogBytes = 8 * 1024 * 1024; // roll over past 8 MB
+
         private static readonly object Sync = new object();
         private static string _path;
         private static string _roleTag = "?";
         private static int _lastRoleTick;
+        private static bool _rotateChecked;
 
         internal static string CurrentPath
         {
@@ -196,12 +298,41 @@ namespace BLTDeploymentCrashGuard
             {
                 lock (Sync)
                 {
+                    RotateIfNeeded();
                     File.AppendAllText(LogPath, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " [" + _roleTag + "] " + message + Environment.NewLine);
                 }
             }
             catch
             {
                 // logging must never take the game down
+            }
+        }
+
+        /// <summary>Once per launch, if the log is already large, roll it to
+        /// CrashGuard.log.1 so it never balloons unbounded (it hit 12 MB in a long
+        /// session, which broke streaming). One backup is kept.</summary>
+        private static void RotateIfNeeded()
+        {
+            if (_rotateChecked)
+            {
+                return;
+            }
+            _rotateChecked = true;
+            try
+            {
+                string path = LogPath;
+                if (File.Exists(path) && new FileInfo(path).Length > MaxLogBytes)
+                {
+                    string backup = path + ".1";
+                    if (File.Exists(backup))
+                    {
+                        File.Delete(backup);
+                    }
+                    File.Move(path, backup);
+                }
+            }
+            catch
+            {
             }
         }
 
