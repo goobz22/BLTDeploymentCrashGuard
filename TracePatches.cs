@@ -38,6 +38,8 @@ namespace BLTDeploymentCrashGuard
             applied += PatchByName(harmony, typeof(GameMenu), "ActivateGameMenu", nameof(MenuActivatePrefix), null);
             applied += PatchByName(harmony, typeof(GameMenu), "SwitchToMenu", nameof(MenuSwitchPrefix), null);
             applied += PatchByName(harmony, typeof(EncounterManager), "StartSettlementEncounter", nameof(SettlementEncounterPrefix), null);
+            applied += PatchByName(harmony, typeof(EncounterManager), "StartPartyEncounter", nameof(PartyEncounterPrefix), null);
+            applied += PatchByName(harmony, typeof(TaleWorlds.CampaignSystem.MapEvents.MapEvent), "CanPartyJoinBattle", null, nameof(CanJoinBattlePostfix));
             applied += PatchByName(harmony, typeof(PlayerEncounter), "StartBattle", nameof(EncounterStartBattlePrefix), null);
             applied += PatchByName(harmony, typeof(PlayerEncounter), "Finish", nameof(EncounterFinishPrefix), null);
             applied += PatchByName(harmony, typeof(DefaultEncounterGameMenuModel), "GetGenericStateMenu", null, nameof(StateMenuPostfix));
@@ -126,6 +128,52 @@ namespace BLTDeploymentCrashGuard
             {
             }
             Log.Info("[TRACE] EncounterManager.StartSettlementEncounter " + FormatArgs(__args) + CallStack());
+        }
+
+        private static void PartyEncounterPrefix(object[] __args)
+        {
+            if (!InvolvesMainParty(__args))
+            {
+                return;
+            }
+            Log.Info("[TRACE] EncounterManager.StartPartyEncounter " + FormatArgs(__args) + CallStack());
+        }
+
+        private static void CanJoinBattlePostfix(object[] __args, bool __result)
+        {
+            if (!InvolvesMainParty(__args))
+            {
+                return;
+            }
+            Log.Info("[TRACE] MapEvent.CanPartyJoinBattle " + FormatArgs(__args) + " -> " + __result + CallStack());
+        }
+
+        private static bool InvolvesMainParty(object[] args)
+        {
+            try
+            {
+                if (args == null)
+                {
+                    return false;
+                }
+                foreach (object arg in args)
+                {
+                    TaleWorlds.CampaignSystem.Party.MobileParty mobile = arg as TaleWorlds.CampaignSystem.Party.MobileParty;
+                    if (mobile != null && mobile.IsMainParty)
+                    {
+                        return true;
+                    }
+                    TaleWorlds.CampaignSystem.Party.PartyBase partyBase = arg as TaleWorlds.CampaignSystem.Party.PartyBase;
+                    if (partyBase != null && partyBase.MobileParty != null && partyBase.MobileParty.IsMainParty)
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return false;
         }
 
         private static void EncounterStartBattlePrefix()
