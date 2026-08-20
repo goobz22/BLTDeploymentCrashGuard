@@ -1,5 +1,43 @@
 # Bug report for BannerlordTogether authors
 
+## HEADLINE — Client sessions permanently half-loaded: BootstrapAborted every time, cache never regenerates
+
+Environment: game 1.4.8.119303 (Steam), BannerlordTogether v0.5.0.1
+(commit 035beead876d66fb1e91d7282cd98bc4f624430b), installed via Vortex/Nexus.
+
+Every CLIENT-role session logs (bt-sync-client.txt):
+
+```
+[HARMONY] NativeActionCatalogReady source=application-tick actions=5167 animations=6170 ...
+          diskLoad=False cachedSentinel=-1 cacheMatchesNative=False cacheMismatches=214
+[HARMONY] BootstrapAborted reason=action-cache-mismatch cachedSentinel=-1 nativeSentinel=4008
+          ... deferredPatchesApplied=False earlyLifecyclePatchesRemain=True restartRequired=True
+```
+
+Evidence that this is unrecoverable on this install:
+- Reproduces IDENTICALLY with the shipped RuntimeDataCache .rdc present (2026-08-19
+  20:46) and with it removed (21:41) — diskLoad=False and all-(-1) sentinels both ways,
+  so the shipped cache (file dated 2026-06-30) never loads for this game build.
+- No cache write/persist ever occurs (file date never changes; no persist log lines),
+  so restartRequired=True never becomes a working next launch.
+- Host/solo sessions do not run the audit and work; every co-op-as-client session ran
+  with deferred patches unapplied. Downstream symptoms observed while half-loaded:
+  no client hero selection, client sees host-style map shell, client join/encounter
+  requests never registered on the authority, partner armies missing from battles,
+  speed desync between machines.
+
+Suggested fixes: regenerate/persist the action cache from the fresh catalog instead of
+aborting (it is already computed at NativeActionCatalogReady), or ship no cache and
+build on first run; at minimum surface the abort to the player in-game — it is
+currently silent and the session plays on with broken sync.
+
+Also: the dedicated-server flow's owner window binds port 47770 and the spawned
+authority instance then fails `Host network FAILED to bind port=47770 attempt=1/5..5/5`
+and self-destructs (2026-08-19 21:29:54) — the two components of the same flow contend
+for one hardcoded port.
+
+---
+
 **Title:** Host (solo, LegacyPlayerHost): player-side troops never enter battle missions —
 `DeploymentMissionController.SetupTeams` NullReferenceException on every siege; village-raid
 battles start with all player formations empty (0/0)
