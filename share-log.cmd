@@ -3,8 +3,8 @@ setlocal EnableDelayedExpansion
 rem ============================================================
 rem  BLT Deployment Crash Guard - log sharer
 rem  Uploads Modules\BLTDeploymentCrashGuard\CrashGuard.log to a
-rem  24-hour file host and prints the URL to send to your co-op
-rem  partner. Override game detection with BANNERLORD_DIR.
+rem  file host and prints the URL to send to your co-op partner.
+rem  Override game detection with BANNERLORD_DIR.
 rem ============================================================
 
 set "GAME=%BANNERLORD_DIR%"
@@ -38,24 +38,34 @@ if not exist "%LOGFILE%" (
   exit /b 1
 )
 
+set "RESP=%TEMP%\bltshare-response.txt"
+
 echo Uploading log ^(24-hour link^)...
-set "URL="
-for /f "usebackq delims=" %%U in (`curl -fsS -F "reqtype=fileupload" -F "time=24h" -F "fileToUpload=@%LOGFILE%" https://litterbox.catbox.moe/resources/internals/api.php`) do set "URL=%%U"
+del "%RESP%" >nul 2>&1
+curl -fsS -F "reqtype=fileupload" -F "time=24h" -F "fileToUpload=@%LOGFILE%" https://litterbox.catbox.moe/resources/internals/api.php > "%RESP%" 2>nul
+findstr /b "https://" "%RESP%" >nul 2>&1 && goto :gotone
 
-if "%URL%"=="" (
-  echo ERROR: upload failed. Check your internet connection and try again,
-  echo or just send the file directly: "%LOGFILE%"
-  exit /b 1
-)
+echo First host did not return a link, trying fallback host...
+del "%RESP%" >nul 2>&1
+curl -fsS -F "file=@%LOGFILE%" https://0x0.st > "%RESP%" 2>nul
+findstr /b "https://" "%RESP%" >nul 2>&1 && goto :gotone
 
+echo.
+echo ERROR: neither upload host returned a link.
+echo Send the file directly instead ^(Discord etc.^):
+echo   "%LOGFILE%"
+exit /b 1
+
+:gotone
+set /p URL=<"%RESP%"
 echo %URL%| clip
 echo.
 echo ============================================================
-echo  Log uploaded ^(link valid 24 hours^):
+echo  Log uploaded:
 echo.
 echo    %URL%
 echo.
-echo  The link is already on your clipboard - paste it to your
-echo  co-op partner.
+echo  The link is on your clipboard - paste it to your co-op
+echo  partner.
 echo ============================================================
 exit /b 0
