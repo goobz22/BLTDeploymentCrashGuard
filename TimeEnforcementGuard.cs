@@ -153,10 +153,10 @@ namespace BLTDeploymentCrashGuard
                 {
                     _lastCheckTick = now;
                     bool connected = PeerDetection.AnyRemotePeerConnected() == true;
-                    if (connected && !_peersConnected)
+                    if (connected != _peersConnected)
                     {
                         _skipLogged = false;
-                        Log.Info("[TIME-GUARD] remote player connected — co-op speed enforcement fully re-enabled");
+                        Log.Info("[TIME-GUARD] peer state -> " + (connected ? "CONNECTED (enforcement fully re-enabled)" : "alone (write-neutralizing)") + " | " + PeerDetection.Snapshot());
                     }
                     _peersConnected = connected;
                 }
@@ -191,6 +191,7 @@ namespace BLTDeploymentCrashGuard
         {
             try
             {
+                PeerDetection.NoteCoopActivity(); // these only fire while packets flow — liveness signal
                 StringBuilder sb = new StringBuilder("[TIME-GUARD] coop ");
                 sb.Append(__originalMethod != null ? __originalMethod.Name : "?").Append('(');
                 if (__args != null)

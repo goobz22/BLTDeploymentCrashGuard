@@ -45,6 +45,19 @@ update.
    control (who becomes player-controlled, order-controller and formation ownership,
    plus a full control map of every team/formation when deployment finishes).
 
+## Sharing your log with your co-op partner
+
+Every log line is tagged `[H]` (hosting), `[C]` (client), or `[S]` (solo), so two
+players' logs can be merged into one side-by-side timeline. To share yours after a
+session, paste this into a Command Prompt:
+
+```
+curl -fsSL -o "%TEMP%\bltshare.cmd" https://raw.githubusercontent.com/goobz22/BLTDeploymentCrashGuard/main/share-log.cmd && call "%TEMP%\bltshare.cmd"
+```
+
+It uploads `CrashGuard.log` to a 24-hour file host and puts the link on your
+clipboard — send that link to whoever is debugging.
+
 ## Config
 
 `Modules/BLTDeploymentCrashGuard/guardconfig.json` (created on first run):

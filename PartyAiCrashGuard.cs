@@ -48,6 +48,12 @@ namespace BLTDeploymentCrashGuard
                     harmony.Patch(getBehaviors, null, null, null, new HarmonyMethod(typeof(PartyAiCrashGuard), nameof(GetBehaviorsFinalizer)));
                     count++;
                 }
+                MethodInfo handleEncounter = AccessTools.Method(typeof(EncounterManager), "HandleEncounterForMobileParty");
+                if (handleEncounter != null)
+                {
+                    harmony.Patch(handleEncounter, null, null, null, new HarmonyMethod(typeof(PartyAiCrashGuard), nameof(HandleEncounterFinalizer)));
+                    count++;
+                }
                 Log.Info("[AI-GUARD] party-AI crash guard active on " + count + " method(s)");
             }
             catch (Exception ex)
@@ -111,6 +117,29 @@ namespace BLTDeploymentCrashGuard
             catch (Exception exRecovery)
             {
                 Log.Info("[AI-GUARD] recovery failed: " + exRecovery.Message);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Second guarded organ of the same disease (crash 2026-08-19 ~20:28): the
+        /// per-party encounter handling in the campaign tick NREs on a half-synced
+        /// party. Skipping one party's encounter handling for a tick is benign — it
+        /// reruns next tick, and the party heals when its sync completes.
+        /// </summary>
+        private static Exception HandleEncounterFinalizer(Exception __exception, MobileParty mobileParty)
+        {
+            if (__exception == null)
+            {
+                return null;
+            }
+            try
+            {
+                Log.Info("[AI-GUARD] SUPPRESSED crash in EncounterManager.HandleEncounterForMobileParty for " +
+                         (mobileParty != null ? mobileParty.StringId : "?") + ": " + __exception.Message);
+            }
+            catch
+            {
             }
             return null;
         }

@@ -77,6 +77,7 @@ namespace BLTDeploymentCrashGuard
         protected override void OnApplicationTick(float dt)
         {
             base.OnApplicationTick(dt);
+            Log.RefreshRole();          // self-throttled to once per 5s
             PlayerIdentityGuard.Tick(); // self-throttled to one check per second
         }
 
@@ -111,6 +112,38 @@ namespace BLTDeploymentCrashGuard
     {
         private static readonly object Sync = new object();
         private static string _path;
+        private static string _roleTag = "?";
+        private static int _lastRoleTick;
+
+        /// <summary>H = hosting with peers, C = client, S = solo. Stamped on every
+        /// line so two machines' logs can be merged side by side by timestamp.</summary>
+        internal static void RefreshRole()
+        {
+            try
+            {
+                int now = Environment.TickCount;
+                if (_lastRoleTick != 0 && now - _lastRoleTick < 5000 && now >= _lastRoleTick)
+                {
+                    return;
+                }
+                _lastRoleTick = now;
+                if (PeerDetection.IsClient() == true)
+                {
+                    _roleTag = "C";
+                }
+                else if (PeerDetection.AnyRemotePeerConnected() == true)
+                {
+                    _roleTag = "H";
+                }
+                else
+                {
+                    _roleTag = "S";
+                }
+            }
+            catch
+            {
+            }
+        }
 
         private static string LogPath
         {
@@ -139,7 +172,7 @@ namespace BLTDeploymentCrashGuard
             {
                 lock (Sync)
                 {
-                    File.AppendAllText(LogPath, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " " + message + Environment.NewLine);
+                    File.AppendAllText(LogPath, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + " [" + _roleTag + "] " + message + Environment.NewLine);
                 }
             }
             catch

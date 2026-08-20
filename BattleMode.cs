@@ -382,6 +382,67 @@ namespace BLTDeploymentCrashGuard
     {
         private static bool _searched;
         private static Type _sessionType;
+        private static int _lastActivityTick;
+
+        /// <summary>
+        /// Liveness fail-safe: reflection reads of the session state proved unreliable
+        /// (2026-08-19 20:27 — "no remote player" while packets arrived every 2s,
+        /// which desynced the two players' speeds). The co-op mod's own packet
+        /// handlers firing IS proof of a live session, so traced calls stamp this.
+        /// </summary>
+        internal static void NoteCoopActivity()
+        {
+            _lastActivityTick = Environment.TickCount;
+        }
+
+        private static bool RecentCoopActivity()
+        {
+            int last = _lastActivityTick;
+            if (last == 0)
+            {
+                return false;
+            }
+            int now = Environment.TickCount;
+            return now - last < 15000 && now >= last;
+        }
+
+        internal static string Snapshot()
+        {
+            try
+            {
+                Type type = SessionType;
+                if (type == null)
+                {
+                    return "sessionType=missing";
+                }
+                object isClient = ReadStaticMember(type, "IsClient");
+                object isHost = ReadStaticMember(type, "IsHost");
+                object server = ReadStaticMember(type, "Server");
+                string peers = "n/a";
+                if (server != null)
+                {
+                    foreach (string memberName in new[] { "GameplayPeerIds", "ConnectedPeerIds" })
+                    {
+                        IEnumerable ids = ReadInstanceMember(server, memberName) as IEnumerable;
+                        if (ids != null)
+                        {
+                            int n = 0;
+                            foreach (object unused in ids)
+                            {
+                                n++;
+                            }
+                            peers = memberName + "=" + n;
+                            break;
+                        }
+                    }
+                }
+                return "isClient=" + (isClient ?? "?") + " isHost=" + (isHost ?? "?") + " server=" + (server == null ? "null" : "set") + " " + peers + " recentPackets=" + RecentCoopActivity();
+            }
+            catch (Exception ex)
+            {
+                return "snapshot failed: " + ex.Message;
+            }
+        }
 
         /// <summary>Find a type by simple name in the co-op mod's assembly (null if absent).</summary>
         internal static Type FindCoopType(string simpleName)
@@ -440,6 +501,10 @@ namespace BLTDeploymentCrashGuard
 
         internal static bool? AnyRemotePeerConnected()
         {
+            if (RecentCoopActivity())
+            {
+                return true; // packets are arriving — a live session regardless of what reflection says
+            }
             Type type = SessionType;
             if (type == null)
             {
