@@ -48,6 +48,9 @@ namespace BLTDeploymentCrashGuard
         {
             base.OnSubModuleLoad();
             ApplyPatches();
+            // Fix the co-op client action-cache false-negative BEFORE their bootstrap
+            // runs its verify — must beat their first (and only) attempt.
+            ClientBootstrapFix.Apply(_harmony);
             // If the PREVIOUS session's co-op bootstrap aborted on a stale cache,
             // clear it before this session's bootstrap audits it.
             BootstrapWatch.CheckAtStartup();
@@ -57,6 +60,7 @@ namespace BLTDeploymentCrashGuard
         {
             base.OnBeforeInitialModuleScreenSetAsRoot();
             ApplyPatches();
+            ClientBootstrapFix.Apply(_harmony); // retry in case the co-op assembly loaded late
             // All modules have loaded and applied their patches by now.
             TimeEnforcementGuard.Apply(_harmony);
             BattleMode.DecideAndApply(_harmony, "module-screen");

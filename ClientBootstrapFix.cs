@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Reflection;
 using HarmonyLib;
-using TaleWorlds.Core;
 
 namespace BLTDeploymentCrashGuard
 {
@@ -29,12 +28,25 @@ namespace BLTDeploymentCrashGuard
     /// nothing and their normal wait logic runs unchanged — the safety intent (never
     /// patch before the catalog loads) is preserved; only the over-strict mirror
     /// requirement is removed.
+    ///
+    /// All engine access is by-name reflection so it is independent of which assembly
+    /// defines ActionIndexCache / MBAnimation.
     /// </summary>
     internal static class ClientBootstrapFix
     {
         private static bool _applied;
         private static bool _primeLogged;
+        private static bool _resolved;
+
         private static FieldInfo _verifiedField;
+        private static Type _actionCacheType;
+        private static MethodInfo _createMethod;
+        private static PropertyInfo _indexProp;
+        private static Type _mbAnimationType;
+        private static MethodInfo _getNumActionCodes;
+        private static MethodInfo _getNumAnimations;
+        private static MethodInfo _getActionCodeWithName;
+        private static MethodInfo _isAnyAnimationLoadingFromDisk;
 
         internal static void Apply(Harmony harmony)
         {
@@ -48,6 +60,11 @@ namespace BLTDeploymentCrashGuard
                 if (coop == null)
                 {
                     return; // co-op mod absent or not loaded yet — Apply is retried later
+                }
+                if (!ResolveEngineTypes())
+                {
+                    Log.Info("[CLIENT-FIX] could not resolve engine action-cache types — fix INACTIVE");
+                    return;
                 }
                 MethodInfo verify = AccessTools.Method(coop, "TryVerifyNativeActionCacheWhenCampaignMapReady");
                 if (verify == null)
@@ -63,6 +80,50 @@ namespace BLTDeploymentCrashGuard
             catch (Exception ex)
             {
                 Log.Info("[CLIENT-FIX] apply failed: " + ex.Message);
+            }
+        }
+
+        private static bool ResolveEngineTypes()
+        {
+            if (_resolved)
+            {
+                return _actionCacheType != null && _mbAnimationType != null;
+            }
+            _resolved = true;
+            try
+            {
+                foreach (string candidate in new[] { "TaleWorlds.Core.ActionIndexCache", "TaleWorlds.Engine.ActionIndexCache", "TaleWorlds.MountAndBlade.ActionIndexCache" })
+                {
+                    _actionCacheType = AccessTools.TypeByName(candidate);
+                    if (_actionCacheType != null)
+                    {
+                        break;
+                    }
+                }
+                foreach (string candidate in new[] { "TaleWorlds.Engine.MBAnimation", "TaleWorlds.Core.MBAnimation", "TaleWorlds.MountAndBlade.MBAnimation" })
+                {
+                    _mbAnimationType = AccessTools.TypeByName(candidate);
+                    if (_mbAnimationType != null)
+                    {
+                        break;
+                    }
+                }
+                if (_actionCacheType == null || _mbAnimationType == null)
+                {
+                    return false;
+                }
+                _createMethod = AccessTools.Method(_actionCacheType, "Create", new[] { typeof(string) });
+                _indexProp = AccessTools.Property(_actionCacheType, "Index");
+                _getNumActionCodes = AccessTools.Method(_mbAnimationType, "GetNumActionCodes");
+                _getNumAnimations = AccessTools.Method(_mbAnimationType, "GetNumAnimations");
+                _getActionCodeWithName = AccessTools.Method(_mbAnimationType, "GetActionCodeWithName", new[] { typeof(string) });
+                _isAnyAnimationLoadingFromDisk = AccessTools.Method(_mbAnimationType, "IsAnyAnimationLoadingFromDisk");
+                return _createMethod != null && _indexProp != null && _getActionCodeWithName != null && _getNumActionCodes != null;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("[CLIENT-FIX] type resolve error: " + ex.Message);
+                return false;
             }
         }
 
@@ -95,24 +156,34 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
+        private static int ActionCode(string name)
+        {
+            object value = _getActionCodeWithName.Invoke(null, new object[] { name });
+            return value is int ? (int)value : -1;
+        }
+
         /// <summary>Their exact readiness gate, reproduced so we never force-pass before
         /// the native animation catalog is genuinely loaded.</summary>
         private static bool NativeCatalogReady()
         {
             try
             {
-                if (MBAnimation.GetNumActionCodes() <= 0 || MBAnimation.GetNumAnimations() <= 0)
+                if ((int)_getNumActionCodes.Invoke(null, null) <= 0)
                 {
                     return false;
                 }
-                if (MBAnimation.GetActionCodeWithName("act_inventory_idle_start") < 0 ||
-                    MBAnimation.GetActionCodeWithName("act_inventory_idle") < 0 ||
-                    MBAnimation.GetActionCodeWithName("act_command_leftstance") < 0 ||
-                    MBAnimation.GetActionCodeWithName("act_walk_idle_1h_with_shield_left_stance") < 0)
+                if (_getNumAnimations != null && (int)_getNumAnimations.Invoke(null, null) <= 0)
                 {
                     return false;
                 }
-                if (MBAnimation.IsAnyAnimationLoadingFromDisk())
+                if (ActionCode("act_inventory_idle_start") < 0 ||
+                    ActionCode("act_inventory_idle") < 0 ||
+                    ActionCode("act_command_leftstance") < 0 ||
+                    ActionCode("act_walk_idle_1h_with_shield_left_stance") < 0)
+                {
+                    return false;
+                }
+                if (_isAnyAnimationLoadingFromDisk != null && (bool)_isAnyAnimationLoadingFromDisk.Invoke(null, null))
                 {
                     return false;
                 }
@@ -131,8 +202,8 @@ namespace BLTDeploymentCrashGuard
             int primed = 0;
             try
             {
-                foreach (FieldInfo field in typeof(ActionIndexCache).GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-                             .Where(f => f.IsStatic && f.FieldType == typeof(ActionIndexCache)))
+                foreach (FieldInfo field in _actionCacheType.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+                             .Where(f => f.IsStatic && f.FieldType == _actionCacheType))
                 {
                     if (field.Name == "act_none")
                     {
@@ -141,15 +212,16 @@ namespace BLTDeploymentCrashGuard
                     try
                     {
                         object current = field.GetValue(null);
-                        if (!(current is ActionIndexCache cache))
+                        if (current == null)
                         {
                             continue;
                         }
-                        if (cache.Index >= 0)
+                        int index = (int)_indexProp.GetValue(current, null);
+                        if (index >= 0)
                         {
                             continue; // already primed
                         }
-                        ActionIndexCache fresh = ActionIndexCache.Create(field.Name);
+                        object fresh = _createMethod.Invoke(null, new object[] { field.Name });
                         field.SetValue(null, fresh);
                         primed++;
                     }
