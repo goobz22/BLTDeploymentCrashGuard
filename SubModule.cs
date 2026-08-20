@@ -107,6 +107,7 @@ namespace BLTDeploymentCrashGuard
                 PartyAiCrashGuard.Apply(_harmony);
                 EncounterLoopGuard.Apply(_harmony);
                 MapClickSpeedKeeper.Apply(_harmony);
+                ClientHeroCreationGuard.Apply(_harmony);
                 _patched = true;
                 Log.Info("patches applied (crash guards + trace + control trace + time trace); battleMode=" + BattleMode.ConfigMode);
             }
