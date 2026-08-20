@@ -80,6 +80,7 @@ namespace BLTDeploymentCrashGuard
             Log.RefreshRole();          // self-throttled to once per 5s
             PlayerIdentityGuard.Tick(); // self-throttled to one check per second
             LogStreamer.Tick();         // self-throttled to one upload per minute
+            BootstrapWatch.Tick();      // self-throttled to one scan per 2 minutes
         }
 
         private static void ApplyPatches()
