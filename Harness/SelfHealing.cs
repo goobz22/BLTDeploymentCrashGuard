@@ -91,6 +91,20 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
+        /// <summary>Cleared by the reload engine before each payload generation applies, so
+        /// reloads don't accumulate duplicate self-tests (fire counts are kept — they persist
+        /// across reloads to prove shared state survived).</summary>
+        internal static void ResetTests()
+        {
+            try
+            {
+                Tests.Clear();
+            }
+            catch
+            {
+            }
+        }
+
         /// <summary>Run all registered decision-logic self-tests; log each and a summary.
         /// Called at startup only when guardconfig selfTest=true.</summary>
         internal static void RunSelfTests()

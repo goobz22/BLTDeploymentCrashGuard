@@ -59,7 +59,7 @@ namespace BLTDeploymentCrashGuard
 
                 bool marker = File.Exists(Path.Combine(_moduleRoot, ".hotreload-dev"));
                 _hotReloadEnabled = GuardConfig.Bool("hotReload", false) && marker;
-                _useRoslyn = _hotReloadEnabled && GuardConfig.Bool("hotReloadRoslyn", false);
+                _useRoslyn = _hotReloadEnabled && GuardConfig.Bool("hotReloadRoslyn", false) && PayloadCompiler.CompiledIn;
                 _sourceDir = GuardConfig.String("payloadSourceDir", Path.Combine(_moduleRoot, "PayloadSource"));
 
                 Log.Info("[HOTRELOAD] engine start — hotReload=" + _hotReloadEnabled + " roslyn=" + _useRoslyn +

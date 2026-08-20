@@ -86,7 +86,7 @@ namespace BLTDeploymentCrashGuard
         private static void MissionOpenNewPrefix(object[] __args)
         {
             // Last-chance mode decision before the mission is built.
-            BattleMode.DecideAndApply(SubModule.HarmonyInstance, "mission-open");
+            BattleMode.DecideAndApply(PayloadEntry.Harmony, "mission-open");
             Log.Info("[TRACE] >>> MissionState.OpenNew " + FormatArgs(__args) + CallStack());
         }
 
@@ -178,7 +178,7 @@ namespace BLTDeploymentCrashGuard
 
         private static void EncounterStartBattlePrefix()
         {
-            BattleMode.DecideAndApply(SubModule.HarmonyInstance, "start-battle");
+            BattleMode.DecideAndApply(PayloadEntry.Harmony, "start-battle");
             Log.Info("[TRACE] PlayerEncounter.StartBattle" + CallStack());
         }
 

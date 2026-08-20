@@ -1,21 +1,30 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- PAYLOAD: all guards/fixes/tracers (BLTDeploymentCrashGuard.Payload.dll). Hot-reloadable.
+       References the harness for IPayload/ISharedState/Log/Diag/GuardConfig/SelfHealing. -->
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
-    <AssemblyName>BLTDeploymentCrashGuard</AssemblyName>
+    <AssemblyName>BLTDeploymentCrashGuard.Payload</AssemblyName>
     <RootNamespace>BLTDeploymentCrashGuard</RootNamespace>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>none</DebugType>
-    <Version>1.1.0</Version>
-    <!-- Bannerlord install; override with -p:GameDir="..." if the game moves -->
+    <Version>1.2.0</Version>
     <GameDir>C:\Program Files (x86)\Steam\steamapps\common\Mount &amp; Blade II Bannerlord</GameDir>
     <GameBin>$(GameDir)\bin\Win64_Shipping_Client</GameBin>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Harness types (IPayload, Log, Diag, GuardConfig, SelfHealing). Do not copy the harness
+         DLL into the payload output — it ships once as the loaded module. -->
+    <ProjectReference Include="..\Harness\BLTDeploymentCrashGuard.csproj">
+      <Private>false</Private>
+    </ProjectReference>
   </ItemGroup>
 
   <ItemGroup>

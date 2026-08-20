@@ -88,6 +88,14 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
+        /// <summary>True for any Harmony owner belonging to this mod — the per-generation ids
+        /// "bltogether.crashguard.gen{N}" (and the legacy flat id). Used to skip our own patches
+        /// when lifting BannerlordTogether's.</summary>
+        private static bool IsOwnOwner(string owner)
+        {
+            return owner != null && owner.StartsWith("bltogether", StringComparison.Ordinal);
+        }
+
         internal static void DecideAndApply(Harmony harmony, string reason)
         {
             if (harmony == null)
@@ -275,7 +283,7 @@ namespace BLTDeploymentCrashGuard
             }
             foreach (Patch patch in patches)
             {
-                if (patch == null || string.IsNullOrEmpty(patch.owner) || patch.owner == SubModule.HarmonyId)
+                if (patch == null || string.IsNullOrEmpty(patch.owner) || IsOwnOwner(patch.owner))
                 {
                     continue;
                 }

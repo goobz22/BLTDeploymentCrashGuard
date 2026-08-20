@@ -92,7 +92,11 @@ namespace BLTDeploymentCrashGuard
   ""tracing"": false,           ""_tracing"": ""true enables verbose diagnostic tracers (mission/menu/control/time/coop-battle/role). Off for normal play; on for troubleshooting"",
   ""selfTest"": false,          ""_selfTest"": ""true runs each guard's decision-logic self-test at startup and logs PASS/FAIL (proves the fix wiring survived a BT update)"",
 
-  ""logStreamBin"": """",        ""_logStreamBin"": ""a filebin.net bin id; when set, the log auto-uploads to filebin.net/<bin> every ~60s for remote debugging""
+  ""logStreamBin"": """",        ""_logStreamBin"": ""a filebin.net bin id; when set, the log auto-uploads to filebin.net/<bin> every ~60s for remote debugging"",
+
+  ""hotReload"": false,          ""_hotReload"": ""DEV ONLY. true + a .hotreload-dev marker file in the module root enables no-restart reload of the payload. Never for players (runtime code load is a code-injection surface)"",
+  ""hotReloadRoslyn"": false,    ""_hotReloadRoslyn"": ""DEV ONLY. true watches payload .cs SOURCE and recompiles via Roslyn on save (requires the harness built with -p:Roslyn=true). false watches the prebuilt BLTDeploymentCrashGuard.Payload.dll (build-and-drop)"",
+  ""payloadSourceDir"": """"      ""_payloadSourceDir"": ""DEV ONLY. path to the payload .cs source for Roslyn reload; defaults to a PayloadSource folder in the module root""
 }
 ";
     }

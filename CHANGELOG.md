@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.2.0 — hot-reload architecture (harness/payload split)
+
+- **No-restart iteration (dev only).** Split into a stable **harness** (`BLTDeploymentCrashGuard.dll`,
+  the module Bannerlord loads — lifecycle + reload engine) and a hot-reloadable **payload**
+  (`BLTDeploymentCrashGuard.Payload.dll` — all guards/fixes/tracers). The engine loads each payload
+  generation via `Assembly.Load(bytes)` (fresh statics) under a per-generation Harmony owner id,
+  applies the new generation, then `UnpatchAll`'s the previous one — a failed reload keeps the
+  previous generation, so the game is never left unpatched.
+- Two reload sources: **build-and-drop** the payload DLL (default, dependency-free) or **Roslyn
+  edit-.cs** auto-recompile (opt-in `-p:Roslyn=true`, falls back to the DLL if Roslyn bind-conflicts
+  on net472). See HOTRELOAD.md.
+- Hard-gated dev-only: requires `hotReload: true` AND a `.hotreload-dev` marker file. Players load
+  the prebuilt payload once (no watcher, no Roslyn).
+- Cross-reload state (guard fire counts, launch session id) persists in a harness-owned shared
+  store; per-generation health/self-test lists are reset each reload to avoid duplicates.
+- Known gap (Phase B): `BattleMode`'s foreign-patch stash doesn't yet survive a reload; reloading
+  in `battleMode=solo` can leave BT battle patches lifted (coop unaffected).
+
 ## v1.1.0 — robustness & troubleshooting
 
 - **Version stamping**: the DLL now carries a real version + build timestamp, logged at
