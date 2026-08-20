@@ -127,10 +127,15 @@ namespace BLTDeploymentCrashGuard
         {
             try
             {
+                // Upload only the last 2MB — recent diagnostics live at the end, and a
+                // full multi-MB log blew the request timeout (live test 21:16:08).
+                const int maxUpload = 2 * 1024 * 1024;
                 byte[] data;
                 using (FileStream stream = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
                 {
-                    data = new byte[stream.Length];
+                    long start = Math.Max(0, stream.Length - maxUpload);
+                    stream.Seek(start, SeekOrigin.Begin);
+                    data = new byte[stream.Length - start];
                     int read = 0;
                     while (read < data.Length)
                     {
@@ -150,7 +155,8 @@ namespace BLTDeploymentCrashGuard
                 request.Headers["filename"] = fileName;
                 request.ContentType = "application/octet-stream";
                 request.ContentLength = data.Length;
-                request.Timeout = 20000;
+                request.Timeout = 120000;
+                request.ReadWriteTimeout = 120000;
                 using (Stream body = request.GetRequestStream())
                 {
                     body.Write(data, 0, data.Length);

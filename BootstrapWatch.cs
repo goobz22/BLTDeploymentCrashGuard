@@ -63,7 +63,11 @@ namespace BLTDeploymentCrashGuard
                     {
                         continue;
                     }
-                    long abortOffset = TailFind(path, "BootstrapAborted");
+                    // Startup must scan the WHOLE file — the previous session's abort
+                    // can sit megabytes before the end (live test 2026-08-19 21:14:
+                    // abort at ~50KB of a 12.7MB log, missed by the 256KB tail).
+                    // Mid-session ticks only need the tail, where new lines land.
+                    long abortOffset = startup ? FullFind(path, "BootstrapAborted") : TailFind(path, "BootstrapAborted");
                     if (abortOffset < 0)
                     {
                         continue;
@@ -181,6 +185,35 @@ namespace BLTDeploymentCrashGuard
             }
             catch
             {
+            }
+        }
+
+        /// <summary>Chunked scan of the entire file for the LAST occurrence of needle;
+        /// returns its approximate absolute offset or -1.</summary>
+        private static long FullFind(string path, string needle)
+        {
+            try
+            {
+                using (FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+                {
+                    long lastHit = -1;
+                    long consumed = 0;
+                    string line;
+                    while ((line = reader.ReadLine()) != null)
+                    {
+                        if (line.IndexOf(needle, StringComparison.Ordinal) >= 0)
+                        {
+                            lastHit = consumed;
+                        }
+                        consumed += line.Length + 2;
+                    }
+                    return lastHit;
+                }
+            }
+            catch
+            {
+                return -1;
             }
         }
 
