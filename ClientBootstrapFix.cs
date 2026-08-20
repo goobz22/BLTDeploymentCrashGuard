@@ -160,7 +160,11 @@ namespace BLTDeploymentCrashGuard
                     if (!_standDownLogged)
                     {
                         _standDownLogged = true;
-                        Log.Info("[CLIENT-FIX] action-cache mirrors already primed — bug not present, standing down (BT/engine handles it)");
+                        // Only credit upstream if WE never primed this session; otherwise
+                        // the mirrors are primed because our own prefix did it.
+                        Log.Info(_primeLogged
+                            ? "[CLIENT-FIX] mirrors already primed this session (by us) — standing down for the rest of the session"
+                            : "[CLIENT-FIX] action-cache mirrors already primed and we never intervened — bug not present, BT/engine handles it (fix is dormant)");
                     }
                     return true;
                 }
@@ -209,24 +213,33 @@ namespace BLTDeploymentCrashGuard
             return value is int ? (int)value : -1;
         }
 
-        /// <summary>Probe for the self-disable path: is the action-cache mirror sentinel
-        /// already primed? If so the bug is absent (BT/engine handles it) and we stand down.</summary>
+        /// <summary>Probe for the self-disable path: are ALL action-cache mirrors already
+        /// primed? Judging from a single field risks a partially-primed state (sentinel ok,
+        /// others still -1) where we'd wrongly stand down and re-open BootstrapAborted — so
+        /// this returns true only when every static mirror has a valid index.</summary>
         private static bool MirrorsAlreadyPrimed()
         {
             try
             {
-                FieldInfo sentinel = _actionCacheType.GetField("act_inventory_idle_start",
-                    BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
-                if (sentinel == null)
+                bool sawAny = false;
+                foreach (FieldInfo field in _actionCacheType.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic))
                 {
-                    return false; // can't tell — treat as bug-present (safe: we still gate on NativeCatalogReady)
+                    if (!field.IsStatic || field.FieldType != _actionCacheType || field.Name == "act_none")
+                    {
+                        continue;
+                    }
+                    object value = field.GetValue(null);
+                    if (value == null)
+                    {
+                        continue;
+                    }
+                    sawAny = true;
+                    if ((int)_indexProp.GetValue(value, null) < 0)
+                    {
+                        return false; // at least one mirror unprimed — bug present, must prime
+                    }
                 }
-                object value = sentinel.GetValue(null);
-                if (value == null)
-                {
-                    return false;
-                }
-                return (int)_indexProp.GetValue(value, null) >= 0;
+                return sawAny; // all mirrors primed (or none exist to check)
             }
             catch
             {
