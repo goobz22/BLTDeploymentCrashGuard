@@ -37,6 +37,7 @@ namespace BLTDeploymentCrashGuard
         private static bool _applied;
         private static bool _primeLogged;
         private static bool _resolved;
+        private static bool _resolveOk;
 
         private static FieldInfo _verifiedField;
         private static Type _actionCacheType;
@@ -87,9 +88,15 @@ namespace BLTDeploymentCrashGuard
         {
             if (_resolved)
             {
-                return _actionCacheType != null && _mbAnimationType != null;
+                return _resolveOk;
             }
             _resolved = true;
+            _resolveOk = ResolveEngineTypesOnce();
+            return _resolveOk;
+        }
+
+        private static bool ResolveEngineTypesOnce()
+        {
             try
             {
                 foreach (string candidate in new[] { "TaleWorlds.Core.ActionIndexCache", "TaleWorlds.Engine.ActionIndexCache", "TaleWorlds.MountAndBlade.ActionIndexCache" })
@@ -118,7 +125,10 @@ namespace BLTDeploymentCrashGuard
                 _getNumAnimations = AccessTools.Method(_mbAnimationType, "GetNumAnimations");
                 _getActionCodeWithName = AccessTools.Method(_mbAnimationType, "GetActionCodeWithName", new[] { typeof(string) });
                 _isAnyAnimationLoadingFromDisk = AccessTools.Method(_mbAnimationType, "IsAnyAnimationLoadingFromDisk");
-                return _createMethod != null && _indexProp != null && _getActionCodeWithName != null && _getNumActionCodes != null;
+                // Require EVERY member the fix depends on. Missing any means engine
+                // drift — refuse to activate rather than force-pass with dead reflection.
+                return _createMethod != null && _indexProp != null && _getActionCodeWithName != null
+                    && _getNumActionCodes != null && _getNumAnimations != null && _isAnyAnimationLoadingFromDisk != null;
             }
             catch (Exception ex)
             {
@@ -168,11 +178,14 @@ namespace BLTDeploymentCrashGuard
         {
             try
             {
+                // All four members are guaranteed non-null (ResolveEngineTypesOnce
+                // requires them), so this reproduces their gate exactly — no check is
+                // silently skipped.
                 if ((int)_getNumActionCodes.Invoke(null, null) <= 0)
                 {
                     return false;
                 }
-                if (_getNumAnimations != null && (int)_getNumAnimations.Invoke(null, null) <= 0)
+                if ((int)_getNumAnimations.Invoke(null, null) <= 0)
                 {
                     return false;
                 }
@@ -183,7 +196,7 @@ namespace BLTDeploymentCrashGuard
                 {
                     return false;
                 }
-                if (_isAnyAnimationLoadingFromDisk != null && (bool)_isAnyAnimationLoadingFromDisk.Invoke(null, null))
+                if ((bool)_isAnyAnimationLoadingFromDisk.Invoke(null, null))
                 {
                     return false;
                 }
