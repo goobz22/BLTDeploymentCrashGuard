@@ -426,12 +426,12 @@ namespace BLTDeploymentCrashGuard
                         IEnumerable ids = ReadInstanceMember(server, memberName) as IEnumerable;
                         if (ids != null)
                         {
-                            int n = 0;
+                            int peerCount = 0;
                             foreach (object unused in ids)
                             {
-                                n++;
+                                peerCount++;
                             }
-                            peers = memberName + "=" + n;
+                            peers = memberName + "=" + peerCount;
                             break;
                         }
                     }

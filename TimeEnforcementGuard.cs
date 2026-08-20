@@ -187,11 +187,51 @@ namespace BLTDeploymentCrashGuard
             return !_inSoloEnforce;
         }
 
+        private static bool CalledFromPacketHandler()
+        {
+            try
+            {
+                System.Diagnostics.StackFrame[] frames = new System.Diagnostics.StackTrace(2, false).GetFrames();
+                if (frames == null)
+                {
+                    return false;
+                }
+                int examined = 0;
+                foreach (System.Diagnostics.StackFrame frame in frames)
+                {
+                    MethodBase method = frame.GetMethod();
+                    if (method == null)
+                    {
+                        continue;
+                    }
+                    if (method.Name.IndexOf("Packet", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        return true;
+                    }
+                    if (++examined >= 12)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return false;
+        }
+
         private static void PauseTracePrefix(MethodBase __originalMethod, object[] __args)
         {
             try
             {
-                PeerDetection.NoteCoopActivity(); // these only fire while packets flow — liveness signal
+                // Liveness stamp ONLY when the call arrives via network packet handling —
+                // SetPaused/ApplyTimeState also fire once during solo game load
+                // (2026-08-18 23:49 log: OnGameLoaded -> SetPaused -> ApplyTimeState),
+                // which must not fake a connected session.
+                if (CalledFromPacketHandler())
+                {
+                    PeerDetection.NoteCoopActivity();
+                }
                 StringBuilder sb = new StringBuilder("[TIME-GUARD] coop ");
                 sb.Append(__originalMethod != null ? __originalMethod.Name : "?").Append('(');
                 if (__args != null)

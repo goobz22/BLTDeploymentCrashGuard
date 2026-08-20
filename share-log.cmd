@@ -31,6 +31,7 @@ echo Could not find Mount ^& Blade II Bannerlord automatically.
 set /p GAME=Paste your Bannerlord install folder (contains bin\ and Modules\):
 
 :found
+set "GAME=%GAME:"=%"
 set "LOGFILE=%GAME%\Modules\BLTDeploymentCrashGuard\CrashGuard.log"
 if not exist "%LOGFILE%" (
   echo ERROR: no log found at "%LOGFILE%" ^(has the mod run yet?^)

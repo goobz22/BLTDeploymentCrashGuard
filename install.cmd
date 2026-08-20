@@ -32,6 +32,7 @@ echo Could not find Mount ^& Blade II Bannerlord automatically.
 set /p GAME=Paste your Bannerlord install folder (contains bin\ and Modules\):
 
 :found
+set "GAME=%GAME:"=%"
 if not exist "%GAME%\Modules" (
   echo ERROR: "%GAME%" does not look like a Bannerlord install ^(no Modules folder^).
   exit /b 1
