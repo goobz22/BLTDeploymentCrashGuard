@@ -48,6 +48,9 @@ namespace BLTDeploymentCrashGuard
         {
             base.OnSubModuleLoad();
             ApplyPatches();
+            // If the PREVIOUS session's co-op bootstrap aborted on a stale cache,
+            // clear it before this session's bootstrap audits it.
+            BootstrapWatch.CheckAtStartup();
         }
 
         protected override void OnBeforeInitialModuleScreenSetAsRoot()

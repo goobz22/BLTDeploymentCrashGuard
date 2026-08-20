@@ -19,6 +19,13 @@ namespace BLTDeploymentCrashGuard
         private static int _lastCheckTick;
         private static bool _warned;
 
+        /// <summary>Startup pass: if the PREVIOUS session aborted, clear the stale
+        /// cache BEFORE the co-op mod's bootstrap audits it this session.</summary>
+        internal static void CheckAtStartup()
+        {
+            Scan(60 * 24, startup: true);
+        }
+
         internal static void Tick()
         {
             try
@@ -33,6 +40,17 @@ namespace BLTDeploymentCrashGuard
                     return;
                 }
                 _lastCheckTick = now;
+                Scan(30, startup: false);
+            }
+            catch
+            {
+            }
+        }
+
+        private static void Scan(int maxAgeMinutes, bool startup)
+        {
+            try
+            {
                 string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
                 foreach (string name in new[] { "bt-sync-client.txt", "bt-sync-host.txt", "bt-sync-solo.txt" })
                 {
@@ -41,17 +59,30 @@ namespace BLTDeploymentCrashGuard
                     {
                         continue;
                     }
-                    if ((DateTime.Now - File.GetLastWriteTime(path)).TotalMinutes > 30)
+                    if ((DateTime.Now - File.GetLastWriteTime(path)).TotalMinutes > maxAgeMinutes)
                     {
-                        continue; // stale log from an earlier session
+                        continue;
                     }
-                    if (TailContains(path, "BootstrapAborted"))
+                    long abortOffset = TailFind(path, "BootstrapAborted");
+                    if (abortOffset < 0)
                     {
-                        _warned = true;
-                        Log.Info("[BOOTSTRAP-WATCH] the co-op mod reported BootstrapAborted in " + name + " — its patches are NOT fully applied and sync WILL be broken. Restart the game; if it repeats, remove Modules/BannerlordTogether/RuntimeDataCache/*.rdc and restart.");
-                        Log.Screen("WARNING: co-op mod did NOT fully load (BootstrapAborted) — RESTART THE GAME");
-                        return;
+                        continue;
                     }
+                    if (abortOffset <= ReadHandledOffset(name))
+                    {
+                        continue; // this abort was already handled on a previous pass
+                    }
+                    WriteHandledOffset(name, abortOffset);
+                    int cleared = ClearStaleCache();
+                    _warned = !startup;
+                    Log.Info("[BOOTSTRAP-WATCH] co-op mod reported BootstrapAborted in " + name +
+                             " — its patches were NOT fully applied. Auto-cleared " + cleared +
+                             " cache file(s) (renamed to .stale). " + (startup ? "Cleared before this session's bootstrap." : "RESTART THE GAME to load cleanly."));
+                    if (!startup)
+                    {
+                        Log.Screen("co-op mod did NOT fully load — cache auto-cleared, RESTART THE GAME");
+                    }
+                    return;
                 }
             }
             catch
@@ -59,7 +90,103 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
-        private static bool TailContains(string path, string needle)
+        /// <summary>Rename (never delete) the co-op mod's RuntimeDataCache entries so
+        /// its bootstrap rebuilds them fresh. The cache is regenerated data; renaming
+        /// is reversible and is the remedy its own audit implies (restartRequired).</summary>
+        private static int ClearStaleCache()
+        {
+            int cleared = 0;
+            try
+            {
+                string binDir = Path.GetDirectoryName(typeof(BootstrapWatch).Assembly.Location);
+                string modulesDir = Path.GetFullPath(Path.Combine(binDir, "..", "..", ".."));
+                string cacheDir = Path.Combine(modulesDir, "BannerlordTogether", "RuntimeDataCache");
+                if (!Directory.Exists(cacheDir))
+                {
+                    return 0;
+                }
+                foreach (string file in Directory.GetFiles(cacheDir, "*.rdc"))
+                {
+                    try
+                    {
+                        File.Move(file, file + ".stale-" + DateTime.Now.ToString("yyyyMMddHHmmss"));
+                        cleared++;
+                    }
+                    catch (Exception exOne)
+                    {
+                        Log.Info("[BOOTSTRAP-WATCH] could not move " + Path.GetFileName(file) + ": " + exOne.Message);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Info("[BOOTSTRAP-WATCH] cache clear failed: " + ex.Message);
+            }
+            return cleared;
+        }
+
+        private static string StatePath
+        {
+            get
+            {
+                string binDir = Path.GetDirectoryName(typeof(BootstrapWatch).Assembly.Location);
+                return Path.Combine(Path.GetFullPath(Path.Combine(binDir, "..", "..")), "bootstrapwatch.state");
+            }
+        }
+
+        private static long ReadHandledOffset(string logName)
+        {
+            try
+            {
+                if (!File.Exists(StatePath))
+                {
+                    return -1;
+                }
+                foreach (string line in File.ReadAllLines(StatePath))
+                {
+                    int sep = line.IndexOf('|');
+                    if (sep > 0 && line.Substring(0, sep) == logName)
+                    {
+                        long value;
+                        if (long.TryParse(line.Substring(sep + 1), out value))
+                        {
+                            return value;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return -1;
+        }
+
+        private static void WriteHandledOffset(string logName, long offset)
+        {
+            try
+            {
+                System.Collections.Generic.List<string> lines = new System.Collections.Generic.List<string>();
+                if (File.Exists(StatePath))
+                {
+                    foreach (string line in File.ReadAllLines(StatePath))
+                    {
+                        if (!line.StartsWith(logName + "|", StringComparison.Ordinal))
+                        {
+                            lines.Add(line);
+                        }
+                    }
+                }
+                lines.Add(logName + "|" + offset);
+                File.WriteAllLines(StatePath, lines.ToArray());
+            }
+            catch
+            {
+            }
+        }
+
+        /// <summary>Returns the approximate absolute file offset of the LAST occurrence
+        /// of needle within the file's tail, or -1 when absent.</summary>
+        private static long TailFind(string path, string needle)
         {
             try
             {
@@ -79,12 +206,13 @@ namespace BLTDeploymentCrashGuard
                         }
                         read += chunk;
                     }
-                    return Encoding.UTF8.GetString(buffer, 0, read).IndexOf(needle, StringComparison.Ordinal) >= 0;
+                    int index = Encoding.UTF8.GetString(buffer, 0, read).LastIndexOf(needle, StringComparison.Ordinal);
+                    return index < 0 ? -1 : start + index;
                 }
             }
             catch
             {
-                return false;
+                return -1;
             }
         }
     }
