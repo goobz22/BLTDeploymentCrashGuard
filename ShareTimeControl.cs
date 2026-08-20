@@ -35,6 +35,7 @@ namespace BLTDeploymentCrashGuard
         private static MethodInfo _isEnabledForMenu;    // IsClientTimeControlEnabledForCurrentMenu()
         private static Type _coopSession;
         private static PropertyInfo _isHostProp;
+        private static FieldInfo _isHostField;
 
         private static bool Enabled
         {
@@ -52,11 +53,9 @@ namespace BLTDeploymentCrashGuard
         {
             try
             {
+                // Once granted we stop — a later host toggle-off is theirs to keep,
+                // and this prevents any OFF/ON churn from a misread state check.
                 if (!Enabled || _grantedLogged)
-                {
-                    // once granted we stop; a real host toggle-off is theirs to keep
-                }
-                if (!Enabled)
                 {
                     return;
                 }
@@ -125,11 +124,9 @@ namespace BLTDeploymentCrashGuard
             try
             {
                 object[] args = new object[2];
-                object result = _toggle.Invoke(null, args);
+                _toggle.Invoke(null, args); // trust the out-param, not the (possibly void) return
                 reason = args[1] as string;
-                bool enabled = args[0] is bool && (bool)args[0];
-                bool ok = result is bool && (bool)result;
-                return ok && enabled;
+                return args[0] is bool && (bool)args[0];
             }
             catch (Exception ex)
             {
@@ -142,7 +139,8 @@ namespace BLTDeploymentCrashGuard
         {
             try
             {
-                object v = _isHostProp != null ? _isHostProp.GetValue(null) : null;
+                object v = _isHostProp != null ? _isHostProp.GetValue(null)
+                    : (_isHostField != null ? _isHostField.GetValue(null) : null);
                 return v is bool && (bool)v;
             }
             catch
@@ -155,7 +153,7 @@ namespace BLTDeploymentCrashGuard
         {
             if (_resolved)
             {
-                return _coopSubModule != null && _toggle != null;
+                return _coopSubModule != null && _toggle != null && _isEnabledForMenu != null;
             }
             _resolved = true;
             try
@@ -172,10 +170,11 @@ namespace BLTDeploymentCrashGuard
                 if (_coopSession != null)
                 {
                     _isHostProp = AccessTools.Property(_coopSession, "IsHost");
+                    _isHostField = AccessTools.Field(_coopSession, "IsHost");
                 }
-                if (_toggle == null)
+                if (_toggle == null || _isEnabledForMenu == null)
                 {
-                    Log.Info("[SHARE-TIME] ToggleClientTimeControlPermission not found — shared time control INACTIVE (mod version changed?)");
+                    Log.Info("[SHARE-TIME] required method(s) not found (toggle=" + (_toggle != null) + " menuCheck=" + (_isEnabledForMenu != null) + ") — shared time control INACTIVE (mod version changed?)");
                     return false;
                 }
                 Log.Info("[SHARE-TIME] shared time control enabler active (grants client time control on the authority)");
