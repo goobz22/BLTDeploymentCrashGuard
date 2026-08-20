@@ -63,6 +63,7 @@ namespace BLTDeploymentCrashGuard
         {
             base.OnGameStart(game, gameStarterObject);
             TimeEnforcementGuard.Apply(_harmony); // retry in case the co-op assembly loaded late
+            EncounterLoopGuard.Apply(_harmony);
             BattleMode.DecideAndApply(_harmony, "game-start");
         }
 
@@ -88,6 +89,7 @@ namespace BLTDeploymentCrashGuard
                 TimeTrace.Apply(_harmony);
                 TimeFlowPatch.Apply(_harmony);
                 PartyAiCrashGuard.Apply(_harmony);
+                EncounterLoopGuard.Apply(_harmony);
                 _patched = true;
                 Log.Info("patches applied (crash guards + trace + control trace + time trace); battleMode=" + BattleMode.ConfigMode);
             }
