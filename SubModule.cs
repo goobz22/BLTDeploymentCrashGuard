@@ -86,6 +86,7 @@ namespace BLTDeploymentCrashGuard
             base.OnApplicationTick(dt);
             Log.RefreshRole();          // self-throttled to once per 5s
             PlayerIdentityGuard.Tick(); // self-throttled to one check per second
+            ShareTimeControl.Tick();    // self-throttled to once per 3s; host-only
             LogStreamer.Tick();         // self-throttled to one upload per minute
             BootstrapWatch.Tick();      // self-throttled to one scan per 2 minutes
         }
