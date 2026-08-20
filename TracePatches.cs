@@ -184,6 +184,7 @@ namespace BLTDeploymentCrashGuard
 
         private static void EncounterFinishPrefix(object[] __args)
         {
+            EncounterLoopGuard.NoteEncounterFinish();
             Log.Info("[TRACE] PlayerEncounter.Finish " + FormatArgs(__args) + CallStack());
         }
 

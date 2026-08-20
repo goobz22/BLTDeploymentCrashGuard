@@ -25,12 +25,24 @@ namespace BLTDeploymentCrashGuard
         private const int TripCount = 4;
         private const int WindowMs = 15000;
         private const int RetryAfterMs = 60000;
+        private const int FinishChainMs = 4000;
 
         private static bool _applied;
         private static readonly int[] _recentCalls = new int[TripCount];
         private static int _recentIndex;
         private static bool _tripped;
         private static int _lastSuppressedTick;
+        private static int _lastFinishTick;
+
+        /// <summary>Stamped by the PlayerEncounter.Finish tracer. The infinite-loop
+        /// signature is finish -> immediate re-application; only applications that
+        /// closely follow a local Finish count toward tripping, so legitimate join
+        /// requests (which have no preceding local Finish) are NEVER suppressed —
+        /// the v1 pure-rate breaker could eat a partner's join storm.</summary>
+        internal static void NoteEncounterFinish()
+        {
+            _lastFinishTick = Environment.TickCount;
+        }
 
         internal static void Apply(Harmony harmony)
         {
@@ -94,6 +106,11 @@ namespace BLTDeploymentCrashGuard
                     }
                 }
 
+                bool followsFinish = _lastFinishTick != 0 && now - _lastFinishTick < FinishChainMs && now >= _lastFinishTick;
+                if (!followsFinish)
+                {
+                    return true; // not the loop signature — never block ordinary/join applications
+                }
                 int oldest = _recentCalls[_recentIndex];
                 _recentCalls[_recentIndex] = now;
                 _recentIndex = (_recentIndex + 1) % TripCount;

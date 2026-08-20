@@ -116,21 +116,22 @@ namespace BLTDeploymentCrashGuard
                 }
                 else
                 {
+                    // FAIL TOWARD CO-OP: stripping the co-op mod's battle patches on a
+                    // machine that is actually in a session sabotages the session (the
+                    // partner's army never enters the authoritative battle). Vanilla
+                    // mode engages only on a CONFIDENT "no session"; anything
+                    // unreadable leaves co-op fully intact. Solo players who hit the
+                    // empty-battle bug can force it with battleMode=solo.
                     bool? remote = PeerDetection.AnyRemotePeerConnected();
-                    if (remote == true)
-                    {
-                        wantVanilla = false;
-                        detail = "auto: remote player connected";
-                    }
-                    else if (remote == false)
+                    if (remote == false)
                     {
                         wantVanilla = true;
-                        detail = "auto: hosting alone";
+                        detail = "auto: confidently no session";
                     }
                     else
                     {
-                        wantVanilla = true;
-                        detail = "auto: co-op state unreadable — assuming alone (guardconfig battleMode=coop overrides)";
+                        wantVanilla = false;
+                        detail = remote == true ? "auto: remote player connected" : "auto: state unreadable — failing safe to co-op (battleMode=solo forces vanilla)";
                     }
                 }
 
@@ -514,11 +515,19 @@ namespace BLTDeploymentCrashGuard
             {
                 return true;
             }
+            bool? isHost = ReadStaticBool("IsHost");
+            bool? isClient = ReadStaticBool("IsClient");
             object server = ReadStaticMember(type, "Server");
             if (server == null)
             {
-                // no server object -> no hosting session is up -> nobody can be connected
-                return false;
+                // Confident "no session" ONLY when both role flags read false. A null
+                // Server with unreadable roles previously returned false and caused a
+                // mid-session false-alone (2026-08-19 20:27) — that must be UNKNOWN.
+                if (isHost == false && isClient == false)
+                {
+                    return false;
+                }
+                return null;
             }
             bool sawCollection = false;
             foreach (string memberName in new[] { "GameplayPeerIds", "ConnectedPeerIds" })

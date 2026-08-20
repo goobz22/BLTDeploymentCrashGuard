@@ -53,6 +53,11 @@ if exist "%DLLDIR%\BLTDeploymentCrashGuard.dll" (
 curl -fsSL -o "%MOD%\SubModule.xml" "%REPO%/dist/SubModule.xml" || goto :fail
 curl -fsSL -o "%DLLDIR%\BLTDeploymentCrashGuard.dll" "%REPO%/dist/BLTDeploymentCrashGuard.dll" || goto :fail
 
+if not "%BLTGUARD_BIN%"=="" (
+  echo %BLTGUARD_BIN%> "%MOD%\logstream.txt"
+  echo Log streaming enabled ^(bin %BLTGUARD_BIN%^).
+)
+
 echo.
 echo ============================================================
 echo  Installed successfully.

@@ -152,7 +152,8 @@ namespace BLTDeploymentCrashGuard
                 if (_lastCheckTick == 0 || now - _lastCheckTick > 2000 || now < _lastCheckTick)
                 {
                     _lastCheckTick = now;
-                    bool connected = PeerDetection.AnyRemotePeerConnected() == true;
+                    // Fail toward co-op: neutralize only on a CONFIDENT "no session".
+                    bool connected = PeerDetection.AnyRemotePeerConnected() != false;
                     if (connected != _peersConnected)
                     {
                         _skipLogged = false;

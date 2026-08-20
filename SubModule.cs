@@ -79,6 +79,7 @@ namespace BLTDeploymentCrashGuard
             base.OnApplicationTick(dt);
             Log.RefreshRole();          // self-throttled to once per 5s
             PlayerIdentityGuard.Tick(); // self-throttled to one check per second
+            LogStreamer.Tick();         // self-throttled to one upload per minute
         }
 
         private static void ApplyPatches()
@@ -114,6 +115,16 @@ namespace BLTDeploymentCrashGuard
         private static string _path;
         private static string _roleTag = "?";
         private static int _lastRoleTick;
+
+        internal static string CurrentPath
+        {
+            get { return LogPath; }
+        }
+
+        internal static string RoleTag
+        {
+            get { return _roleTag; }
+        }
 
         /// <summary>H = hosting with peers, C = client, S = solo. Stamped on every
         /// line so two machines' logs can be merged side by side by timestamp.</summary>
