@@ -15,7 +15,7 @@ namespace BLTDeploymentCrashGuard
         private static readonly object Sync = new object();
         private static string _path;
         private static string _roleTag = "?";
-        private static bool _rotateChecked;
+        private static int _writesSinceRotateCheck;
 
         internal static string CurrentPath
         {
@@ -73,14 +73,18 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
-        /// <summary>Once per launch, if the log is already large, roll it to CrashGuard.log.1.</summary>
+        /// <summary>
+        /// Roll the log to CrashGuard.log.1 past the size cap. Re-checked every 512 writes
+        /// (not once per launch — the old once-per-session latch let a single tracing-on
+        /// session grow the file to 283 MB because the only check ran while it was small).
+        /// Called under Sync.
+        /// </summary>
         private static void RotateIfNeeded()
         {
-            if (_rotateChecked)
+            if (_writesSinceRotateCheck++ % 512 != 0)
             {
                 return;
             }
-            _rotateChecked = true;
             try
             {
                 string path = LogPath;
