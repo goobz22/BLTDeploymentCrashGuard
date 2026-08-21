@@ -89,6 +89,8 @@ namespace BLTDeploymentCrashGuard
   ""timeAlwaysFlows"": true,    ""_timeAlwaysFlows"": ""true = campaign time does not auto-pause when your party idles"",
   ""shareTimeControl"": true,   ""_shareTimeControl"": ""host auto-grants the client time control so either player can pause/play/fast-forward"",
 
+  ""noSickness"": true,         ""_noSickness"": ""true blocks the vanilla die-of-illness outcome for the local player's hero (each machine protects its own player). Stands down automatically if the third-party NoSickness mod is installed"",
+
   ""tracing"": false,           ""_tracing"": ""true enables verbose diagnostic tracers (mission/menu/control/time/coop-battle/role). Off for normal play; on for troubleshooting"",
   ""selfTest"": false,          ""_selfTest"": ""true runs each guard's decision-logic self-test at startup and logs PASS/FAIL (proves the fix wiring survived a BT update)"",
 
@@ -96,7 +98,7 @@ namespace BLTDeploymentCrashGuard
 
   ""hotReload"": false,          ""_hotReload"": ""DEV ONLY. true + a .hotreload-dev marker file in the module root enables no-restart reload of the payload. Never for players (runtime code load is a code-injection surface)"",
   ""hotReloadRoslyn"": false,    ""_hotReloadRoslyn"": ""DEV ONLY. true watches payload .cs SOURCE and recompiles via Roslyn on save (requires the harness built with -p:Roslyn=true). false watches the prebuilt BLTDeploymentCrashGuard.Payload.dll (build-and-drop)"",
-  ""payloadSourceDir"": """"      ""_payloadSourceDir"": ""DEV ONLY. path to the payload .cs source for Roslyn reload; defaults to a PayloadSource folder in the module root""
+  ""payloadSourceDir"": """",     ""_payloadSourceDir"": ""DEV ONLY. path to the payload .cs source for Roslyn reload; defaults to a PayloadSource folder in the module root""
 }
 ";
     }

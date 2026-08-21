@@ -45,6 +45,7 @@ namespace BLTDeploymentCrashGuard
                 MapClickSpeedKeeper.Apply(harmony);
                 ClientHeroCreationGuard.Apply(harmony);
                 ClanScreenCrashGuard.Apply(harmony);
+                IllnessDeathGuard.Apply(harmony);
 
                 // Client bootstrap fix — must beat BT's first (and only) verify on a fresh process;
                 // on a mid-game reload it just installs the prefix (BT won't verify again).
