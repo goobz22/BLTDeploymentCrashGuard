@@ -247,11 +247,19 @@ namespace BLTDeploymentCrashGuard
                 {
                     try
                     {
-                        asm = Assembly.LoadFrom(_prebuiltPath);
+                        // LoadFrom locks its file for the process lifetime, which would break the
+                        // dev build-and-drop loop (copy over the canonical DLL fails with a sharing
+                        // violation and no reload ever fires). Load a per-process SHADOW copy in
+                        // the SAME directory instead — same-dir keeps LoadFrom dependency probing
+                        // pointed at this harness; the canonical file stays writable.
+                        CleanStaleShadows();
+                        string shadowPath = _prebuiltPath + "." + System.Diagnostics.Process.GetCurrentProcess().Id + ".gen1";
+                        File.Copy(_prebuiltPath, shadowPath, overwrite: true);
+                        asm = Assembly.LoadFrom(shadowPath);
                     }
                     catch (Exception exFrom)
                     {
-                        Log.Info("[HOTRELOAD] LoadFrom(" + _prebuiltPath + ") failed (" + exFrom.GetType().Name + ": " + exFrom.Message + ") — falling back to byte load");
+                        Log.Info("[HOTRELOAD] shadow LoadFrom failed (" + exFrom.GetType().Name + ": " + exFrom.Message + ") — falling back to byte load");
                     }
                 }
                 if (asm == null)
@@ -317,6 +325,24 @@ namespace BLTDeploymentCrashGuard
                 {
                     Log.Screen("hot-reload FAILED — kept previous generation (see CrashGuard.log)");
                 }
+            }
+        }
+
+        /// <summary>Best-effort removal of shadow copies left by previous/other processes; a
+        /// still-running sibling's locked shadow just stays (its delete throws and is skipped).</summary>
+        private void CleanStaleShadows()
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(_prebuiltPath);
+                foreach (string stale in Directory.GetFiles(dir, Path.GetFileName(_prebuiltPath) + ".*.gen1"))
+                {
+                    try { File.Delete(stale); }
+                    catch { }
+                }
+            }
+            catch
+            {
             }
         }
 
