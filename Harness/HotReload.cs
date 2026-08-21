@@ -144,14 +144,66 @@ namespace BLTDeploymentCrashGuard
                 {
                     if (!loaded.IsDynamic && loaded.GetName().Name == simpleName)
                     {
+                        Log.Info("[HOTRELOAD] resolver: '" + args.Name + "' -> already-loaded " + loaded.FullName + " @ " + SafeLocation(loaded));
                         return loaded;
                     }
                 }
+                Log.Info("[HOTRELOAD] resolver: '" + args.Name + "' -> no loaded match (deferring to other resolvers)");
             }
             catch
             {
             }
             return null;
+        }
+
+        /// <summary>The evidence pack for a payload type-load failure: every loaded copy of the
+        /// assemblies whose identity could have split, plus what the payload actually references.
+        /// Written once per failure so the log answers "who supplied the duplicate".</summary>
+        private static void DumpBindingDiagnostics(Assembly payloadAsm, Exception failure)
+        {
+            try
+            {
+                Assembly harness = typeof(HotReload).Assembly;
+                Log.Info("[HOTRELOAD][DIAG] type-load failure: " + failure.GetType().Name + ": " + failure.Message);
+                Log.Info("[HOTRELOAD][DIAG] this harness = " + harness.FullName + " @ " + SafeLocation(harness));
+                foreach (Assembly loaded in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    if (loaded.IsDynamic)
+                    {
+                        continue;
+                    }
+                    string name = loaded.GetName().Name;
+                    if (name == "BLTDeploymentCrashGuard" || name == "BLTDeploymentCrashGuard.Payload" || name == "0Harmony")
+                    {
+                        Log.Info("[HOTRELOAD][DIAG] loaded: " + loaded.FullName + " @ " + SafeLocation(loaded) +
+                                 (ReferenceEquals(loaded, harness) ? " (THIS harness)" : "") +
+                                 (ReferenceEquals(loaded, payloadAsm) ? " (the new payload)" : ""));
+                    }
+                }
+                foreach (AssemblyName referenced in payloadAsm.GetReferencedAssemblies())
+                {
+                    if (referenced.Name == "BLTDeploymentCrashGuard" || referenced.Name == "0Harmony")
+                    {
+                        Log.Info("[HOTRELOAD][DIAG] payload references: " + referenced.FullName);
+                    }
+                }
+            }
+            catch (Exception exDiag)
+            {
+                Log.Info("[HOTRELOAD][DIAG] diagnostics failed: " + exDiag.Message);
+            }
+        }
+
+        private static string SafeLocation(Assembly assembly)
+        {
+            try
+            {
+                return string.IsNullOrEmpty(assembly.Location) ? "(byte-loaded, no path)" : assembly.Location;
+            }
+            catch
+            {
+                return "(unknown)";
+            }
         }
 
         /// <summary>
@@ -182,19 +234,45 @@ namespace BLTDeploymentCrashGuard
         {
             try
             {
-                byte[] bytes = LoadPayloadBytes(reason);
-                if (bytes == null)
+                Assembly asm = null;
+                // FIRST generation loads via LoadFrom at the canonical path: LoadFrom-context
+                // dependency probing checks the requesting assembly's own directory, so the
+                // payload's harness reference binds to THIS already-loaded file by path — no
+                // AssemblyResolve chain involved. (Byte-loading gen1 field-failed 2026-08-21:
+                // the harness reference bound to a different copy and PayloadEntry's IPayload
+                // split identities — "Method 'Apply' does not have an implementation".)
+                // Later generations (dev hot-reload) must byte-load for fresh statics, because
+                // LoadFrom dedups by assembly identity and would return gen1 again.
+                if (_current == null && !_useRoslyn && File.Exists(_prebuiltPath))
                 {
-                    Log.Info("[HOTRELOAD] no payload bytes (" + reason + ") — keeping current generation");
-                    return;
+                    try
+                    {
+                        asm = Assembly.LoadFrom(_prebuiltPath);
+                    }
+                    catch (Exception exFrom)
+                    {
+                        Log.Info("[HOTRELOAD] LoadFrom(" + _prebuiltPath + ") failed (" + exFrom.GetType().Name + ": " + exFrom.Message + ") — falling back to byte load");
+                    }
                 }
-
-                Assembly asm = Assembly.Load(bytes);
-                Type entryType = asm.GetType("BLTDeploymentCrashGuard.PayloadEntry");
-                if (entryType == null)
+                if (asm == null)
                 {
-                    Log.Info("[HOTRELOAD] payload assembly has no PayloadEntry — keeping current generation");
-                    return;
+                    byte[] bytes = LoadPayloadBytes(reason);
+                    if (bytes == null)
+                    {
+                        Log.Info("[HOTRELOAD] no payload bytes (" + reason + ") — keeping current generation");
+                        return;
+                    }
+                    asm = Assembly.Load(bytes);
+                }
+                Type entryType;
+                try
+                {
+                    entryType = asm.GetType("BLTDeploymentCrashGuard.PayloadEntry", throwOnError: true);
+                }
+                catch (Exception exType)
+                {
+                    DumpBindingDiagnostics(asm, exType);
+                    throw;
                 }
                 IPayload payload = Activator.CreateInstance(entryType) as IPayload;
                 if (payload == null)
