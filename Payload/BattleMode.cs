@@ -554,6 +554,13 @@ namespace BLTDeploymentCrashGuard
             return sawCollection ? (bool?)false : null;
         }
 
+        /// <summary>Shared read of a CoopSession static bool (IsHost/IsClient/IsActive) for the
+        /// other guards — same resolution + caching as battle-mode decisions.</summary>
+        internal static bool? ReadCoopStaticBool(string name)
+        {
+            return ReadStaticBool(name);
+        }
+
         private static bool? ReadStaticBool(string name)
         {
             Type type = SessionType;

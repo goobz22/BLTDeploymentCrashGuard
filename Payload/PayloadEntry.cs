@@ -46,6 +46,8 @@ namespace BLTDeploymentCrashGuard
                 ClientHeroCreationGuard.Apply(harmony);
                 ClanScreenCrashGuard.Apply(harmony);
                 IllnessDeathGuard.Apply(harmony);
+                ClanModeSoloFix.Apply(harmony);
+                MarriageBarterGuard.Apply(harmony);
 
                 // Client bootstrap fix — must beat BT's first (and only) verify on a fresh process;
                 // on a mid-game reload it just installs the prefix (BT won't verify again).
@@ -86,6 +88,7 @@ namespace BLTDeploymentCrashGuard
         public void OnBeforeInitialModuleScreen()
         {
             ClientBootstrapFix.Apply(Harmony); // retry in case the co-op assembly loaded late
+            ClanModeSoloFix.Apply(Harmony);    // same late-BT-assembly retry (latched once applied)
             TimeEnforcementGuard.Apply(Harmony);
             BattleMode.DecideAndApply(Harmony, "module-screen");
         }
