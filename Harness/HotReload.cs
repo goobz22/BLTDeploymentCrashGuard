@@ -53,6 +53,15 @@ namespace BLTDeploymentCrashGuard
         {
             try
             {
+                // Bannerlord loads module DLLs (this harness, 0Harmony, BT) via LoadFrom, which is
+                // INVISIBLE to the default probing that resolves a byte-loaded payload's references.
+                // Without this redirect the binder finds/loads a SECOND copy of the harness, the
+                // payload implements THAT copy's IPayload, and the identity split surfaces as
+                // "Method 'Apply' in PayloadEntry does not have an implementation" (field-hit
+                // 2026-08-21 15:14 — the whole payload silently failed to load). Reusing the
+                // already-loaded instance keeps every type single-identity.
+                AppDomain.CurrentDomain.AssemblyResolve += ResolveFromLoadedAssemblies;
+
                 string binDir = Path.GetDirectoryName(typeof(HotReload).Assembly.Location);
                 _moduleRoot = Path.GetFullPath(Path.Combine(binDir, "..", ".."));
                 _prebuiltPath = Path.Combine(binDir, "BLTDeploymentCrashGuard.Payload.dll");
@@ -107,6 +116,7 @@ namespace BLTDeploymentCrashGuard
 
         internal void OnGameStart()
         {
+            EnsureLoaded("game-start");
             Safe(delegate { if (_current != null) _current.OnGameStart(); }, "OnGameStart");
         }
 
@@ -117,7 +127,49 @@ namespace BLTDeploymentCrashGuard
 
         internal void OnBeforeInitialModuleScreen()
         {
+            EnsureLoaded("module-screen");
             Safe(delegate { if (_current != null) _current.OnBeforeInitialModuleScreen(); }, "OnBeforeInitialModuleScreen");
+        }
+
+        private static Assembly ResolveFromLoadedAssemblies(object sender, ResolveEventArgs args)
+        {
+            try
+            {
+                string simpleName = new AssemblyName(args.Name).Name;
+                if (simpleName == "BLTDeploymentCrashGuard.Payload")
+                {
+                    return null; // generations load by bytes only — never redirect the payload name
+                }
+                foreach (Assembly loaded in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    if (!loaded.IsDynamic && loaded.GetName().Name == simpleName)
+                    {
+                        return loaded;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// A payload that fails to load means the game runs with ZERO guards — that must never
+        /// be silent (the initial-load failure was file-log-only and the operator played a whole
+        /// unprotected session). Retry at the lifecycle points, and warn ON SCREEN if still down.
+        /// </summary>
+        private void EnsureLoaded(string where)
+        {
+            if (_current != null)
+            {
+                return;
+            }
+            LoadGeneration("retry-" + where);
+            if (_current == null)
+            {
+                Log.Screen("CRASH GUARD NOT ACTIVE — payload failed to load, all fixes are OFF (see CrashGuard.log)");
+            }
         }
 
         private static void Safe(Action a, string what)
