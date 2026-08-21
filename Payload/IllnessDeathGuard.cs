@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using System.Reflection;
 using HarmonyLib;
 using TaleWorlds.CampaignSystem;
@@ -7,37 +6,42 @@ using TaleWorlds.CampaignSystem;
 namespace BLTDeploymentCrashGuard
 {
     /// <summary>
-    /// Blocks the vanilla "main hero dies of illness" outcome (AgingCampaignBehavior.DailyTickHero:
-    /// once the main hero has been ill &gt; 3 days at &lt;= 1 HP, the game rolls a death). In co-op a
-    /// sickness death ends a whole shared campaign for one player, so this guard takes over the
-    /// ill-day tick for the LOCAL main hero and cures the illness cycle instead of letting the
-    /// death branch run. Each machine protects its own player, so with the mod installed on both
-    /// sides both players are covered.
+    /// Blocks the "main hero dies of sickness" mechanic at its ROOT. Decompile-proven vanilla
+    /// flow (AgingCampaignBehavior): once the main hero is age >= BecomeOldAge (55), every daily
+    /// tick calls IsItTimeOfDeath which rolls ProbabilityOfDeath; on a hit the main hero "Caught
+    /// Illness" (MainHeroIllDays -1 -> 0; IsMainHeroIll == days != -1). DailyTickHero then
+    /// increments ill days; past day 3 it drains HP 5%*days daily, and at &lt;= 1 HP kills via
+    /// KillMainHeroWithIllness (unless an extra life is consumed). In co-op that ends a shared
+    /// campaign for one player, so with "noSickness" (default true):
     ///
-    /// Config: "noSickness" (default true).
+    ///  1. IsItTimeOfDeath prefix — the local main hero never rolls the old-age/illness death at
+    ///     all (root cause: the illness is never caught). NPC lords age and die normally.
+    ///  2. DailyTickHero prefix — an ALREADY-ill main hero (e.g. a save from before this guard)
+    ///     is cured outright: ill days reset to -1 and a pending DiedOfOldAge death mark is
+    ///     cleared, then vanilla runs normally as healthy. No skipped aging/come-of-age events,
+    ///     no permanently-stuck ill flag (the trap in the third-party NoSickness mod's approach,
+    ///     which skips the whole method on ill days and never clears the flag).
     ///
-    /// SELF-DISABLING vs the third-party "NoSickness" mod: if that mod's Harmony patch is present
-    /// on the same method (owner "NoSickness"), this guard stands down completely so ill days are
-    /// not double-incremented — whichever is installed handles it, both installed is safe.
+    /// Coexists safely with the third-party NoSickness mod (we never increment ill days; once we
+    /// cure, its prefix sees a healthy hero and passes through). Each machine protects its own
+    /// player, so both co-op players are covered by running this mod.
     /// </summary>
     internal static class IllnessDeathGuard
     {
         private static bool _enabled;
-        private static MethodBase _target;
-        private static bool _standDownChecked;
-        private static bool _standDown;
+        private static bool _rollBlockLogged;
 
         internal static void Apply(Harmony harmony)
         {
             try
             {
                 _enabled = GuardConfig.Bool("noSickness", true);
-                Type aging = AccessTools.TypeByName("TaleWorlds.CampaignSystem.CampaignBehaviors.AgingCampaignBehavior");
-                _target = aging != null ? AccessTools.Method(aging, "DailyTickHero") : null;
-                if (_target == null)
+                MethodBase roll = ResolveRoll();
+                MethodBase tick = ResolveTick();
+                if (roll == null || tick == null)
                 {
-                    Log.Info("[NOSICK] AgingCampaignBehavior.DailyTickHero not found — guard inactive (game update?)");
-                    Diag.Report("illness-death-guard", false, "DailyTickHero not found");
+                    Log.Info("[NOSICK] AgingCampaignBehavior methods not found (roll=" + (roll != null) + " tick=" + (tick != null) + ") — guard inactive (game update?)");
+                    Diag.Report("illness-death-guard", false, "AgingCampaignBehavior target missing");
                     return;
                 }
                 if (!_enabled)
@@ -46,8 +50,9 @@ namespace BLTDeploymentCrashGuard
                     Diag.Report("illness-death-guard", true, "disabled by config");
                     return;
                 }
-                harmony.Patch(_target, new HarmonyMethod(typeof(IllnessDeathGuard), nameof(Prefix)));
-                Log.Info("[NOSICK] illness-death guard active — the local player can no longer die of sickness");
+                harmony.Patch(roll, new HarmonyMethod(typeof(IllnessDeathGuard), nameof(IsItTimeOfDeathPrefix)));
+                harmony.Patch(tick, new HarmonyMethod(typeof(IllnessDeathGuard), nameof(DailyTickHeroPrefix)));
+                Log.Info("[NOSICK] illness-death guard active — the local player can no longer catch or die of the old-age sickness");
                 Diag.Report("illness-death-guard", true, "");
                 SelfHealing.RegisterTest(SelfTest);
             }
@@ -58,80 +63,88 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
-        private static bool Prefix(Hero hero)
+        private static MethodBase ResolveRoll()
+        {
+            Type aging = AccessTools.TypeByName("TaleWorlds.CampaignSystem.CampaignBehaviors.AgingCampaignBehavior");
+            return aging != null ? AccessTools.Method(aging, "IsItTimeOfDeath") : null;
+        }
+
+        private static MethodBase ResolveTick()
+        {
+            Type aging = AccessTools.TypeByName("TaleWorlds.CampaignSystem.CampaignBehaviors.AgingCampaignBehavior");
+            return aging != null ? AccessTools.Method(aging, "DailyTickHero") : null;
+        }
+
+        /// <summary>Root block: the local main hero never rolls the old-age/illness death.</summary>
+        private static bool IsItTimeOfDeathPrefix(Hero hero)
         {
             try
             {
-                if (!_enabled || StandDown())
+                if (!_enabled || hero == null || hero != Hero.MainHero)
                 {
                     return true;
                 }
-                Hero main = Hero.MainHero;
-                if (hero == null || main == null || hero != main)
+                if (!_rollBlockLogged)
                 {
-                    return true; // only the local player's hero has the illness mechanic
-                }
-                if (!Hero.IsMainHeroIll || (int)main.HeroState == 5 /* Dead */)
-                {
-                    return true; // healthy (or already dead) — vanilla aging runs normally
-                }
-                Campaign campaign = Campaign.Current;
-                if (campaign == null)
-                {
-                    return true;
-                }
-                // Take over the ill-day tick so vanilla's illness-death branch never runs.
-                campaign.MainHeroIllDays++;
-                if (campaign.MainHeroIllDays > 3 && main.HitPoints <= 1 && (int)main.DeathMark == 0)
-                {
-                    // This is the day vanilla would have rolled the death — cure the cycle instead.
-                    campaign.MainHeroIllDays = -1;
+                    _rollBlockLogged = true;
                     SelfHealing.RecordFire("illness-death-guard");
-                    Log.Info("[NOSICK] BLOCKED illness death of " + main.Name + " — illness cured");
-                    Log.Screen("sickness would have killed you — blocked by the no-sickness guard");
+                    Log.Info("[NOSICK] blocking the daily old-age/illness death roll for " + hero.Name + " (age " + (int)hero.Age + ") — logged once, active every day");
                 }
                 return false;
             }
             catch (Exception ex)
             {
-                Log.Info("[NOSICK] prefix error, passing through to vanilla: " + ex.Message);
+                Log.Info("[NOSICK] roll prefix error, passing through: " + ex.Message);
                 return true;
             }
         }
 
-        private static bool StandDown()
+        /// <summary>Cure an illness already in progress (a save from before the guard).</summary>
+        private static bool DailyTickHeroPrefix(Hero hero)
         {
-            if (_standDownChecked)
-            {
-                return _standDown;
-            }
-            _standDownChecked = true; // checked lazily so a later-loading NoSickness module is still seen
             try
             {
-                Patches info = Harmony.GetPatchInfo(_target);
-                _standDown = info != null && info.Owners.Contains("NoSickness");
-                if (_standDown)
+                if (!_enabled || hero == null || hero != Hero.MainHero)
                 {
-                    Log.Info("[NOSICK] third-party NoSickness mod patch detected on DailyTickHero — standing down (it handles the block; no double ill-day tick)");
+                    return true;
                 }
+                Campaign campaign = Campaign.Current;
+                if (campaign == null || !Hero.IsMainHeroIll)
+                {
+                    return true;
+                }
+                campaign.MainHeroIllDays = -1;
+                if (hero.DeathMark == TaleWorlds.CampaignSystem.Actions.KillCharacterAction.KillCharacterActionDetail.DiedOfOldAge)
+                {
+                    // KillMainHeroWithIllness sets this mark; clear it (private setter) so the
+                    // ApplyByDeathMark branch at the top of DailyTickHero can't finish the kill.
+                    AccessTools.PropertySetter(typeof(Hero), "DeathMark")?.Invoke(hero,
+                        new object[] { TaleWorlds.CampaignSystem.Actions.KillCharacterAction.KillCharacterActionDetail.None });
+                }
+                SelfHealing.RecordFire("illness-death-guard");
+                Log.Info("[NOSICK] CURED the in-progress illness of " + hero.Name + " (ill days reset, death mark cleared if set)");
+                Log.Screen("your sickness was cured (no-sickness guard)");
+                return true; // vanilla proceeds as a healthy hero — aging events untouched
             }
-            catch
+            catch (Exception ex)
             {
-                _standDown = false;
+                Log.Info("[NOSICK] tick prefix error, passing through: " + ex.Message);
+                return true;
             }
-            return _standDown;
         }
 
         private static SelfHealing.TestResult SelfTest()
         {
-            // Prove the decision wiring: target resolved, and the prefix passes through (returns
-            // true = run vanilla) for a null hero — the only input testable outside a campaign.
-            bool methodExists = _target != null;
-            bool passThroughOnNull = Prefix(null);
-            bool pass = methodExists && passThroughOnNull;
+            // Re-resolve both targets by name so a game update that renames/moves them reddens
+            // this test (the resolve at Apply time is not reused). Also prove both prefixes pass
+            // through (return true) for a null hero — the only input testable outside a campaign.
+            bool rollExists = ResolveRoll() != null;
+            bool tickExists = ResolveTick() != null;
+            bool passThrough = IsItTimeOfDeathPrefix(null) && DailyTickHeroPrefix(null);
+            bool pass = rollExists && tickExists && passThrough;
             return SelfHealing.TestResult.Of("illness-death-guard.contract", pass,
-                pass ? "target present; prefix passes through on null hero"
-                     : "methodExists=" + methodExists + " passThroughOnNull=" + passThroughOnNull);
+                pass ? "both targets re-resolved; prefixes pass through on null hero"
+                     : "rollExists=" + rollExists + " tickExists=" + tickExists + " passThrough=" + passThrough + " (game update?)");
         }
     }
 }
