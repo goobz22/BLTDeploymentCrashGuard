@@ -109,7 +109,16 @@ namespace BLTDeploymentCrashGuard.PregnancySync
                     }
                     next = PendingBirths.Dequeue();
                 }
-                ReconstructChildren(next);
+                try
+                {
+                    // Runs on the main game tick — a throw here (bad mother lookup, engine edge)
+                    // must never escape onto the game loop. Drop this birth and keep draining.
+                    ReconstructChildren(next);
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("[PREG-SYNC] reconstruct drain error, dropped one birth: " + ex.Message);
+                }
             }
         }
 
