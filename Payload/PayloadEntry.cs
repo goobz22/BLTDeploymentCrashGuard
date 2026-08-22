@@ -49,7 +49,7 @@ namespace BLTDeploymentCrashGuard
                 ClanModeSoloFix.Apply(harmony);
                 MarriageBarterGuard.Apply(harmony);
                 ConversationCameraCrashGuard.Apply(harmony);
-                HeroActivationCrashGuard.Apply(harmony);
+                DeadHeroReactivationFix.Apply(harmony);
                 PregnancySync.PregnancySyncGuard.Apply(harmony);
 
                 // Client bootstrap fix — must beat BT's first (and only) verify on a fresh process;
