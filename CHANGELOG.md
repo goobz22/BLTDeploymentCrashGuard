@@ -1,5 +1,32 @@
 # Changelog
 
+## v1.2.x — fixes added on top of the harness/payload split
+
+New crash guards and root-cause fixes (all self-disabling; health-reported; self-tested):
+
+- **Dead-hero reactivation (issue quests)** — issue "alternative solution" troops returning
+  reactivated dead companions (vanilla had no IsAlive check) → NRE on the character-development
+  event. Root fixes: strip dead heroes from the returning roster, and block any dead→Active hero
+  transition globally.
+- **Conversation-camera crash** — `MissionConversationCameraView.MakeSpeakerLookToListener` NRE
+  when a conversation agent is removed mid-dialog (e.g. a marriage applying) → finalizer skips the
+  camera frame.
+- **Marriage — solo clan-mode block** — BT gates marriage on clan-mode sync that never completes
+  when hosting alone; report the correct solo clan-mode so marriage works, inert once a peer joins.
+- **Marriage — atomic dowry** — BT let the gold apply natively while routing the marriage to host
+  validation; a rejected marriage still took your money. The barter now cancels before any gold moves.
+- **No death by sickness** (`noSickness`, default on) — block the local hero's old-age illness death
+  and cure an in-progress illness; stands down if the standalone NoSickness mod is present.
+- **Co-op pregnancy / birth sync** (`pregnancySync`, default off) — host broadcasts births over BT's
+  channel; client reconstructs the identical child. Wire format proven by a headless test suite
+  (`tests/BirthPayloadTest`); off until validated live with a second player.
+- **Loader hardening** — first payload generation loads via `Assembly.LoadFrom` at the canonical
+  path (fixes an assembly-identity split that made the payload fail to load in-game); a loud
+  on-screen "CRASH GUARD NOT ACTIVE" warning if the payload ever fails to load; log rotation now
+  re-checks periodically instead of once per launch.
+- **NoSickness module fix (external)** — corrected the standalone NoSickness mod's `SubModule.xml`
+  version string that blocked it from loading.
+
 ## v1.2.0 — hot-reload architecture (harness/payload split)
 
 - **No-restart iteration (dev only).** Split into a stable **harness** (`BLTDeploymentCrashGuard.dll`,
