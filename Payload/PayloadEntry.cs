@@ -100,6 +100,7 @@ namespace BLTDeploymentCrashGuard
             TimeEnforcementGuard.Apply(Harmony);
             EncounterLoopGuard.Apply(Harmony);
             BattleMode.DecideAndApply(Harmony, "game-start");
+            PregnancySync.PregnancySyncGuard.OnGameStart(); // per-campaign host birth listener
         }
 
         public void OnMissionInit()
@@ -115,6 +116,7 @@ namespace BLTDeploymentCrashGuard
             RoleTrace.Tick();
             LogStreamer.Tick();
             BootstrapWatch.Tick();
+            PregnancySync.PregnancySyncGuard.Tick(); // drain queued client birth reconstructions
             ReportGuardActivity();
         }
 

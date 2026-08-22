@@ -24,10 +24,7 @@ internal static class Program
                     IsFemale = true,
                     FirstName = "Aisha",
                     BodyPropertiesXml = "<BodyProperties version=\"4\" age=\"0\" weight=\"0.1\" build=\"0.2\" key=\"00FF3A...\" />",
-                    FatherStringId = "main_hero",
-                    ClanStringId = "clan_player",
-                    CultureStringId = "aserai",
-                    BirthDayRaw = 123456789L
+                    FatherStringId = "main_hero"
                 }
             }
         };
@@ -40,8 +37,8 @@ internal static class Program
             StillbornCount = 1,
             Children =
             {
-                new BirthPayloadData.ChildIdentity { StringId = "coopchild_a", IsFemale = false, FirstName = "Derthert", BodyPropertiesXml = "<b/>", FatherStringId = "main_hero", ClanStringId = "clan_player", CultureStringId = "vlandia", BirthDayRaw = 1 },
-                new BirthPayloadData.ChildIdentity { StringId = "coopchild_b", IsFemale = true,  FirstName = "Ira",      BodyPropertiesXml = "<b/>", FatherStringId = "main_hero", ClanStringId = "clan_player", CultureStringId = "vlandia", BirthDayRaw = 2 }
+                new BirthPayloadData.ChildIdentity { StringId = "coopchild_a", IsFemale = false, FirstName = "Derthert", BodyPropertiesXml = "<b/>", FatherStringId = "main_hero" },
+                new BirthPayloadData.ChildIdentity { StringId = "coopchild_b", IsFemale = true,  FirstName = "Ira",      BodyPropertiesXml = "<b/>", FatherStringId = "main_hero" }
             }
         };
         RoundTrips("twins + one stillborn", twins);
@@ -52,7 +49,7 @@ internal static class Program
             MotherStringId = "mère_héros",
             Children =
             {
-                new BirthPayloadData.ChildIdentity { StringId = "coopchild_ü", IsFemale = false, FirstName = "Ölaf Ærling 我", BodyPropertiesXml = "<BodyProperties key=\"<&>\"/>", FatherStringId = "父", ClanStringId = "clan_ê", CultureStringId = "empire", BirthDayRaw = long.MaxValue }
+                new BirthPayloadData.ChildIdentity { StringId = "coopchild_ü", IsFemale = false, FirstName = "Ölaf Ærling 我", BodyPropertiesXml = "<BodyProperties key=\"<&>\"/>", FatherStringId = "父" }
             }
         };
         RoundTrips("unicode + special chars", unicode);
@@ -103,7 +100,7 @@ internal static class Program
         // 8e. Framing garbage/None is null/false, never a throw.
         Check("unframe null -> null", BirthWireFraming.TryUnframe(null) == null);
         Check("unframe too-short -> null", BirthWireFraming.TryUnframe(new byte[] { 0, (byte)'B' }) == null);
-        Check("unframe framed-but-corrupt-body -> null", BirthWireFraming.TryUnframe(CorruptBody(framed)) == null);
+        Check("unframe framed-but-corrupt-body -> null", BirthWireFraming.TryUnframe(CorruptBody(single, framed)) == null);
 
         Console.WriteLine(_failures == 0
             ? "\nALL BIRTH-PAYLOAD TESTS PASSED"
@@ -128,11 +125,18 @@ internal static class Program
         Check(label + " -> null (no throw)", parsed == null);
     }
 
-    private static byte[] CorruptBody(byte[] framed)
+    private static byte[] CorruptBody(BirthPayloadData source, byte[] framed)
     {
-        // Keep our valid 5-byte header, then a payload body that FromBytes will reject
-        // (wrong format version byte at the body's first position).
-        var corrupt = new byte[] { 0, (byte)'B', (byte)'T', (byte)'C', (byte)'G', 200, 1, 2 };
+        // Derive the header length from behavior — NO duplicated framing constants: the body is
+        // exactly source.ToBytes(), so the header is whatever precedes it. Keep the valid header
+        // (IsOurPacket still passes) and set the body's first byte (payload FormatVersion) invalid
+        // so only the BODY parse fails. Survives any future header change automatically.
+        int headerLength = framed.Length - source.ToBytes().Length;
+        var corrupt = (byte[])framed.Clone();
+        if (headerLength >= 0 && headerLength < corrupt.Length)
+        {
+            corrupt[headerLength] = 200; // not BirthPayloadData.CurrentFormatVersion
+        }
         return corrupt;
     }
 

@@ -30,14 +30,17 @@ namespace BLTDeploymentCrashGuard.PregnancySync
 
         public sealed class ChildIdentity
         {
+            // Only the fields the client cannot deterministically re-derive are on the wire.
+            // Clan, culture and birthday are NOT sent: DeliverOffSpring(mother, father) reproduces
+            // them identically on the client from the (same) parents — serializing them would be
+            // redundant, and CampaignTime has no public round-trippable form anyway. What IS forced
+            // from the host (randomized by DeliverOffSpring, so must be replicated): id, gender,
+            // name, appearance.
             public string StringId = "";
             public bool IsFemale;
             public string FirstName = "";
             public string BodyPropertiesXml = "";
             public string FatherStringId = "";
-            public string ClanStringId = "";
-            public string CultureStringId = "";
-            public long BirthDayRaw;
 
             public bool IdentityEquals(ChildIdentity other)
             {
@@ -46,10 +49,7 @@ namespace BLTDeploymentCrashGuard.PregnancySync
                     && IsFemale == other.IsFemale
                     && FirstName == other.FirstName
                     && BodyPropertiesXml == other.BodyPropertiesXml
-                    && FatherStringId == other.FatherStringId
-                    && ClanStringId == other.ClanStringId
-                    && CultureStringId == other.CultureStringId
-                    && BirthDayRaw == other.BirthDayRaw;
+                    && FatherStringId == other.FatherStringId;
             }
         }
 
@@ -71,9 +71,6 @@ namespace BLTDeploymentCrashGuard.PregnancySync
                         WriteString(writer, child.FirstName);
                         WriteString(writer, child.BodyPropertiesXml);
                         WriteString(writer, child.FatherStringId);
-                        WriteString(writer, child.ClanStringId);
-                        WriteString(writer, child.CultureStringId);
-                        writer.Write(child.BirthDayRaw);
                     }
                 }
                 writer.Flush();
@@ -115,10 +112,7 @@ namespace BLTDeploymentCrashGuard.PregnancySync
                             IsFemale = reader.ReadBoolean(),
                             FirstName = ReadString(reader),
                             BodyPropertiesXml = ReadString(reader),
-                            FatherStringId = ReadString(reader),
-                            ClanStringId = ReadString(reader),
-                            CultureStringId = ReadString(reader),
-                            BirthDayRaw = reader.ReadInt64()
+                            FatherStringId = ReadString(reader)
                         };
                         data.Children.Add(child);
                     }

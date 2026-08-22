@@ -19,8 +19,10 @@ namespace BLTDeploymentCrashGuard.PregnancySync
     ///        broadcast over BT's channel (CoopSession.Server.BroadcastRawReliableOrdered, by
     ///        reflection so we never compile against BT).
     ///  CLIENT: Harmony-prefix BT's ShouldAcceptIncomingPacket (base + CoopServer override); if the
-    ///        bytes are ours, reconstruct the identical child (same StringId, parents, clan, body)
-    ///        and return false so BT never processes our packet.
+    ///        bytes are ours, QUEUE the payload (the hook runs on BT's network thread) and let the
+    ///        main-thread Tick reconstruct the child, then return false so BT never processes it.
+    ///        The child's id/gender/name/appearance are forced from the host; clan, parents and
+    ///        birthday follow deterministically from DeliverOffSpring(mother, father) on both sides.
     ///
     /// Everything is gated on config pregnancySync AND an active BT session; inert otherwise.
     /// Default OFF until validated live with a second player (the two-machine hop is the only part
@@ -33,25 +35,30 @@ namespace BLTDeploymentCrashGuard.PregnancySync
         private static bool _enabled;
         private static bool _reconstructing; // guard: ignore births we create during reconstruction
 
+        // Reconstruction is enqueued from BT's network thread (the receive hook) and drained on the
+        // main game thread (Tick) — HeroCreator/MBObjectManager must never run off the game thread.
+        private static readonly object QueueLock = new object();
+        private static readonly Queue<BirthPayloadData> PendingBirths = new Queue<BirthPayloadData>();
+
         internal static void Apply(Harmony harmony)
         {
             try
             {
                 _enabled = GuardConfig.Bool("pregnancySync", false);
+                // The self-test proves the wiring whether or not the feature is enabled.
+                SelfHealing.RegisterTest(LoopbackSelfTest);
                 if (!_enabled)
                 {
                     Diag.Report("pregnancy-sync", true, "disabled by config (default until live-verified)");
-                    // Still register the self-test so the wiring is provable even while off.
-                    SelfHealing.RegisterTest(LoopbackSelfTest);
                     return;
                 }
-
+                // Harmony receive-hook is pure patching — safe at load. The host-side campaign-event
+                // subscription is NOT done here: CampaignEvents resolves through Campaign.Current,
+                // which is null at module load and is per-campaign, so it must be (re)wired at
+                // game-start (see OnGameStart) — not once per payload generation.
                 bool receiveHooked = HookReceive(harmony);
-                CampaignEvents.OnGivenBirthEvent.AddNonSerializedListener(Sentinel, OnGivenBirth);
-
-                Log.Info("[PREG-SYNC] active — host broadcasts births, client reconstructs (receiveHooked=" + receiveHooked + ")");
+                Log.Info("[PREG-SYNC] receive hook installed (" + receiveHooked + "); host birth listener wires at game-start");
                 Diag.Report("pregnancy-sync", receiveHooked, receiveHooked ? "" : "BT receive method not found");
-                SelfHealing.RegisterTest(LoopbackSelfTest);
             }
             catch (Exception ex)
             {
@@ -62,6 +69,49 @@ namespace BLTDeploymentCrashGuard.PregnancySync
 
         // A stable listener owner object for the campaign event subscription.
         private static readonly object Sentinel = new object();
+        private static Campaign _subscribedCampaign;
+
+        /// <summary>Wire the host birth listener per-campaign (CampaignEvents is per-Campaign and
+        /// null at module load). Idempotent; re-subscribes when a new campaign is loaded.</summary>
+        internal static void OnGameStart()
+        {
+            try
+            {
+                if (!_enabled || Campaign.Current == null || ReferenceEquals(_subscribedCampaign, Campaign.Current))
+                {
+                    return;
+                }
+                CampaignEvents.OnGivenBirthEvent.AddNonSerializedListener(Sentinel, OnGivenBirth);
+                _subscribedCampaign = Campaign.Current;
+                Log.Info("[PREG-SYNC] host birth listener subscribed for this campaign");
+            }
+            catch (Exception ex)
+            {
+                Log.Info("[PREG-SYNC] OnGameStart subscribe failed: " + ex.Message);
+            }
+        }
+
+        /// <summary>Drain reconstructions queued from the network thread, on the MAIN game thread.</summary>
+        internal static void Tick()
+        {
+            if (!_enabled)
+            {
+                return;
+            }
+            BirthPayloadData next;
+            while (true)
+            {
+                lock (QueueLock)
+                {
+                    if (PendingBirths.Count == 0)
+                    {
+                        return;
+                    }
+                    next = PendingBirths.Dequeue();
+                }
+                ReconstructChildren(next);
+            }
+        }
 
         private static bool HookReceive(Harmony harmony)
         {
@@ -148,10 +198,7 @@ namespace BLTDeploymentCrashGuard.PregnancySync
                 IsFemale = child.IsFemale,
                 FirstName = child.FirstName != null ? child.FirstName.ToString() : "",
                 BodyPropertiesXml = child.BodyProperties.ToString(),
-                FatherStringId = IdOf(child.Father),
-                ClanStringId = IdOf(child.Clan),
-                CultureStringId = child.Culture != null ? IdOf((MBObjectBase)(object)child.Culture) : "",
-                BirthDayRaw = child.BirthDay.GetHashCode()
+                FatherStringId = IdOf(child.Father)
             };
         }
 
@@ -168,7 +215,12 @@ namespace BLTDeploymentCrashGuard.PregnancySync
                 BirthPayloadData payload = BirthWireFraming.TryUnframe(data);
                 if (payload != null)
                 {
-                    ReconstructChildren(payload);
+                    // This runs on BT's LiteNetLib network thread. Parsing bytes is thread-safe;
+                    // hero creation is NOT — queue it for the main-thread Tick to reconstruct.
+                    lock (QueueLock)
+                    {
+                        PendingBirths.Enqueue(payload);
+                    }
                 }
                 else
                 {
