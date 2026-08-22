@@ -49,6 +49,7 @@ namespace BLTDeploymentCrashGuard
                 ClanModeSoloFix.Apply(harmony);
                 MarriageBarterGuard.Apply(harmony);
                 ConversationCameraCrashGuard.Apply(harmony);
+                PregnancySync.PregnancySyncGuard.Apply(harmony);
 
                 // Client bootstrap fix — must beat BT's first (and only) verify on a fresh process;
                 // on a mid-game reload it just installs the prefix (BT won't verify again).

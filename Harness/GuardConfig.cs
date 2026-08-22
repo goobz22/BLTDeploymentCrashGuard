@@ -91,6 +91,8 @@ namespace BLTDeploymentCrashGuard
 
   ""noSickness"": true,         ""_noSickness"": ""true blocks the vanilla die-of-illness outcome for the local player's hero (each machine protects its own player). Stands down automatically if the third-party NoSickness mod is installed"",
 
+  ""pregnancySync"": false,     ""_pregnancySync"": ""CO-OP: replicate host births to clients so both games share the same child (BT disables pregnancy for the client). Default off until verified live with a second player; host-authoritative, self-disables outside a BT session"",
+
   ""tracing"": false,           ""_tracing"": ""true enables verbose diagnostic tracers (mission/menu/control/time/coop-battle/role). Off for normal play; on for troubleshooting"",
   ""selfTest"": false,          ""_selfTest"": ""true runs each guard's decision-logic self-test at startup and logs PASS/FAIL (proves the fix wiring survived a BT update)"",
 

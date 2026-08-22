@@ -15,5 +15,6 @@
     <!-- Link the ACTUAL shipping payload model — the test compiles the same source the mod runs,
          so a wire-format change that breaks round-trip fails this test, not a stale copy. -->
     <Compile Include="..\..\Payload\PregnancySync\BirthPayloadData.cs" />
+    <Compile Include="..\..\Payload\PregnancySync\BirthWireFraming.cs" />
   </ItemGroup>
 </Project>

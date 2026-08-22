@@ -75,6 +75,36 @@ internal static class Program
         //    nondeterminism like dictionary ordering creeping in later).
         Check("deterministic serialization", AreEqual(single.ToBytes(), single.ToBytes()));
 
+        // 8. WIRE FRAMING — the collision-proof transport layer.
+        // 8a. Framed packet round-trips through unframe to an equal payload.
+        byte[] framed = BirthWireFraming.Frame(single);
+        BirthPayloadData unframed = BirthWireFraming.TryUnframe(framed);
+        Check("framed round-trip", unframed != null && single.PayloadEquals(unframed));
+        // 8b. Our frame is recognized as ours and starts with the free marker byte 0.
+        Check("our frame recognized", BirthWireFraming.IsOurPacket(framed));
+        Check("frame leads with marker 0", framed.Length > 0 && framed[0] == 0);
+        // 8c. CRITICAL: no real BT packet can be misread as ours. BT PacketType uses every byte
+        //     1..255 as the FIRST byte; simulate one of each and assert none is "ours".
+        bool anyBtCollision = false;
+        for (int firstByte = 1; firstByte <= 255; firstByte++)
+        {
+            // A plausible BT packet: its type byte then arbitrary body (even a body that happens
+            // to contain our magic later must not match — the marker gate is byte 0 only).
+            byte[] btPacket = { (byte)firstByte, (byte)'B', (byte)'T', (byte)'C', (byte)'G', 1, 2, 3 };
+            if (BirthWireFraming.IsOurPacket(btPacket))
+            {
+                anyBtCollision = true;
+                break;
+            }
+        }
+        Check("no BT packet (type 1..255) misread as ours", !anyBtCollision);
+        // 8d. A leading-0 packet WITHOUT our magic is not ours (BT's empty-sentinel space stays clear).
+        Check("leading-0 without magic is not ours", !BirthWireFraming.IsOurPacket(new byte[] { 0, 1, 2, 3, 4, 5 }));
+        // 8e. Framing garbage/None is null/false, never a throw.
+        Check("unframe null -> null", BirthWireFraming.TryUnframe(null) == null);
+        Check("unframe too-short -> null", BirthWireFraming.TryUnframe(new byte[] { 0, (byte)'B' }) == null);
+        Check("unframe framed-but-corrupt-body -> null", BirthWireFraming.TryUnframe(CorruptBody(framed)) == null);
+
         Console.WriteLine(_failures == 0
             ? "\nALL BIRTH-PAYLOAD TESTS PASSED"
             : "\n" + _failures + " TEST(S) FAILED");
@@ -96,6 +126,14 @@ internal static class Program
     {
         BirthPayloadData parsed = BirthPayloadData.FromBytes(bytes);
         Check(label + " -> null (no throw)", parsed == null);
+    }
+
+    private static byte[] CorruptBody(byte[] framed)
+    {
+        // Keep our valid 5-byte header, then a payload body that FromBytes will reject
+        // (wrong format version byte at the body's first position).
+        var corrupt = new byte[] { 0, (byte)'B', (byte)'T', (byte)'C', (byte)'G', 200, 1, 2 };
+        return corrupt;
     }
 
     private static byte[] Truncate(byte[] full)
