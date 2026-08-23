@@ -44,7 +44,7 @@ namespace BLTDeploymentCrashGuard
 
         // resolved reflection targets (BT v0.5.0.1; health-reported when they drift)
         private static MethodInfo _mapPauseReason;      // CoopSubModule.MapPauseReason(string) -> reason enum
-        private static object _pauseCoordinator;        // CoopSubModule._pauseCoordinator instance
+        private static FieldInfo _pauseCoordinatorField; // CoopSubModule._pauseCoordinator (read live per query — survives a reassigned coordinator)
         private static MethodInfo _reasonActiveQuery;   // coordinator.IsActive(reason) -> bool (found by signature)
         private static MethodInfo _setPaused;           // CoopSubModule.SetPaused(bool, string, bool, string)
         private static MethodInfo _cancelTransfer;      // transfer coordinator "A"(string reason, string message, bool notify)
@@ -76,14 +76,15 @@ namespace BLTDeploymentCrashGuard
                 MethodInfo normalSpeed = FindDeclared(coopSubModule, "ApplyHostNormalSpeed");
                 _mapPauseReason = FindDeclared(coopSubModule, "MapPauseReason");
                 _setPaused = FindDeclared(coopSubModule, "SetPaused");
-                FieldInfo coordinatorField = coopSubModule.GetField("_pauseCoordinator", BindingFlags.NonPublic | BindingFlags.Static);
-                _pauseCoordinator = coordinatorField != null ? coordinatorField.GetValue(null) : null;
+                _pauseCoordinatorField = coopSubModule.GetField("_pauseCoordinator", BindingFlags.NonPublic | BindingFlags.Static);
+                object coordinator = _pauseCoordinatorField != null ? _pauseCoordinatorField.GetValue(null) : null;
 
                 string missing = "";
                 if (toggle == null) { missing += " ToggleHostManualPause"; }
+                else if (toggle.ReturnType != typeof(bool)) { missing += " ToggleHostManualPause(bool-return)"; }
                 if (_mapPauseReason == null) { missing += " MapPauseReason"; }
                 if (_setPaused == null) { missing += " SetPaused"; }
-                if (_pauseCoordinator == null) { missing += " _pauseCoordinator"; }
+                if (coordinator == null) { missing += " _pauseCoordinator"; }
                 if (missing.Length > 0)
                 {
                     Log.Info("[JOIN-ESCAPE] inactive — CoopSubModule members not found:" + missing + " (BT update?)");
@@ -93,7 +94,7 @@ namespace BLTDeploymentCrashGuard
 
                 _reasonSaveSync = _mapPauseReason.Invoke(null, new object[] { "SaveSync" });
                 _reasonHeroCreation = _mapPauseReason.Invoke(null, new object[] { "HeroCreation" });
-                _reasonActiveQuery = FindReasonQuery(_pauseCoordinator.GetType(), _mapPauseReason.ReturnType);
+                _reasonActiveQuery = FindReasonQuery(coordinator.GetType(), _mapPauseReason.ReturnType);
                 _cancelTransfer = FindTransferCancel();
 
                 if (_reasonActiveQuery == null || _cancelTransfer == null || _reasonSaveSync == null || _reasonHeroCreation == null)
@@ -184,11 +185,11 @@ namespace BLTDeploymentCrashGuard
                     {
                         if (type == null)
                         {
-                            return null;
+                            continue; // ReflectionTypeLoadException.Types null-pads unloadable entries — skip, keep scanning
                         }
                         MethodInfo cancel = null;
                         bool handlesAck = false;
-                        foreach (MethodInfo method in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.DeclaredOnly))
+                        foreach (MethodInfo method in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                         {
                             ParameterInfo[] parameters = method.GetParameters();
                             foreach (ParameterInfo parameter in parameters)
@@ -199,7 +200,7 @@ namespace BLTDeploymentCrashGuard
                                     break;
                                 }
                             }
-                            if (method.Name == "A" && method.ReturnType == typeof(void)
+                            if (method.IsStatic && method.Name == "A" && method.ReturnType == typeof(void)
                                 && parameters.Length == 3
                                 && parameters[0].ParameterType == typeof(string)
                                 && parameters[1].ParameterType == typeof(string)
@@ -282,8 +283,13 @@ namespace BLTDeploymentCrashGuard
         {
             try
             {
-                bool saveSync = (bool)_reasonActiveQuery.Invoke(_pauseCoordinator, new[] { _reasonSaveSync });
-                bool heroCreation = (bool)_reasonActiveQuery.Invoke(_pauseCoordinator, new[] { _reasonHeroCreation });
+                object coordinator = _pauseCoordinatorField.GetValue(null);
+                if (coordinator == null)
+                {
+                    return null;
+                }
+                bool saveSync = (bool)_reasonActiveQuery.Invoke(coordinator, new[] { _reasonSaveSync });
+                bool heroCreation = (bool)_reasonActiveQuery.Invoke(coordinator, new[] { _reasonHeroCreation });
                 if (saveSync && heroCreation)
                 {
                     return "SaveSync+HeroCreation";
@@ -338,7 +344,7 @@ namespace BLTDeploymentCrashGuard
             bool queryReads;
             try
             {
-                _reasonActiveQuery.Invoke(_pauseCoordinator, new[] { _reasonSaveSync });
+                _reasonActiveQuery.Invoke(_pauseCoordinatorField.GetValue(null), new[] { _reasonSaveSync });
                 queryReads = true;
             }
             catch
