@@ -15,6 +15,11 @@ New crash guards and root-cause fixes (all self-disabling; health-reported; self
   when hosting alone; report the correct solo clan-mode so marriage works, inert once a peer joins.
 - **Marriage — atomic dowry** — BT let the gold apply natively while routing the marriage to host
   validation; a rejected marriage still took your money. The barter now cancels before any gold moves.
+- **Join-hold pause escape** — a joining player's save sync pauses the host for the whole
+  download/load/hero-creation, the host's unpause is silently swallowed (it can't clear the
+  SaveSync/HeroCreation pause reasons), and a joiner stuck in a retry loop froze the host forever
+  (field log 2026-08-22 23:43). Now a swallowed unpause explains the hold on screen; pressing
+  pause again within 6 s cancels the stuck join through BT's own transfer-cancel routine.
 - **No death by sickness** (`noSickness`, default on) — block the local hero's old-age illness death
   and cure an in-progress illness; stands down if the standalone NoSickness mod is present.
 - **Co-op pregnancy / birth sync** (`pregnancySync`, default off) — host broadcasts births over BT's

@@ -113,18 +113,28 @@ player, and the co-op sync features need it on both ends.
     normally — a newborn is an age-0 infant in **Clan → Members**, not visible on the map until
     it comes of age at 18.)
 
+15. **Join-hold pause escape** — when someone joins your hosted session, BannerlordTogether
+    pauses the campaign for their entire save download + load + hero creation (its "keep playing
+    while they load" fast-join only applies to returning players when another gameplay peer is
+    already connected). During that hold your pause key is **silently swallowed** — it only
+    toggles the manual pause reason and can never clear the join's SaveSync/HeroCreation hold, so
+    a joiner stuck in a retry loop freezes the host forever. Now a swallowed unpause explains
+    itself on screen (who is holding time and why), and pressing pause again within 6 seconds
+    cancels the stuck join via BT's own transfer-cancel routine — the same recovery its timeout
+    watchdog uses — so you resume playing and the joiner is told to reconnect.
+
 ### Diagnostics & robustness
 
-15. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
+16. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
     of which fixes resolved, and (with `selfTest`) a decision-logic self-test per fix. If a core fix
     fails to resolve, BannerlordTogether was likely updated and this mod needs a matching update.
 
-16. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
+17. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
     launches with caller stacks) and command control (who becomes player-controlled, order/formation
     ownership, a full control map at deployment finish). Verbose tracers are off by default
     (`tracing`) and rotate at 8 MB.
 
-17. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
+18. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
     mod or BannerlordTogether.
 
 ## Sharing your log with your co-op partner

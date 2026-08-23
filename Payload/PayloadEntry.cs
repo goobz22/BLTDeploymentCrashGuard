@@ -50,6 +50,7 @@ namespace BLTDeploymentCrashGuard
                 MarriageBarterGuard.Apply(harmony);
                 ConversationCameraCrashGuard.Apply(harmony);
                 DeadHeroReactivationFix.Apply(harmony);
+                JoinSyncPauseEscape.Apply(harmony);
                 PregnancySync.PregnancySyncGuard.Apply(harmony);
 
                 // Client bootstrap fix — must beat BT's first (and only) verify on a fresh process;
@@ -92,6 +93,7 @@ namespace BLTDeploymentCrashGuard
         {
             ClientBootstrapFix.Apply(Harmony); // retry in case the co-op assembly loaded late
             ClanModeSoloFix.Apply(Harmony);    // same late-BT-assembly retry (latched once applied)
+            JoinSyncPauseEscape.Apply(Harmony); // same late-BT-assembly retry (latched once applied)
             TimeEnforcementGuard.Apply(Harmony);
             BattleMode.DecideAndApply(Harmony, "module-screen");
         }
