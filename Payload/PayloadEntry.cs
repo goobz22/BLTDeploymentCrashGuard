@@ -50,6 +50,7 @@ namespace BLTDeploymentCrashGuard
                 MarriageBarterGuard.Apply(harmony);
                 ConversationCameraCrashGuard.Apply(harmony);
                 DeadHeroReactivationFix.Apply(harmony);
+                MapIncidentCrashGuard.Apply(harmony);
                 JoinSyncPauseEscape.Apply(harmony);
                 PregnancySync.PregnancySyncGuard.Apply(harmony);
 
