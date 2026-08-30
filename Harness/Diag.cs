@@ -12,7 +12,22 @@ namespace BLTDeploymentCrashGuard
     /// </summary>
     internal static class Diag
     {
-        internal const string Version = "1.2.0";
+        /// <summary>Single source of truth is &lt;Version&gt; in Directory.Build.props — MSBuild
+        /// stamps it into the assembly identity, and this reads it back. Never hardcode.</summary>
+        internal static readonly string Version = ResolveVersion();
+
+        private static string ResolveVersion()
+        {
+            try
+            {
+                System.Version v = typeof(Diag).Assembly.GetName().Version;
+                return v.Major + "." + v.Minor + "." + v.Build;
+            }
+            catch
+            {
+                return "?";
+            }
+        }
 
         internal static readonly string SessionId = GenerateSessionId();
 
