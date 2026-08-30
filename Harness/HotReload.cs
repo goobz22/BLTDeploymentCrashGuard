@@ -140,13 +140,48 @@ namespace BLTDeploymentCrashGuard
                 {
                     return null; // generations load by bytes only — never redirect the payload name
                 }
+
+                // The two assemblies whose TYPES cross the harness/payload boundary (IPayload.Apply
+                // takes a HarmonyLib.Harmony; ISharedState/Log/GuardConfig live here) must resolve
+                // to the exact copies THIS harness is bound to. A process can hold several 0Harmony
+                // copies (the game bin ships one, Bannerlord.Harmony ships another); returning
+                // whichever AppDomain.GetAssemblies() lists first split the Harmony type identity
+                // and the payload's Apply(Harmony) no longer implemented IPayload.Apply(Harmony)
+                // (field-hit 2026-08-29 22:44 — gen2 rejected mid-session, tracing could not be
+                // enabled without a restart).
+                Assembly pinned = null;
+                if (simpleName == "0Harmony")
+                {
+                    pinned = typeof(HarmonyLib.Harmony).Assembly;
+                }
+                else if (simpleName == typeof(HotReload).Assembly.GetName().Name)
+                {
+                    pinned = typeof(HotReload).Assembly;
+                }
+                if (pinned != null)
+                {
+                    Log.Info("[HOTRELOAD] resolver: '" + args.Name + "' -> harness-bound " + pinned.FullName + " @ " + SafeLocation(pinned));
+                    return pinned;
+                }
+
+                Assembly first = null;
+                int matches = 0;
                 foreach (Assembly loaded in AppDomain.CurrentDomain.GetAssemblies())
                 {
                     if (!loaded.IsDynamic && loaded.GetName().Name == simpleName)
                     {
-                        Log.Info("[HOTRELOAD] resolver: '" + args.Name + "' -> already-loaded " + loaded.FullName + " @ " + SafeLocation(loaded));
-                        return loaded;
+                        matches++;
+                        if (first == null)
+                        {
+                            first = loaded;
+                        }
                     }
+                }
+                if (first != null)
+                {
+                    Log.Info("[HOTRELOAD] resolver: '" + args.Name + "' -> already-loaded " + first.FullName + " @ " + SafeLocation(first) +
+                             (matches > 1 ? " (AMBIGUOUS: " + matches + " loaded copies share this name; took the first)" : ""));
+                    return first;
                 }
                 Log.Info("[HOTRELOAD] resolver: '" + args.Name + "' -> no loaded match (deferring to other resolvers)");
             }
@@ -164,8 +199,11 @@ namespace BLTDeploymentCrashGuard
             try
             {
                 Assembly harness = typeof(HotReload).Assembly;
+                Assembly harnessHarmony = typeof(HarmonyLib.Harmony).Assembly;
                 Log.Info("[HOTRELOAD][DIAG] type-load failure: " + failure.GetType().Name + ": " + failure.Message);
                 Log.Info("[HOTRELOAD][DIAG] this harness = " + harness.FullName + " @ " + SafeLocation(harness));
+                Log.Info("[HOTRELOAD][DIAG] harness-bound 0Harmony = " + harnessHarmony.FullName + " @ " + SafeLocation(harnessHarmony) +
+                         " (IPayload.Apply's Harmony parameter is THIS copy; a payload bound to any other copy cannot implement it)");
                 foreach (Assembly loaded in AppDomain.CurrentDomain.GetAssemblies())
                 {
                     if (loaded.IsDynamic)

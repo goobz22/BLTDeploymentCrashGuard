@@ -58,8 +58,12 @@ namespace BLTDeploymentCrashGuard
                 ClientBootstrapFix.Apply(harmony);
                 TimeEnforcementGuard.Apply(harmony);
 
-                // Verbose tracers — off unless troubleshooting.
-                if (GuardConfig.Bool("tracing", false))
+                // Verbose tracers — off unless troubleshooting. The tracing flag is read FRESH
+                // from disk here (the harness's GuardConfig caches the file for the whole game
+                // session) so that flipping guardconfig.json + a payload hot-reload turns the
+                // tracers on mid-session without restarting the game and losing the live repro.
+                bool tracing = FreshTracingFlag();
+                if (tracing)
                 {
                     TracePatches.Apply(harmony);
                     ControlTrace.Apply(harmony);
@@ -75,7 +79,7 @@ namespace BLTDeploymentCrashGuard
                 // Establish battle mode now (so a mid-game reload re-decides immediately).
                 BattleMode.DecideAndApply(harmony, "apply");
 
-                Log.Info("patches applied; battleMode=" + BattleMode.ConfigMode + " tracing=" + GuardConfig.Bool("tracing", false).ToString().ToLowerInvariant());
+                Log.Info("patches applied; battleMode=" + BattleMode.ConfigMode + " tracing=" + tracing.ToString().ToLowerInvariant());
                 Log.Info(Diag.HealthSummary());
                 if (GuardConfig.Bool("selfTest", false))
                 {
@@ -172,6 +176,29 @@ namespace BLTDeploymentCrashGuard
             catch
             {
             }
+        }
+
+        /// <summary>Read guardconfig.json's tracing flag straight from disk. The harness's
+        /// GuardConfig caches the file text for the whole game session, which made tracing
+        /// impossible to enable via hot-reload mid-session; a fresh read fixes that. Falls
+        /// back to the cached value if the file is unreadable.</summary>
+        private static bool FreshTracingFlag()
+        {
+            try
+            {
+                string text = File.ReadAllText(GuardConfig.Path);
+                var m = System.Text.RegularExpressions.Regex.Match(
+                    text, "\"tracing\"\\s*:\\s*(true|false)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (m.Success)
+                {
+                    return m.Groups[1].Value.Equals("true", StringComparison.OrdinalIgnoreCase);
+                }
+            }
+            catch
+            {
+            }
+            return GuardConfig.Bool("tracing", false);
         }
 
         private static string PayloadBuild()
