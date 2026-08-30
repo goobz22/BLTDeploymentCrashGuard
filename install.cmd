@@ -43,15 +43,21 @@ set "DLLDIR=%MOD%\bin\Win64_Shipping_Client"
 echo Installing into: "%MOD%"
 mkdir "%DLLDIR%" 2>nul
 
-rem If the game is running it locks the loaded DLL; a rename is still allowed,
-rem so move the old file aside and download the new one next to it.
-if exist "%DLLDIR%\BLTDeploymentCrashGuard.dll" (
-  del /f /q "%DLLDIR%\BLTDeploymentCrashGuard.dll.prev" >nul 2>&1
-  ren "%DLLDIR%\BLTDeploymentCrashGuard.dll" "BLTDeploymentCrashGuard.dll.prev" >nul 2>&1
+rem The mod is TWO assemblies since v1.2.0: the harness (BLTDeploymentCrashGuard.dll, the
+rem module Bannerlord loads) and the payload (BLTDeploymentCrashGuard.Payload.dll, every
+rem guard/fix/tracer — the harness loads it). Both must be installed together.
+rem If the game is running it locks the loaded DLLs; a rename is still allowed,
+rem so move the old files aside and download the new ones next to them.
+for %%F in (BLTDeploymentCrashGuard.dll BLTDeploymentCrashGuard.Payload.dll) do (
+  if exist "%DLLDIR%\%%F" (
+    del /f /q "%DLLDIR%\%%F.prev" >nul 2>&1
+    ren "%DLLDIR%\%%F" "%%F.prev" >nul 2>&1
+  )
 )
 
 curl -fsSL -o "%MOD%\SubModule.xml" "%REPO%/dist/SubModule.xml" || goto :fail
 curl -fsSL -o "%DLLDIR%\BLTDeploymentCrashGuard.dll" "%REPO%/dist/BLTDeploymentCrashGuard.dll" || goto :fail
+curl -fsSL -o "%DLLDIR%\BLTDeploymentCrashGuard.Payload.dll" "%REPO%/dist/BLTDeploymentCrashGuard.Payload.dll" || goto :fail
 
 if not "%BLTGUARD_BIN%"=="" (
   echo %BLTGUARD_BIN%> "%MOD%\logstream.txt"

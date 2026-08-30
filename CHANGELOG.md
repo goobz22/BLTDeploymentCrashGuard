@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.2.x — installer + hot-reload fixes (2026-08-30)
+
+- **Installer shipped a pre-split build** — `dist/` still held the v1.1 monolithic DLL and
+  `install.cmd` only downloaded the harness, so anyone installing from the README one-liner got a
+  build without any v1.2.x fix and, on the harness alone, no payload at all. `dist/` now carries
+  both assemblies and the installer downloads both (each moved aside as `.prev` if the game holds
+  a lock).
+- **Hot-reload rejected a mid-session payload** (`TypeLoadException: Method 'Apply' … does not
+  have an implementation`, field-hit 2026-08-29 22:44 while trying to enable tracing on a live
+  stuck-battle repro). The assembly resolver returned the *first* loaded `0Harmony` copy, and a
+  process can hold two (game bin + Bannerlord.Harmony), splitting the `Harmony` type identity that
+  `IPayload.Apply(Harmony …)` crosses. The resolver now pins `0Harmony` and the harness to the
+  copies the harness itself is bound to and flags any other ambiguous simple name; the failure
+  diagnostics print the harness-bound `0Harmony` identity.
+- **`tracing` can be enabled by hot-reload** — the payload reads the flag fresh from
+  `guardconfig.json` on each generation (the harness caches the file per session), so a
+  live repro can be traced without restarting the game.
+
 ## v1.2.x — fixes added on top of the harness/payload split
 
 New crash guards and root-cause fixes (all self-disabling; health-reported; self-tested):
