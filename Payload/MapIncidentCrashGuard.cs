@@ -2,33 +2,43 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
+using TaleWorlds.CampaignSystem.Party;
 using TaleWorlds.CampaignSystem.Siege;
+using TaleWorlds.Library;
 using TaleWorlds.Localization;
 
 namespace BLTDeploymentCrashGuard
 {
     /// <summary>
-    /// Guards the map-incident popup against stale world state (field crash 2026-08-30 15:04,
-    /// crashreport1.html): clicking Confirm on an incident option CTD'd with an NRE inside
+    /// Fixes the map-incident popup CTD (field crash 2026-08-30 15:04, crashreport1.html):
+    /// clicking Confirm on an incident option NREs inside
     /// TaleWorlds.CampaignSystem.Incidents.IncidentEffect.SiegeProgressChange's consequence
-    /// lambda. The IL at the fault site dereferences
-    /// PlayerSiege.PlayerSiegeEvent.BesiegerCamp.SiegeEngines.SiegePreparations with no null
-    /// check — the incident was offered while a siege was live, and by the time the player
-    /// confirmed, the player siege was gone (ended, or never set on this peer in co-op).
-    /// Pure vanilla bug; BannerlordTogether only widens the stale window (a popup can sit
-    /// open while the other player's actions end the siege).
+    /// lambda, which dereferences PlayerSiege.PlayerSiegeEvent.BesiegerCamp.SiegeEngines.
+    /// SiegePreparations with no null check.
     ///
-    /// Three layers, innermost = root behavior fix, outer two = class safety nets (the class:
-    /// "incident option handlers assume the world state that spawned the incident is still
-    /// live when the player clicks"):
-    ///  1. Prefix on every SiegeProgressChange consequence lambda: when the player-siege
-    ///     chain is no longer intact, skip the effect and report "the siege has already
-    ///     ended" instead of applying progress to a dead siege — what vanilla should do.
-    ///  2. Finalizer on IncidentEffect.Consequence(): ANY incident effect whose closure
-    ///     throws yields an empty consequence list instead of a CTD; sibling effects in a
-    ///     Group still apply.
-    ///  3. Finalizer on Incident.InvokeOption(): outer belt — anything escaping layer 2
-    ///     closes the popup cleanly instead of crashing the click handler.
+    /// Root analysis (probed against the installed build, not assumed):
+    /// PlayerSiege.PlayerSiegeEvent is a COMPUTED getter = MainParty.SiegeEvent ??
+    /// MainParty.CurrentSettlement?.SiegeEvent — there is no settable mirror. It reads null in
+    /// two distinct situations, which get two distinct treatments (never a feature downgrade):
+    ///  - CO-OP ATTACH GAP: the player rides in an army that is besieging, but BT never
+    ///    attached this peer's party to the besieger camp, so the derivation chain is dead
+    ///    while the army's siege is LIVE. REPAIR: find the real siege through the army
+    ///    (AttachedTo / Army.LeaderParty) and apply the exact vanilla effect to it —
+    ///    SetProgress(Progress + amount) + the same {=C0kUpB48} report text — so co-op keeps
+    ///    the full incident, identical to what a solo player gets.
+    ///  - SIEGE GENUINELY OVER (reproducible in pure vanilla singleplayer: the popup sits open
+    ///    while the siege ends): no siege exists anywhere to receive progress; the effect
+    ///    reports "the siege has already ended" — the behavior vanilla itself should have.
+    ///
+    /// Patch selection is by IL inspection, not lambda numbering: only SiegeProgressChange
+    /// lambdas that actually call PlayerSiege.get_PlayerSiegeEvent are patched (b__1, the
+    /// consequence). The preview-text lambda (b__2) never touches the siege and is left alone.
+    ///
+    /// Class safety nets (the class: "incident option handlers assume the world state that
+    /// spawned the incident is still live on confirm"): finalizers on
+    /// IncidentEffect.Consequence() and Incident.InvokeOption() turn any OTHER stale-state
+    /// throw into a logged, fire-counted skip instead of a CTD — each fire is evidence for
+    /// the next root fix, per this mod's fire-tracking contract.
     /// All targets resolve by name (the Incidents namespace is new); health-reported.
     /// </summary>
     internal static class MapIncidentCrashGuard
@@ -53,25 +63,24 @@ namespace BLTDeploymentCrashGuard
 
                 int patched = 0;
 
-                // Layer 1 — the proven crasher: the SiegeProgressChange consequence lambda(s).
-                // Compiler-generated display-class numbers shift between game builds, but the
-                // "<SiegeProgressChange>b__" stub derives from the method name and is stable.
+                // Root fix — exactly the lambda(s) that dereference the player-siege chain.
                 int lambdas = 0;
                 foreach (Type nested in incidentEffect.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic))
                 {
                     foreach (MethodInfo m in nested.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
                     {
                         if (m.Name.StartsWith("<SiegeProgressChange>b__", StringComparison.Ordinal) &&
-                            m.ReturnType == typeof(List<TextObject>))
+                            m.ReturnType == typeof(List<TextObject>) &&
+                            CallsPlayerSiegeGetter(m))
                         {
-                            harmony.Patch(m, new HarmonyMethod(typeof(MapIncidentCrashGuard), nameof(SiegeLambdaPrefix)));
+                            harmony.Patch(m, new HarmonyMethod(typeof(MapIncidentCrashGuard), nameof(SiegeConsequencePrefix)));
                             lambdas++;
                         }
                     }
                 }
                 patched += lambdas;
 
-                // Layer 2 — class net at the single choke point every effect flows through.
+                // Class net at the single choke point every incident effect flows through.
                 MethodInfo consequence = AccessTools.Method(incidentEffect, "Consequence");
                 if (consequence != null)
                 {
@@ -79,7 +88,7 @@ namespace BLTDeploymentCrashGuard
                     patched++;
                 }
 
-                // Layer 3 — outer belt on the click handler's campaign entry point.
+                // Outer belt on the click handler's campaign entry point.
                 Type incident = AccessTools.TypeByName("TaleWorlds.CampaignSystem.Incidents.Incident");
                 MethodInfo invokeOption = incident != null ? AccessTools.Method(incident, "InvokeOption") : null;
                 if (invokeOption != null && invokeOption.ReturnType == typeof(List<TextObject>))
@@ -95,8 +104,8 @@ namespace BLTDeploymentCrashGuard
                     return;
                 }
                 _applied = true;
-                Log.Info("[INCIDENT-GUARD] map-incident crash guard active on " + patched + " method(s) (" +
-                         lambdas + " siege lambda(s), consequence=" + (consequence != null) +
+                Log.Info("[INCIDENT-GUARD] map-incident fix active on " + patched + " method(s) (" +
+                         lambdas + " siege-consequence lambda(s) by IL inspection, consequence=" + (consequence != null) +
                          ", invokeOption=" + (invokeOption != null) + ")");
                 Diag.Report("map-incident-guard", true, "");
                 SelfHealing.RegisterTest(SelfTest);
@@ -108,7 +117,47 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
-        /// <summary>The whole chain the vanilla lambda dereferences unchecked.</summary>
+        /// <summary>Does this method's IL call PlayerSiege.get_PlayerSiegeEvent? Discriminates
+        /// the crashing consequence lambda from the harmless preview lambda without depending
+        /// on compiler-generated numbering.</summary>
+        private static bool CallsPlayerSiegeGetter(MethodInfo method)
+        {
+            try
+            {
+                MethodBody body = method.GetMethodBody();
+                if (body == null)
+                {
+                    return false;
+                }
+                byte[] il = body.GetILAsByteArray();
+                for (int i = 0; i < il.Length - 4; i++)
+                {
+                    if (il[i] == 0x28) // call
+                    {
+                        try
+                        {
+                            MemberInfo target = method.Module.ResolveMember(BitConverter.ToInt32(il, i + 1));
+                            if (target != null && target.Name == "get_PlayerSiegeEvent" &&
+                                target.DeclaringType == typeof(PlayerSiege))
+                            {
+                                return true;
+                            }
+                            i += 4;
+                        }
+                        catch
+                        {
+                            // not a real call site (opcode byte inside operand data) — keep scanning
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return false;
+        }
+
+        /// <summary>The chain the vanilla lambda dereferences unchecked.</summary>
         private static bool SiegeChainIntact()
         {
             try
@@ -121,26 +170,110 @@ namespace BLTDeploymentCrashGuard
             }
             catch
             {
-                return false; // unreadable state is as dead as null state — skip the effect
+                return false;
             }
         }
 
-        private static bool SiegeLambdaPrefix(ref List<TextObject> __result)
+        /// <summary>The player's REAL siege when the PlayerSiege derivation is dead: in co-op a
+        /// peer's party can ride in a besieging army without being attached to the besieger
+        /// camp, so vanilla's MainParty-based derivation misses the army's live siege.</summary>
+        private static SiegeEvent FindLiveSiegeViaArmy()
+        {
+            try
+            {
+                MobileParty main = MobileParty.MainParty;
+                if (main == null)
+                {
+                    return null;
+                }
+                SiegeEvent[] candidates =
+                {
+                    main.SiegeEvent,
+                    main.CurrentSettlement != null ? main.CurrentSettlement.SiegeEvent : null,
+                    main.AttachedTo != null ? main.AttachedTo.SiegeEvent : null,
+                    main.Army != null && main.Army.LeaderParty != null ? main.Army.LeaderParty.SiegeEvent : null,
+                    main.Army != null && main.Army.LeaderParty != null && main.Army.LeaderParty.CurrentSettlement != null
+                        ? main.Army.LeaderParty.CurrentSettlement.SiegeEvent : null
+                };
+                foreach (SiegeEvent s in candidates)
+                {
+                    if (s != null && s.BesiegerCamp != null && s.BesiegerCamp.SiegeEngines != null &&
+                        s.BesiegerCamp.SiegeEngines.SiegePreparations != null)
+                    {
+                        return s;
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return null;
+        }
+
+        private static bool SiegeConsequencePrefix(object __instance, ref List<TextObject> __result)
         {
             if (SiegeChainIntact())
             {
-                return true; // siege is live — run the vanilla effect untouched
+                return true; // vanilla state is healthy — the real effect runs untouched
+            }
+            try
+            {
+                SiegeEvent real = FindLiveSiegeViaArmy();
+                if (real != null)
+                {
+                    float amount = ReadAmount(__instance);
+                    SiegeEvent.SiegeEngineConstructionProgress prep = real.BesiegerCamp.SiegeEngines.SiegePreparations;
+                    prep.SetProgress(prep.Progress + amount);
+                    SelfHealing.RecordFire("map-incident-guard");
+                    Log.Info("[INCIDENT-GUARD] REPAIRED siege-progress incident: party not attached to the live siege of " +
+                             SiegeName(real) + " (co-op army attach gap — vanilla derivation read null and would NRE-CTD); " +
+                             "applied the vanilla effect to the real siege, amount=" + amount);
+                    // Vanilla's own report line, verbatim (same localization id as the lambda builds).
+                    TextObject text = new TextObject("{=C0kUpB48}{?AMOUNT > 0}Increased{?}Decreased{\\?} siege progress by {ABS(AMOUNT)}%.");
+                    text.SetTextVariable("AMOUNT", MathF.Round(amount * 100f));
+                    __result = new List<TextObject> { text };
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Info("[INCIDENT-GUARD] repair attempt failed (" + ex.Message + ") — falling back to graceful skip");
             }
             SelfHealing.RecordFire("map-incident-guard");
-            Log.Info("[INCIDENT-GUARD] skipped SiegeProgressChange incident effect — player siege no longer exists (vanilla would NRE-CTD here)");
+            Log.Info("[INCIDENT-GUARD] skipped siege-progress incident effect — no live siege anywhere for the player (siege already over; vanilla would NRE-CTD)");
             __result = Substitute();
             return false;
+        }
+
+        /// <summary>The effect amount, read from the display-class closure the vanilla lambda
+        /// itself uses ("amountGetter" derives from the factory's parameter name).</summary>
+        private static float ReadAmount(object displayClass)
+        {
+            FieldInfo f = displayClass.GetType().GetField("amountGetter", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Func<float> getter = f != null ? f.GetValue(displayClass) as Func<float> : null;
+            if (getter == null)
+            {
+                throw new InvalidOperationException("amountGetter closure field not found");
+            }
+            return getter();
         }
 
         /// <summary>The list the skipped siege effect reports instead of applying to a dead siege.</summary>
         private static List<TextObject> Substitute()
         {
             return new List<TextObject> { new TextObject("The siege has already ended.") };
+        }
+
+        private static string SiegeName(SiegeEvent siege)
+        {
+            try
+            {
+                return siege.BesiegedSettlement != null ? siege.BesiegedSettlement.Name.ToString() : "(unknown settlement)";
+            }
+            catch
+            {
+                return "(unknown settlement)";
+            }
         }
 
         private static Exception ConsequenceFinalizer(Exception __exception, ref List<TextObject> __result)
@@ -150,7 +283,7 @@ namespace BLTDeploymentCrashGuard
                 return null;
             }
             SelfHealing.RecordFire("map-incident-guard");
-            Log.Info("[INCIDENT-GUARD] SUPPRESSED crash in IncidentEffect.Consequence (stale world state behind the incident popup): " + __exception.Message);
+            Log.Info("[INCIDENT-GUARD] SUPPRESSED crash in IncidentEffect.Consequence (stale world state behind the incident popup — root-fix candidate): " + __exception);
             if (__result == null)
             {
                 __result = new List<TextObject>();
@@ -165,7 +298,7 @@ namespace BLTDeploymentCrashGuard
                 return null;
             }
             SelfHealing.RecordFire("map-incident-guard");
-            Log.Info("[INCIDENT-GUARD] SUPPRESSED crash in Incident.InvokeOption — option closed without its effect: " + __exception.Message);
+            Log.Info("[INCIDENT-GUARD] SUPPRESSED crash in Incident.InvokeOption — option closed without its effect (root-fix candidate): " + __exception);
             if (__result == null)
             {
                 __result = new List<TextObject>();
@@ -179,14 +312,28 @@ namespace BLTDeploymentCrashGuard
             bool typeExists = incidentEffect != null && AccessTools.Method(incidentEffect, "Consequence") != null;
             List<TextObject> untouched = null;
             bool inertOnNull = ConsequenceFinalizer(null, ref untouched) == null && untouched == null;
-            // The exact crash decision: with no live player siege (true at startup — no
-            // campaign loaded) the chain reads dead and the substitute list is non-empty.
-            List<TextObject> substitute = Substitute();
-            bool skipsOnDeadSiege = SiegeChainIntact() || (substitute != null && substitute.Count > 0);
-            bool pass = typeExists && inertOnNull && skipsOnDeadSiege;
+            // The IL discriminator must still find the crashing consequence lambda and must
+            // still exclude the siege-free preview lambda (both patterns re-checked live).
+            int consequenceLambdas = 0, otherLambdas = 0;
+            if (incidentEffect != null)
+            {
+                foreach (Type nested in incidentEffect.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    foreach (MethodInfo m in nested.GetMethods(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+                    {
+                        if (m.Name.StartsWith("<SiegeProgressChange>b__", StringComparison.Ordinal) &&
+                            m.ReturnType == typeof(List<TextObject>))
+                        {
+                            if (CallsPlayerSiegeGetter(m)) consequenceLambdas++; else otherLambdas++;
+                        }
+                    }
+                }
+            }
+            bool discriminates = consequenceLambdas >= 1 && otherLambdas >= 1;
+            bool pass = typeExists && inertOnNull && discriminates;
             return SelfHealing.TestResult.Of("map-incident-guard.contract", pass,
-                pass ? "targets re-resolved; finalizer inert on null; dead-siege substitute non-empty"
-                     : "typeExists=" + typeExists + " inertOnNull=" + inertOnNull + " skipsOnDeadSiege=" + skipsOnDeadSiege);
+                pass ? "targets re-resolved; finalizer inert on null; IL discriminator: " + consequenceLambdas + " siege lambda(s) patched, " + otherLambdas + " preview lambda(s) untouched"
+                     : "typeExists=" + typeExists + " inertOnNull=" + inertOnNull + " consequenceLambdas=" + consequenceLambdas + " otherLambdas=" + otherLambdas);
         }
     }
 }

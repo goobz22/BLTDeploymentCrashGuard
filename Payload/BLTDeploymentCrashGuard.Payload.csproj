@@ -10,6 +10,15 @@
     <RootNamespace>BLTDeploymentCrashGuard</RootNamespace>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>none</DebugType>
+    <!-- Every payload BUILD gets a unique AssemblyVersion revision (wildcard needs
+         Deterministic=false). The hot-reload engine loads each generation via LoadFrom,
+         which dedups identical identities — without a fresh revision a reload would get
+         the PREVIOUS generation back instead of the dropped build. See HotReload.cs. -->
+    <Deterministic>false</Deterministic>
+    <AssemblyVersion>$(Version).*</AssemblyVersion>
+    <!-- FileVersion must stay a literal (wildcards are illegal in AssemblyFileVersion
+         and would otherwise be inherited from the AssemblyVersion above). -->
+    <FileVersion>$(Version).0</FileVersion>
     <GameDir>C:\Program Files (x86)\Steam\steamapps\common\Mount &amp; Blade II Bannerlord</GameDir>
     <GameBin>$(GameDir)\bin\Win64_Shipping_Client</GameBin>
   </PropertyGroup>

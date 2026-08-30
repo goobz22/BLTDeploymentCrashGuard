@@ -51,6 +51,7 @@ namespace BLTDeploymentCrashGuard
                 ConversationCameraCrashGuard.Apply(harmony);
                 DeadHeroReactivationFix.Apply(harmony);
                 MapIncidentCrashGuard.Apply(harmony);
+                BackgroundTickBudgetGuard.Apply(harmony);
                 JoinSyncPauseEscape.Apply(harmony);
                 PregnancySync.PregnancySyncGuard.Apply(harmony);
 
@@ -99,6 +100,7 @@ namespace BLTDeploymentCrashGuard
             ClientBootstrapFix.Apply(Harmony); // retry in case the co-op assembly loaded late
             ClanModeSoloFix.Apply(Harmony);    // same late-BT-assembly retry (latched once applied)
             JoinSyncPauseEscape.Apply(Harmony); // same late-BT-assembly retry (latched once applied)
+            BackgroundTickBudgetGuard.Apply(Harmony); // same late-BT-assembly retry (latched once applied)
             TimeEnforcementGuard.Apply(Harmony);
             BattleMode.DecideAndApply(Harmony, "module-screen");
         }

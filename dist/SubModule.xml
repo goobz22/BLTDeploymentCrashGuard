@@ -1,23 +1,23 @@
 <Module>
-  <Name value="BLT Deployment Crash Guard"/>
-  <Id value="BLTDeploymentCrashGuard"/>
-  <Version value="v1.0.0"/>
-  <SingleplayerModule value="true"/>
-  <MultiplayerModule value="false"/>
-  <IsTWCompatible value="false"/>
+  <Name value="BLT Deployment Crash Guard" />
+  <Id value="BLTDeploymentCrashGuard" />
+  <Version value="v1.2.3" />
+  <SingleplayerModule value="true" />
+  <MultiplayerModule value="false" />
+  <IsTWCompatible value="false" />
   <DependedModules>
-    <DependedModule Id="Bannerlord.Harmony"/>
-    <DependedModule Id="Native" DependentVersion="v1.4.8"/>
-    <DependedModule Id="SandBoxCore" DependentVersion="v1.4.8"/>
-    <DependedModule Id="Sandbox" DependentVersion="v1.4.8"/>
-    <DependedModule Id="BannerlordTogether" Optional="true"/>
+    <DependedModule Id="Bannerlord.Harmony" />
+    <DependedModule Id="Native" DependentVersion="v1.4.8" />
+    <DependedModule Id="SandBoxCore" DependentVersion="v1.4.8" />
+    <DependedModule Id="Sandbox" DependentVersion="v1.4.8" />
+    <DependedModule Id="BannerlordTogether" Optional="true" />
   </DependedModules>
   <SubModules>
     <SubModule>
-      <Name value="BLTDeploymentCrashGuard"/>
-      <DLLName value="BLTDeploymentCrashGuard.dll"/>
-      <SubModuleClassType value="BLTDeploymentCrashGuard.SubModule"/>
-      <Assemblies/>
+      <Name value="BLTDeploymentCrashGuard" />
+      <DLLName value="BLTDeploymentCrashGuard.dll" />
+      <SubModuleClassType value="BLTDeploymentCrashGuard.SubModule" />
+      <Assemblies />
     </SubModule>
   </SubModules>
 </Module>

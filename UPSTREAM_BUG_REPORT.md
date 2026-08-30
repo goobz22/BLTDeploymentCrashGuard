@@ -106,3 +106,56 @@ A local companion Harmony mod patches **native TaleWorlds methods only**: finali
 `DeploymentMissionController.SetupTeams` / `FinishDeployment` suppress the escaping NRE
 (with best-effort completion of `FinishDeployment`'s tail), so the CTD is gone — but
 battles remain unplayable solo because the player side still spawns empty.
+
+---
+
+## Siege state and map incidents on co-op peers (analysis from the 2026-08-30 incident CTD)
+
+Game 1.4.8 added map incidents (`TaleWorlds.CampaignSystem.Incidents`). Their siege effects
+run through `PlayerSiege.PlayerSiegeEvent`, which is DERIVED per-process from
+`MobileParty.MainParty.SiegeEvent ?? MainParty.CurrentSettlement?.SiegeEvent` (verified by IL
+inspection of the installed build). Two co-op consequences worth fixing in BT:
+
+1. **Army-siege attach**: if a peer's `MainParty` rides in a besieging army without being
+   attached to the army's `BesiegerCamp`, every `PlayerSiege`-derived code path on that peer
+   reads null while the siege is live — vanilla's incident consequence then NREs (CTD; see
+   crashreport1.html, 2026-08-30 15:04). Our mod v1.2.1 repairs this case at the effect site
+   (applies the effect to the army's real siege), and logs
+   `[INCIDENT-GUARD] REPAIRED … (co-op army attach gap)` whenever it happens — those log
+   lines are the field evidence that the attach path needs a BT-side fix.
+2. **Incidents are not synced**: incidents spawn and resolve locally per peer; an incident's
+   world effects (e.g. siege progress) apply only on the confirming peer's process. Needs a
+   sync/authority decision in BT like other campaign actions.
+
+---
+
+## TryBackgroundCampaignTick has no time budget — host freeze when a campaign tick gets expensive (2026-08-30)
+
+Field hang 2026-08-30 ~15:24 (host, solo at that moment): the instant a battle mission
+finished deployment, the game froze for 10+ minutes with all cores pegged; a third army was
+joining the same map event. Live debugger attach (repeated managed stack samples of the main
+thread) shows every sample inside:
+
+```
+BannerlordTogether.CoopSubModule.OnApplicationTick
+  -> TryBackgroundCampaignTick -> (reflection) Campaign.RealTick / Campaign.Tick
+     -> EncounterManager.HandleEncounters
+        -> SuppressClientMirroredPartyHandleEncounterPatch.Prefix (String.Concat per call)
+     -> BattleSyncBehavior.CanApplyEncounterHoldThirdPartyCooldownCandidate (via obfuscated wrappers)
+     -> AiEngagePartyBehavior.AiHourlyTick -> FactionManager.IsAtWarAgainstFaction
+```
+
+`ShouldBackgroundTick` enables this whenever a MapState is in the stack under a non-map
+active state (i.e., the host is in a mission), and `TryBackgroundCampaignTick` runs a full
+`Campaign.RealTick + Tick` per application tick with no time budget. When one campaign tick
+becomes multi-second (here: encounter-hold re-evaluation for an army joining the mission's
+own map event, plus hourly-AI catch-up), every frame drowns and the game appears frozen —
+the exception/cooldown machinery never helps because nothing throws.
+
+Suggested fix: bound the per-frame cost (budget + backoff, or move the background tick off
+the render-critical path); also `SuppressClientMirroredPartyHandleEncounterPatch.Prefix`
+builds a log string on every invocation — under this churn that alone is significant.
+
+Our mod v1.2.2 ships an equal-time throttle on `TryBackgroundCampaignTick` (100 ms budget,
+pause == elapsed, capped 10 s) and logs `[TICK-GUARD]` with the measured cost each time it
+fires — those lines are field evidence of how often/expensive this gets.

@@ -273,15 +273,24 @@ namespace BLTDeploymentCrashGuard
             try
             {
                 Assembly asm = null;
-                // FIRST generation loads via LoadFrom at the canonical path: LoadFrom-context
-                // dependency probing checks the requesting assembly's own directory, so the
-                // payload's harness reference binds to THIS already-loaded file by path — no
-                // AssemblyResolve chain involved. (Byte-loading gen1 field-failed 2026-08-21:
-                // the harness reference bound to a different copy and PayloadEntry's IPayload
-                // split identities — "Method 'Apply' does not have an implementation".)
-                // Later generations (dev hot-reload) must byte-load for fresh statics, because
-                // LoadFrom dedups by assembly identity and would return gen1 again.
-                if (_current == null && !_useRoslyn && File.Exists(_prebuiltPath))
+                // EVERY generation loads via LoadFrom on a per-process, per-generation shadow
+                // copy next to the canonical DLL. LoadFrom-context binding is the only correct
+                // mechanism here — field-proven twice:
+                //  - byte-loading gen1, 2026-08-21: the harness reference bound to a different
+                //    copy and PayloadEntry's IPayload split identities.
+                //  - byte-loading gen2+, 2026-08-30 16:00: Assembly.Load(bytes) resolves
+                //    references via DEFAULT-context probing, which finds the game's own
+                //    0Harmony 2.4.2.0 in the app base and binds it silently — AssemblyResolve
+                //    never fires because probing SUCCEEDS, so no resolver pin can help — and
+                //    the Harmony type identity splits across IPayload.Apply ("Method 'Apply'
+                //    does not have an implementation"). LoadFrom-context probing instead sees
+                //    the module-loaded 0Harmony 2.3.6.0 the harness itself is bound to.
+                // LoadFrom dedups identical assembly identities (same name+version returns the
+                // already-loaded generation — stale code, stale statics), so the payload build
+                // stamps a unique AssemblyVersion revision per build (csproj: Deterministic
+                // false + wildcard version). A dedup is detected by Location mismatch and falls
+                // back to byte-load with a warning instead of silently re-applying old code.
+                if (!_useRoslyn && File.Exists(_prebuiltPath))
                 {
                     try
                     {
@@ -290,10 +299,23 @@ namespace BLTDeploymentCrashGuard
                         // violation and no reload ever fires). Load a per-process SHADOW copy in
                         // the SAME directory instead — same-dir keeps LoadFrom dependency probing
                         // pointed at this harness; the canonical file stays writable.
-                        CleanStaleShadows();
-                        string shadowPath = _prebuiltPath + "." + System.Diagnostics.Process.GetCurrentProcess().Id + ".gen1";
+                        if (_current == null)
+                        {
+                            CleanStaleShadows();
+                        }
+                        string shadowPath = _prebuiltPath + "." + System.Diagnostics.Process.GetCurrentProcess().Id + ".gen" + (_gen + 1);
                         File.Copy(_prebuiltPath, shadowPath, overwrite: true);
-                        asm = Assembly.LoadFrom(shadowPath);
+                        Assembly candidate = Assembly.LoadFrom(shadowPath);
+                        if (string.Equals(candidate.Location, Path.GetFullPath(shadowPath), StringComparison.OrdinalIgnoreCase))
+                        {
+                            asm = candidate;
+                        }
+                        else
+                        {
+                            Log.Info("[HOTRELOAD] LoadFrom deduped to already-loaded " + candidate.GetName().Version +
+                                     " @ " + candidate.Location + " — dropped payload lacks a unique AssemblyVersion" +
+                                     " revision (Deterministic build?); falling back to byte load");
+                        }
                     }
                     catch (Exception exFrom)
                     {
@@ -373,7 +395,7 @@ namespace BLTDeploymentCrashGuard
             try
             {
                 string dir = Path.GetDirectoryName(_prebuiltPath);
-                foreach (string stale in Directory.GetFiles(dir, Path.GetFileName(_prebuiltPath) + ".*.gen1"))
+                foreach (string stale in Directory.GetFiles(dir, Path.GetFileName(_prebuiltPath) + ".*.gen*"))
                 {
                     try { File.Delete(stale); }
                     catch { }

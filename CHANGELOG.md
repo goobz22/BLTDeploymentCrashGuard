@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.2.3 — hot-reload engine: LoadFrom every generation (2026-08-30)
+
+- **Mid-session payload reload fixed at the root** (field-failed again 2026-08-30 16:00 —
+  thanks to the new DIAG output the failure finally told the whole story): byte-loading a
+  generation (`Assembly.Load(bytes)`) resolves its references via DEFAULT-context probing,
+  which finds the game's own `0Harmony 2.4.2.0` in the app base and binds it silently —
+  `AssemblyResolve` never fires (probing succeeds), so the 2026-08-30 resolver pin could
+  never help — and the `Harmony` type identity splits across `IPayload.Apply`
+  (`Method 'Apply' … does not have an implementation`). Gen1 always worked because
+  `LoadFrom`-context probing sees the module-loaded `0Harmony 2.3.6.0` the harness is bound
+  to. Now EVERY generation loads via `LoadFrom` on a per-process, per-generation shadow
+  copy; `LoadFrom`'s identity dedup (which byte-load existed to dodge) is defeated by
+  stamping each payload BUILD with a unique `AssemblyVersion` revision (verified: two
+  consecutive builds stamp distinct revisions), and a dedup, should one still happen, is
+  detected by location mismatch and falls back loudly instead of re-applying old code.
+
 ## v1.2.2 — background-tick freeze guard (2026-08-30)
 
 - **Whole-game freeze during host battles fixed** (field hang 2026-08-30 15:24: a third army
