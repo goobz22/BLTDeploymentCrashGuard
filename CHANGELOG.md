@@ -1,5 +1,43 @@
 # Changelog
 
+## v1.2.2 — background-tick freeze guard (2026-08-30)
+
+- **Whole-game freeze during host battles fixed** (field hang 2026-08-30 15:24: a third army
+  joined the player's battle as the mission started; the game froze with all 16 cores pegged
+  for 10+ minutes; root-caused by live debugger attach — repeated stack samples all landed
+  inside BT's `CoopSubModule.TryBackgroundCampaignTick` → `Campaign.RealTick/Tick`).
+  BT ticks the campaign on EVERY application tick while the host is in a mission, with no
+  time budget; a pathologically expensive campaign tick (encounter-hold churn for the
+  joining army + hourly-AI catch-up) therefore starves rendering, input, and the mission
+  itself, indefinitely. New `[TICK-GUARD]`: equal-time throttle — a background tick that
+  blows the 100 ms budget pauses background ticking for as long as it took (capped 10 s), so
+  the foreground always keeps ~half of wall time. Not a disable: the co-op background world
+  keeps running, just never at the game's expense. Inert under normal load; fires are
+  counted and logged for the upstream report.
+
+## v1.2.1 — map-incident siege crash + single-source version (2026-08-30)
+
+- **Map-incident siege-progress CTD fixed at the root** (field crash 2026-08-30 15:04,
+  crashreport1.html): confirming an incident option NREs inside vanilla's
+  `IncidentEffect.SiegeProgressChange` consequence lambda — it dereferences
+  `PlayerSiege.PlayerSiegeEvent…SiegePreparations` with no null check. Probing the installed
+  build showed `PlayerSiegeEvent` is a computed getter over `MainParty.SiegeEvent` /
+  `CurrentSettlement.SiegeEvent`, so a null means the player's own party isn't attached to any
+  siege. Two-branch fix, no feature loss in either mode:
+  - **co-op army attach gap** (party rides a besieging army but was never attached to the
+    besieger camp): the guard finds the army's live siege and applies the exact vanilla
+    effect to it — same `SetProgress`, same report text — so co-op keeps the full incident;
+  - **siege genuinely over** (pure-vanilla repro: popup open while the siege ends): the
+    effect reports "The siege has already ended." instead of crashing.
+  Patch targeting is by IL inspection (only lambdas that call `get_PlayerSiegeEvent`), so the
+  harmless preview lambda stays untouched and compiler renumbering can't break it. Class
+  safety nets on `IncidentEffect.Consequence` and `Incident.InvokeOption` turn any OTHER
+  stale-state incident throw into a logged skip (each fire is a root-fix candidate).
+- **One source of truth for the version**: `Directory.Build.props` holds the only version
+  number — MSBuild stamps both assemblies from it, the log banner reads the assembly
+  identity at runtime, and a build target pokes `SubModule.xml` (which had drifted to
+  v1.0.0) in lockstep.
+
 ## v1.2.x — installer + hot-reload fixes (2026-08-30)
 
 - **Installer shipped a pre-split build** — `dist/` still held the v1.1 monolithic DLL and

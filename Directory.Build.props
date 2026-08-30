@@ -1,0 +1,21 @@
+<Project>
+
+  <!-- THE single source of truth for the mod version. Everything derives from it:
+       - both assemblies (MSBuild stamps AssemblyVersion/FileVersion from Version)
+       - the log banner (Diag reads the assembly identity at runtime)
+       - SubModule.xml (the StampSubModuleVersion target below pokes it every build)
+       Never write a version number anywhere else. -->
+  <PropertyGroup>
+    <Version>1.2.2</Version>
+  </PropertyGroup>
+
+  <!-- Keep SubModule.xml's launcher-visible version in lockstep. Runs once per build
+       (scoped to the harness project so the payload build doesn't repeat it). -->
+  <Target Name="StampSubModuleVersion" AfterTargets="Build"
+          Condition="'$(MSBuildProjectName)' == 'BLTDeploymentCrashGuard'">
+    <XmlPoke XmlInputPath="$(MSBuildThisFileDirectory)SubModule.xml"
+             Query="/Module/Version/@value"
+             Value="v$(Version)" />
+  </Target>
+
+</Project>
