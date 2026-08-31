@@ -91,7 +91,7 @@ namespace BLTDeploymentCrashGuard
 
   ""noSickness"": true,         ""_noSickness"": ""true blocks the vanilla die-of-illness outcome for the local player's hero (each machine protects its own player). Stands down automatically if the third-party NoSickness mod is installed"",
 
-  ""pregnancySync"": false,     ""_pregnancySync"": ""CO-OP: replicate host births to clients so both games share the same child (BT disables pregnancy for the client). Default off until verified live with a second player; host-authoritative, self-disables outside a BT session"",
+  ""pregnancySync"": true,      ""_pregnancySync"": ""CO-OP: replicate host births to clients so both games share the same child (BT disables pregnancy for the client, host rolls run normally). Host-authoritative; self-disables outside a BT session"",
 
   ""stashSync"": true,          ""_stashSync"": ""CO-OP: keep settlement stashes identical on every machine — closing a stash screen broadcasts that stash's contents to the other players (same-clan players share one stash, like the workshop warehouse BT already syncs). Inert outside a BT session"",
 

@@ -112,14 +112,16 @@ player, and the co-op sync features need it on both ends.
     lifted (stashed) for pure vanilla battles; a peer connected (or you're the client) → every
     stashed patch is restored under its original owner/priority so co-op battle sync is fully intact.
 
-15. **Co-op pregnancy / birth sync** *(opt-in, `pregnancySync`, default off)* — BannerlordTogether
-    disables pregnancy for the client and never replicates births, so a client's family never grows
-    and a host's children never appear on the client. Host-authoritative fix: the host serializes
-    each newborn's identity and broadcasts it over BT's own network channel; the client reconstructs
-    the identical child (same id, parents, appearance). Off by default until validated in a live
-    two-player session. (In single-player you are always the host, so pregnancy already works
-    normally — a newborn is an age-0 infant in **Clan → Members**, not visible on the map until
-    it comes of age at 18.)
+15. **Co-op pregnancy / birth sync** *(`pregnancySync`, default on)* — BannerlordTogether
+    disables pregnancy for the client (host rolls run normally) and never replicates births, so
+    a client's family never grows and a host's children never appear on the client.
+    Host-authoritative fix: the host serializes each newborn's identity and broadcasts it over
+    BT's own network channel; the client reconstructs the identical child (same id, parents,
+    appearance). Conception itself follows vanilla rules — the daily roll happens when the
+    spouses are in the same settlement (waiting inside a castle with your spouse counts) or the
+    same party, ages 18–45; every conception is logged and the player clan's shows on screen.
+    (A newborn is an age-0 infant in **Clan → Members**, not visible on the map until coming
+    of age.)
 
 16. **Co-op shared settlement stash** *(`stashSync`, default on)* — BannerlordTogether has no
     stash sync at all (it syncs the workshop warehouse, but a stash deposit exists only on the
@@ -202,7 +204,7 @@ documented inline.
 | `timeAlwaysFlows` | `true` | campaign time does not auto-pause when your party idles |
 | `shareTimeControl` | `true` | host auto-grants the client time control (either player controls speed) |
 | `noSickness` | `true` | block the local player's hero dying of old-age illness (cures it instead) |
-| `pregnancySync` | `false` | **co-op, opt-in** — replicate host births to clients (default off until live-verified) |
+| `pregnancySync` | `true` | **co-op** — replicate host births to clients so both games share the same child |
 | `stashSync` | `true` | **co-op** — settlement stashes stay identical on every machine (shared clan stash) |
 | `tracing` | `false` | verbose diagnostic tracers — off for play, on for troubleshooting |
 | `selfTest` | `false` | run each fix's decision-logic self-test at startup and log PASS/FAIL |

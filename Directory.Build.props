@@ -6,7 +6,7 @@
        - SubModule.xml (the StampSubModuleVersion target below pokes it every build)
        Never write a version number anywhere else. -->
   <PropertyGroup>
-    <Version>1.2.4</Version>
+    <Version>1.2.5</Version>
   </PropertyGroup>
 
   <!-- Keep SubModule.xml's launcher-visible version in lockstep. Runs once per build

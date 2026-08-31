@@ -44,12 +44,16 @@ namespace BLTDeploymentCrashGuard.PregnancySync
         {
             try
             {
-                _enabled = GuardConfig.Bool("pregnancySync", false);
+                _enabled = GuardConfig.Bool("pregnancySync", true);
                 // The self-test proves the wiring whether or not the feature is enabled.
                 SelfHealing.RegisterTest(LoopbackSelfTest);
+                // Conception visibility is diagnostic, not sync — installed regardless of
+                // the sync flag so "did the waiting-at-the-castle roll happen?" is always
+                // answerable from the log (operator ask 2026-08-30).
+                ApplyConceptionVisibility(harmony);
                 if (!_enabled)
                 {
-                    Diag.Report("pregnancy-sync", true, "disabled by config (default until live-verified)");
+                    Diag.Report("pregnancy-sync", true, "disabled by config");
                     return;
                 }
                 // Harmony receive-hook is pure patching — safe at load. The host-side campaign-event
@@ -119,6 +123,102 @@ namespace BLTDeploymentCrashGuard.PregnancySync
                 {
                     Log.Info("[PREG-SYNC] reconstruct drain error, dropped one birth: " + ex.Message);
                 }
+            }
+        }
+
+        /// <summary>Make conception observable (verified against the installed build's IL,
+        /// 2026-08-30): the daily roll happens in PregnancyCampaignBehavior.RefreshSpouseVisit
+        /// ONLY when CheckAreNearby(hero, spouse) passes — same settlement (waiting inside a
+        /// castle counts: the party's CurrentSettlement is that castle) or same party; other
+        /// clans than the player's also pass a 20% abstract roll. Two observers:
+        ///  - always-on postfix on MakePregnantAction.Apply — a conception is rare and worth a
+        ///    log line, plus an on-screen note for the player's own clan;
+        ///  - tracing-gated postfix on CheckAreNearby for player-clan heroes, so "did waiting
+        ///    at the castle count as being with my wife?" is answerable from the log.</summary>
+        private static void ApplyConceptionVisibility(Harmony harmony)
+        {
+            try
+            {
+                MethodInfo conceive = AccessTools.Method(typeof(MakePregnantAction), "Apply");
+                if (conceive != null)
+                {
+                    harmony.Patch(conceive, null, new HarmonyMethod(typeof(PregnancySyncGuard), nameof(ConceptionPostfix)));
+                }
+                if (GuardConfig.Bool("tracing", false))
+                {
+                    Type behavior = AccessTools.TypeByName("TaleWorlds.CampaignSystem.CampaignBehaviors.PregnancyCampaignBehavior");
+                    MethodInfo nearby = behavior != null ? AccessTools.Method(behavior, "CheckAreNearby") : null;
+                    if (nearby != null)
+                    {
+                        harmony.Patch(nearby, null, new HarmonyMethod(typeof(PregnancySyncGuard), nameof(NearbyCheckPostfix)));
+                        Log.Info("[PREG] tracing: nearby-check visibility active (logs the player clan's daily spouse-proximity checks)");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Info("[PREG] conception visibility not installed: " + ex.Message);
+            }
+        }
+
+        private static void ConceptionPostfix(Hero hero)
+        {
+            try
+            {
+                if (hero == null)
+                {
+                    return;
+                }
+                Log.Info("[PREG] conception: " + Safe(hero) + " is now pregnant (clan " +
+                         (hero.Clan != null ? hero.Clan.StringId : "none") + ")");
+                if (hero.Clan != null && Hero.MainHero != null && hero.Clan == Hero.MainHero.Clan)
+                {
+                    Log.Screen(Safe(hero) + " is pregnant");
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static void NearbyCheckPostfix(Hero hero, Hero spouse, bool __result)
+        {
+            try
+            {
+                if (hero == null || Hero.MainHero == null || hero.Clan != Hero.MainHero.Clan)
+                {
+                    return; // only the player clan's checks — the AI world would flood the log
+                }
+                Log.Info("[PREG] nearby-check " + Safe(hero) + " & " + Safe(spouse) + ": " +
+                         (__result ? "TOGETHER — daily conception roll happens" : "apart, no roll") +
+                         " (hero@" + Place(hero) + ", spouse@" + Place(spouse) + ")");
+            }
+            catch
+            {
+            }
+        }
+
+        private static string Place(Hero hero)
+        {
+            try
+            {
+                if (hero == null)
+                {
+                    return "?";
+                }
+                if (hero.CurrentSettlement != null)
+                {
+                    return hero.CurrentSettlement.Name.ToString();
+                }
+                if (hero.PartyBelongedTo != null)
+                {
+                    return "party " + hero.PartyBelongedTo.StringId;
+                }
+                return "nowhere";
+            }
+            catch
+            {
+                return "?";
             }
         }
 

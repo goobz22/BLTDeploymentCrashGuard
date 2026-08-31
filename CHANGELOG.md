@@ -1,5 +1,23 @@
 # Changelog
 
+## v1.2.5 — pregnancy works while waiting with your spouse; sync on by default (2026-08-30)
+
+- **Verified against the installed build's IL** (operator ask: "make sure waiting at the
+  castle with my wife can get her pregnant, vanilla and co-op"): vanilla's daily roll
+  (`PregnancyCampaignBehavior.RefreshSpouseVisit`) fires when `CheckAreNearby` passes —
+  same settlement (waiting inside the castle counts; the party's `CurrentSettlement` is
+  that castle) or same party; ages 18–45; chance falls with age and existing children.
+  In co-op, BT's suppression is literally `return !IsClient` — the HOST's rolls run
+  untouched. No behavior change was needed; what was missing:
+- **`pregnancySync` now defaults ON** so the resulting birth reaches the other machine
+  (it was off pending live validation; the wire format and loopback are proven, the
+  two-machine hop gets validated the first time it fires).
+- **Conception is now observable**: every conception logs `[PREG] conception: …`, the
+  player clan's gets an on-screen note, and with `tracing` on, each daily
+  spouse-proximity check for the player clan logs whether the couple counted as
+  together and where each of them was — so "did waiting next to her count?" is
+  answerable from the log instead of by vibes.
+
 ## v1.2.4 — co-op shared settlement stash (2026-08-30)
 
 - **Settlement stashes are now shared between co-op players** (`stashSync`, default on).
