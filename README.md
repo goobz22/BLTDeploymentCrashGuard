@@ -154,18 +154,25 @@ player, and the co-op sync features need it on both ends.
     keeps roughly half of wall time. Not a disable — the co-op world keeps running, just never
     at the cost of a frozen game.
 
+19. **Close the gate when visiting your settlement** — walking around a castle or town, the
+    gate shows no interaction at all: vanilla deliberately force-opens it and disables the
+    whole gate machine in civilian missions (three separate locks, all verified in the game
+    code). This fix re-enables the gate and its standing points for the player, so an open
+    gate shows **F: Close** (and a closed one **F: Open**), using vanilla's own door
+    animation, nav-mesh, and collider handling. Battle and siege gates are untouched.
+
 ### Diagnostics & robustness
 
-19. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
+20. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
     of which fixes resolved, and (with `selfTest`) a decision-logic self-test per fix. If a core fix
     fails to resolve, BannerlordTogether was likely updated and this mod needs a matching update.
 
-20. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
+21. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
     launches with caller stacks) and command control (who becomes player-controlled, order/formation
     ownership, a full control map at deployment finish). Verbose tracers are off by default
     (`tracing`) and rotate at 8 MB.
 
-21. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
+22. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
     mod or BannerlordTogether.
 
 ## Sharing your log with your co-op partner

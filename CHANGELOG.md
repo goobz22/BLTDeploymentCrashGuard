@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.2.6 — gates get their F Close/Open back, in sieges and settlement visits (2026-08-30)
+
+- **SIEGE: "defending, the gate is open, no F to close it"** (the field report) —
+  root-caused in the installed build's IL: `CastleGate.ServerTick` activates the gate's
+  standing points only when the door's animation parameter is EXACTLY >= 1.0; anything
+  less deactivates every point. Vanilla itself parks a closed gate at a FROZEN 0.99
+  (`SetInitialStateOfGate`), and an opened door can settle a float-hair under 1.0 — in
+  both cases the gate is visually at rest but permanently un-interactable. Fix: when the
+  parameter is in [0.98, 1.0), apply vanilla's own direction rule (open gate -> close
+  points active, closed gate -> open points active). Mid-swing doors and machine-level
+  deactivation stay vanilla. A ram-DESTROYED gate is untouched — broken gates cannot be
+  closed by design — but with tracing on the log now says so explicitly.
+- **SETTLEMENT VISITS**: civilian (walk-around) missions call
+  `CastleGate.OpenDoorAndDisableGateForCivilianMission`; `SetInitialStateOfGate` then
+  force-opens the door and `SetDisabled(true)`s the entire gate machine (every standing
+  point with it — no prompt, and `CloseDoor()` itself early-outs on `IsDisabled`), and
+  the usable team is set to `Mission.DefenderTeam`, which never equals the player's
+  team in a civilian mission (`StandingPointWithTeamLimit` requires equality). Fix:
+  postfix on `AfterMissionStart` for civilian gates only — re-enable the gate and its
+  standing points and set the usable team to the player's team. Closing/opening runs
+  vanilla's own `CloseDoor`/`OpenDoor` (animation, nav-mesh, colliders). Siege/battle
+  gates untouched; a tick finalizer insures against any siege-only assumption now that
+  civilian gates tick.
+
 ## v1.2.5 — pregnancy works while waiting with your spouse; sync on by default (2026-08-30)
 
 - **Verified against the installed build's IL** (operator ask: "make sure waiting at the
