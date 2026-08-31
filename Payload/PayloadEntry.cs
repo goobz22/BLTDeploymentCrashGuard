@@ -54,6 +54,7 @@ namespace BLTDeploymentCrashGuard
                 BackgroundTickBudgetGuard.Apply(harmony);
                 CivilianGateCloseFix.Apply(harmony);
                 SiegeGatePromptFix.Apply(harmony);
+                CoopHeroIdentityLock.Apply();
                 JoinSyncPauseEscape.Apply(harmony);
                 PregnancySync.PregnancySyncGuard.Apply(harmony);
                 StashSync.StashSyncGuard.Apply(harmony);
@@ -114,6 +115,7 @@ namespace BLTDeploymentCrashGuard
             EncounterLoopGuard.Apply(Harmony);
             BattleMode.DecideAndApply(Harmony, "game-start");
             PregnancySync.PregnancySyncGuard.OnGameStart(); // per-campaign host birth listener
+            CoopHeroIdentityLock.OnGameStart(); // arm the this-machine's-hero claim for the loaded campaign
         }
 
         public void OnMissionInit()
@@ -131,6 +133,7 @@ namespace BLTDeploymentCrashGuard
             BootstrapWatch.Tick();
             PregnancySync.PregnancySyncGuard.Tick(); // drain queued client birth reconstructions
             StashSync.StashSyncGuard.Tick(); // drain queued peer stash updates
+            CoopHeroIdentityLock.Tick(); // claim this machine's hero once the map is up
             ReportGuardActivity();
         }
 

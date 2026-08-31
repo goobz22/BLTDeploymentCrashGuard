@@ -166,18 +166,30 @@ player, and the co-op sync features need it on both ends.
       while walking around your castle or town, using vanilla's own animation, nav-mesh,
       and collider handling.
 
+20. **Shared-save host handoff — you always load as YOUR hero** *(`myHero` + automatic)* —
+    a Bannerlord save stores exactly one player identity: whoever was MainHero when it was
+    saved. Pass a shared co-op save to the other player and they load in as *your* hero.
+    BannerlordTogether's identity registry only fixes this for joining clients, never for
+    the person hosting the load. Now each machine keeps its own campaign→hero record
+    (`hero-identity.json`): on load (as host or solo, never as a client), the player is
+    switched back to this machine's hero via the game's own succession mechanism. New
+    campaigns record automatically; an existing shared campaign is claimed once by
+    setting `"myHero": "YourHeroName"` in guardconfig.json, after which the record
+    maintains itself (it also follows death-succession to your heir). So the two of you
+    can pass hosting back and forth on one save and each always resumes your own hero.
+
 ### Diagnostics & robustness
 
-20. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
+21. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
     of which fixes resolved, and (with `selfTest`) a decision-logic self-test per fix. If a core fix
     fails to resolve, BannerlordTogether was likely updated and this mod needs a matching update.
 
-21. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
+22. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
     launches with caller stacks) and command control (who becomes player-controlled, order/formation
     ownership, a full control map at deployment finish). Verbose tracers are off by default
     (`tracing`) and rotate at 8 MB.
 
-22. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
+23. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
     mod or BannerlordTogether.
 
 ## Sharing your log with your co-op partner

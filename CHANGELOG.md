@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.2.7 — shared-save host handoff: you always load as YOUR hero (2026-08-30)
+
+- **Field report: "when Noah saves as host and I load our co-op, it loads me as his hero"**
+  — a save stores exactly one player identity (MainHero at save time), and BT's identity
+  registry (slots/steam/password claims) is only consulted on the CLIENT join flow —
+  nothing fixes the identity of the person LOADING the save (verified by assembly scan;
+  SharedSaveMode is a bare flag). New `CoopHeroIdentityLock`: a per-machine
+  campaign→hero map (`hero-identity.json`); on load as host/solo the player is switched
+  back to this machine's hero via vanilla's `ChangePlayerCharacterAction` (the
+  succession mechanism), with an on-screen note naming who the save was last played as.
+  New campaigns record automatically; existing shared campaigns are claimed once with
+  `"myHero": "YourHeroName"` in guardconfig.json; the record follows death-succession.
+  Never runs as a BT client (BT assigns that hero). Hosting can now pass back and forth
+  on one save with each player always resuming their own hero.
+
 ## v1.2.6 — gates get their F Close/Open back, in sieges and settlement visits (2026-08-30)
 
 - **SIEGE: "defending, the gate is open, no F to close it"** (the field report) —

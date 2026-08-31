@@ -215,7 +215,8 @@ namespace BLTDeploymentCrashGuard
             {
                 // A campaign younger than a day has never been saved-and-shared; recording
                 // its creator is unambiguous.
-                return Campaign.Current.CampaignStartTime.ElapsedDaysUntilNow < 1f;
+                CampaignTime start = Campaign.Current.Models.CampaignTimeModel.CampaignStartTime;
+                return CampaignTime.Now.ToDays - start.ToDays < 1f;
             }
             catch
             {
