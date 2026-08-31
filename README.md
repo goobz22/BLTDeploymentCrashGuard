@@ -154,12 +154,17 @@ player, and the co-op sync features need it on both ends.
     keeps roughly half of wall time. Not a disable — the co-op world keeps running, just never
     at the cost of a frozen game.
 
-19. **Close the gate when visiting your settlement** — walking around a castle or town, the
-    gate shows no interaction at all: vanilla deliberately force-opens it and disables the
-    whole gate machine in civilian missions (three separate locks, all verified in the game
-    code). This fix re-enables the gate and its standing points for the player, so an open
-    gate shows **F: Close** (and a closed one **F: Open**), using vanilla's own door
-    animation, nav-mesh, and collider handling. Battle and siege gates are untouched.
+19. **Gates always offer F: Close / F: Open when at rest** — two verified vanilla defects:
+    - *Sieges*: the gate's interaction points only activate when the door's animation
+      parameter is **exactly** 1.0 — but vanilla parks a closed gate at a frozen 0.99, and
+      an opened door can settle a hair under 1.0, leaving a visually-at-rest gate with no
+      prompt at all (the "defending, gate open, no F to close it" report). Doors at rest
+      now always offer the correct direction; mid-swing doors stay un-interactable, and a
+      ram-**destroyed** gate stays gone by design (the log says so with tracing on).
+    - *Settlement visits*: civilian missions deliberately force the gate open and disable
+      the whole machine. Re-enabled for the player, so the gate can be closed and reopened
+      while walking around your castle or town, using vanilla's own animation, nav-mesh,
+      and collider handling.
 
 ### Diagnostics & robustness
 
