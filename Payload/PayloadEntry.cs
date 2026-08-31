@@ -52,6 +52,7 @@ namespace BLTDeploymentCrashGuard
                 DeadHeroReactivationFix.Apply(harmony);
                 MapIncidentCrashGuard.Apply(harmony);
                 BackgroundTickBudgetGuard.Apply(harmony);
+                CivilianGateCloseFix.Apply(harmony);
                 JoinSyncPauseEscape.Apply(harmony);
                 PregnancySync.PregnancySyncGuard.Apply(harmony);
                 StashSync.StashSyncGuard.Apply(harmony);
