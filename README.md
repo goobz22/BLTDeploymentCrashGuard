@@ -67,16 +67,24 @@ player, and the co-op sync features need it on both ends.
 7. **Encounter-loop breaker** — breaks the infinite encounter-meeting re-open loop that could hang
    a co-op session.
 
+8. **Map-incident siege crash** — vanilla's map-incident popups apply their siege-progress effect
+   through `PlayerSiege` with no null check: confirm an incident option after the siege is gone
+   (or while your party isn't attached to your army's siege in co-op) and the game CTDs. The fix
+   is repair-first: if your army's siege is live, the real effect is applied to it; only when no
+   siege exists anywhere does it report "the siege has already ended". Any *other* incident
+   effect that throws on stale world state is caught at the same choke point and skipped instead
+   of crashing.
+
 ### Co-op & gameplay fixes
 
-8. **Client bootstrap fix** — the root cause of "invisible armies / joins not registering / total
+9. **Client bootstrap fix** — the root cause of "invisible armies / joins not registering / total
    desync" as a co-op client. BannerlordTogether's client action-cache audit false-negatives on a
    stale static mirror and permanently aborts, leaving the whole client session with its sync
    patches unapplied. We prime the mirror from the live catalog so verification passes and BT's
    deferred patches actually apply. `BootstrapWatch` also detects a silent `BootstrapAborted` and
    clears the stale cache so the next launch is clean.
 
-9. **Marriage fixes** — two decompile-proven BannerlordTogether defects:
+10. **Marriage fixes** — two decompile-proven BannerlordTogether defects:
    - *Solo clan-mode block*: BT gates marriage on clan-mode sync, which can never complete when you
      host with no one connected, so marriage is blocked forever. When you're provably alone we
      report the correct solo clan-mode so marriage works; the instant a peer connects, BT's real
@@ -85,26 +93,26 @@ player, and the co-op sync features need it on both ends.
      natively in the same barter — so a rejected marriage still took your money. The whole barter
      now cancels *before* any gold moves if the marriage can't complete.
 
-10. **No death by sickness** — Bannerlord's old-age "illness" can kill your hero. This blocks the
+11. **No death by sickness** — Bannerlord's old-age "illness" can kill your hero. This blocks the
     death roll for the local player's hero and cures an in-progress illness (aging of everyone else
     is untouched). Config `noSickness`; stands down if the standalone *NoSickness* mod is installed.
 
-11. **Player-identity guard (co-op)** — fixes the spawn identity swap where you spawn AI-controlled
+12. **Player-identity guard (co-op)** — fixes the spawn identity swap where you spawn AI-controlled
     and the other player's hero becomes "you"; moves control back to your own hero and repairs
     team/order/formation ownership.
 
-12. **Time fixes (co-op)** — keep fast-forward through map clicks; don't auto-pause when your party
+13. **Time fixes (co-op)** — keep fast-forward through map clicks; don't auto-pause when your party
     idles (`timeAlwaysFlows`); auto-grant the client shared time control so either player can
     pause/play/fast-forward (`shareTimeControl`); neutralize stale co-op speed enforcement after an
     in-game load so host and client speeds don't desync.
 
-13. **Auto battle mode** — hosting a co-op session *alone*, BT's battle pipeline can strip your side
+14. **Auto battle mode** — hosting a co-op session *alone*, BT's battle pipeline can strip your side
     out of missions (empty formations, no player agent). In `auto` mode the mod checks at every
     battle start whether a remote player is actually connected: alone → BT's battle patches are
     lifted (stashed) for pure vanilla battles; a peer connected (or you're the client) → every
     stashed patch is restored under its original owner/priority so co-op battle sync is fully intact.
 
-14. **Co-op pregnancy / birth sync** *(opt-in, `pregnancySync`, default off)* — BannerlordTogether
+15. **Co-op pregnancy / birth sync** *(opt-in, `pregnancySync`, default off)* — BannerlordTogether
     disables pregnancy for the client and never replicates births, so a client's family never grows
     and a host's children never appear on the client. Host-authoritative fix: the host serializes
     each newborn's identity and broadcasts it over BT's own network channel; the client reconstructs
@@ -113,7 +121,17 @@ player, and the co-op sync features need it on both ends.
     normally — a newborn is an age-0 infant in **Clan → Members**, not visible on the map until
     it comes of age at 18.)
 
-15. **Join-hold pause escape** — when someone joins your hosted session, BannerlordTogether
+16. **Co-op shared settlement stash** *(`stashSync`, default on)* — BannerlordTogether has no
+    stash sync at all (it syncs the workshop warehouse, but a stash deposit exists only on the
+    machine that made it — so same-clan players never actually share a stash, and a client's
+    deposits silently diverge from the host). Now, closing a stash screen broadcasts that
+    settlement's full stash contents over BT's own channel and every other machine applies it,
+    so the stash behaves like one shared chest — deposit on one machine, withdraw on the other.
+    The host relays client updates so all peers converge; applying waits if you have that stash
+    open; on a simultaneous edit the last-closed screen wins. Limitation: a player-crafted item
+    can't be resolved on the other machine and is skipped (logged loudly). Inert outside co-op.
+
+17. **Join-hold pause escape** — when someone joins your hosted session, BannerlordTogether
     pauses the campaign for their entire save download + load + hero creation (its "keep playing
     while they load" fast-join only applies to returning players when another gameplay peer is
     already connected). During that hold your pause key is **silently swallowed** — it only
@@ -123,18 +141,27 @@ player, and the co-op sync features need it on both ends.
     cancels the stuck join via BT's own transfer-cancel routine — the same recovery its timeout
     watchdog uses — so you resume playing and the joiner is told to reconnect.
 
+18. **Background-tick freeze guard (co-op)** — while the host is in a battle, BannerlordTogether
+    keeps the campaign world running by ticking it on *every* frame with no time budget; when a
+    campaign tick turns expensive (e.g. a third army joining your ongoing battle), every frame
+    drowns in background work and the game freezes with all cores pegged — potentially forever.
+    The guard puts an equal-time throttle on that background tick: blow the 100 ms budget and
+    background ticking pauses for as long as the tick took (capped 10 s), so the game always
+    keeps roughly half of wall time. Not a disable — the co-op world keeps running, just never
+    at the cost of a frozen game.
+
 ### Diagnostics & robustness
 
-16. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
+19. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
     of which fixes resolved, and (with `selfTest`) a decision-logic self-test per fix. If a core fix
     fails to resolve, BannerlordTogether was likely updated and this mod needs a matching update.
 
-17. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
+20. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
     launches with caller stacks) and command control (who becomes player-controlled, order/formation
     ownership, a full control map at deployment finish). Verbose tracers are off by default
     (`tracing`) and rotate at 8 MB.
 
-18. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
+21. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
     mod or BannerlordTogether.
 
 ## Sharing your log with your co-op partner
@@ -174,6 +201,7 @@ documented inline.
 | `shareTimeControl` | `true` | host auto-grants the client time control (either player controls speed) |
 | `noSickness` | `true` | block the local player's hero dying of old-age illness (cures it instead) |
 | `pregnancySync` | `false` | **co-op, opt-in** — replicate host births to clients (default off until live-verified) |
+| `stashSync` | `true` | **co-op** — settlement stashes stay identical on every machine (shared clan stash) |
 | `tracing` | `false` | verbose diagnostic tracers — off for play, on for troubleshooting |
 | `selfTest` | `false` | run each fix's decision-logic self-test at startup and log PASS/FAIL |
 | `logStreamBin` | `""` | a filebin.net bin id; when set, the log auto-uploads for remote debugging |
@@ -203,7 +231,8 @@ cd ..\Payload && dotnet build -c Release
 ```
 
 Deploy **both** DLLs to `<Bannerlord>/Modules/BLTDeploymentCrashGuard/bin/Win64_Shipping_Client/`
-next to `SubModule.xml`. There is also a headless test suite for the pregnancy-sync wire format:
+next to `SubModule.xml`. There are headless test suites for the pregnancy-sync and stash-sync
+wire formats (`tests\BirthPayloadTest`, `tests\StashPayloadTest`), e.g.:
 
 ```
 cd tests\BirthPayloadTest && dotnet build -c Release && bin\Release\BirthPayloadTest.exe
