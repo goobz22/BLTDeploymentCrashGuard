@@ -92,12 +92,17 @@ namespace BLTDeploymentCrashGuard.StashSync
                     }
                     for (int i = 0; i < count; i++)
                     {
-                        payload.Entries.Add(new Entry
+                        var entry = new Entry
                         {
                             ItemStringId = reader.ReadString(),
                             ModifierStringId = reader.ReadString(),
                             Count = reader.ReadInt32()
-                        });
+                        };
+                        if (string.IsNullOrEmpty(entry.ItemStringId) || entry.Count <= 0)
+                        {
+                            return null; // a sane sender never emits these — corrupt packet
+                        }
+                        payload.Entries.Add(entry);
                     }
                     return payload;
                 }

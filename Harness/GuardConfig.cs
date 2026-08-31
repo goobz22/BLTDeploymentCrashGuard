@@ -93,6 +93,8 @@ namespace BLTDeploymentCrashGuard
 
   ""pregnancySync"": false,     ""_pregnancySync"": ""CO-OP: replicate host births to clients so both games share the same child (BT disables pregnancy for the client). Default off until verified live with a second player; host-authoritative, self-disables outside a BT session"",
 
+  ""stashSync"": true,          ""_stashSync"": ""CO-OP: keep settlement stashes identical on every machine — closing a stash screen broadcasts that stash's contents to the other players (same-clan players share one stash, like the workshop warehouse BT already syncs). Inert outside a BT session"",
+
   ""tracing"": false,           ""_tracing"": ""true enables verbose diagnostic tracers (mission/menu/control/time/coop-battle/role). Off for normal play; on for troubleshooting"",
   ""selfTest"": false,          ""_selfTest"": ""true runs each guard's decision-logic self-test at startup and logs PASS/FAIL (proves the fix wiring survived a BT update)"",
 

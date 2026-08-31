@@ -159,3 +159,18 @@ builds a log string on every invocation — under this churn that alone is signi
 Our mod v1.2.2 ships an equal-time throttle on `TryBackgroundCampaignTick` (100 ms budget,
 pause == elapsed, capped 10 s) and logs `[TICK-GUARD]` with the measured cost each time it
 fires — those lines are field evidence of how often/expensive this gets.
+
+---
+
+## No settlement-stash sync (2026-08-30)
+
+BT syncs the workshop warehouse roster (WorkshopWarehouseRosterInventoryDonePatch +
+WorkshopWarehouseRosterPacket) but has no stash code at all — a Settlement.Stash deposit
+exists only on the machine that made it, so same-clan co-op players do not actually share a
+stash and a client's deposits diverge from the authoritative host state (lost on
+resync/save-load). Our mod v1.2.4 ships a snapshot-based stash sync over the raw channel
+(InventoryLogic.DoneLogic in Stash mode -> full-roster broadcast, host relays). A native BT
+implementation could reuse its warehouse packet machinery nearly verbatim. Note for either
+implementation: player-CRAFTED items cannot be resolved by StringId on the other machine —
+crafted-weapon replication needs WeaponDesign serialization (our sync keeps those stacks machine-local instead of syncing
+loudly).

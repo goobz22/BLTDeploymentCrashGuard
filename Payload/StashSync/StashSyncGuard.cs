@@ -33,14 +33,15 @@ namespace BLTDeploymentCrashGuard.StashSync
     ///  works on the live roster); last-closed screen wins on a simultaneous edit.
     ///
     /// Full-snapshot semantics: idempotent, ordering-immune, converges in one packet.
-    /// MACHINE-LOCAL items (player-crafted weapons carry a WeaponDesign that exists only on
-    /// the crafting machine, and anything whose StringId does not round-trip through the
-    /// local object manager) can never be expressed on the wire, so they are excluded from
-    /// snapshots AND preserved across applies — each machine keeps its own crafted stacks
-    /// while everything nameable stays in sync. Without the preservation half, the peer's
-    /// next snapshot (which structurally cannot mention your crafted item) would delete it
-    /// (commit-review finding, 2026-08-30). Crafted replication needs WeaponDesign
-    /// serialization — recorded in UPSTREAM_BUG_REPORT.md.
+    /// MACHINE-LOCAL items (IsCraftedByPlayer — the design exists only on the crafting
+    /// machine — and anything whose StringId does not round-trip through the local object
+    /// manager) can never be expressed on the wire, so they are excluded from snapshots AND
+    /// preserved across applies — each machine keeps its own crafted stacks while everything
+    /// nameable stays in sync. Without the preservation half, the peer's next snapshot
+    /// (which structurally cannot mention your crafted item) would delete it (commit-review
+    /// finding, 2026-08-30; a second review pass caught that testing WeaponDesign instead of
+    /// IsCraftedByPlayer would have de-synced ~283 vanilla CraftedItem weapons). Crafted
+    /// replication needs WeaponDesign serialization — recorded in UPSTREAM_BUG_REPORT.md.
     /// Gated on config stashSync (default ON) AND an active BT session; inert otherwise.
     /// </summary>
     internal static class StashSyncGuard
@@ -209,8 +210,10 @@ namespace BLTDeploymentCrashGuard.StashSync
             return payload;
         }
 
-        /// <summary>An item that cannot be expressed on the wire: a player-crafted weapon
-        /// (its WeaponDesign exists only where it was crafted) or anything whose StringId
+        /// <summary>An item that cannot be expressed on the wire: a PLAYER-crafted weapon
+        /// (IsCraftedByPlayer — its design exists only where it was crafted; NOT a bare
+        /// WeaponDesign check, which is also true for ~283 vanilla CraftedItem weapons that
+        /// sync perfectly by StringId — commit-review catch #2), or anything whose StringId
         /// does not resolve back to the same object locally. Such stacks are excluded from
         /// snapshots and preserved across applies — deleting them on either side would be
         /// silent data loss.</summary>
@@ -218,7 +221,7 @@ namespace BLTDeploymentCrashGuard.StashSync
         {
             try
             {
-                if (item.WeaponDesign != null)
+                if (item.IsCraftedByPlayer)
                 {
                     return true;
                 }
@@ -321,12 +324,21 @@ namespace BLTDeploymentCrashGuard.StashSync
             // Save this machine's wire-inexpressible stacks BEFORE clearing: the sender
             // structurally cannot mention them, so their absence from the snapshot is not a
             // withdrawal — wiping them would be silent data loss (crafted-sword scenario).
+            // Never preserve an id the payload itself names — if the peer classified an item
+            // differently (version skew, differing mods), applying their stack AND re-adding
+            // ours would silently duplicate it; the payload's word wins for ids it mentions.
+            var payloadIds = new HashSet<string>(StringComparer.Ordinal);
+            foreach (StashPayloadData.Entry entry in payload.Entries)
+            {
+                payloadIds.Add(entry.ItemStringId);
+            }
             var preserved = new List<ItemRosterElement>();
             for (int i = 0; i < stash.Count; i++)
             {
                 ItemRosterElement element = stash.GetElementCopyAtIndex(i);
                 if (element.EquipmentElement.Item != null && element.Amount > 0 &&
-                    IsMachineLocal(element.EquipmentElement.Item))
+                    IsMachineLocal(element.EquipmentElement.Item) &&
+                    !payloadIds.Contains(element.EquipmentElement.Item.StringId ?? ""))
                 {
                     preserved.Add(element);
                 }

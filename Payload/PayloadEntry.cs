@@ -54,6 +54,7 @@ namespace BLTDeploymentCrashGuard
                 BackgroundTickBudgetGuard.Apply(harmony);
                 JoinSyncPauseEscape.Apply(harmony);
                 PregnancySync.PregnancySyncGuard.Apply(harmony);
+                StashSync.StashSyncGuard.Apply(harmony);
 
                 // Client bootstrap fix — must beat BT's first (and only) verify on a fresh process;
                 // on a mid-game reload it just installs the prefix (BT won't verify again).
@@ -127,6 +128,7 @@ namespace BLTDeploymentCrashGuard
             LogStreamer.Tick();
             BootstrapWatch.Tick();
             PregnancySync.PregnancySyncGuard.Tick(); // drain queued client birth reconstructions
+            StashSync.StashSyncGuard.Tick(); // drain queued peer stash updates
             ReportGuardActivity();
         }
 

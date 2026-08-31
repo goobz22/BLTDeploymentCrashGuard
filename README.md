@@ -129,7 +129,9 @@ player, and the co-op sync features need it on both ends.
     so the stash behaves like one shared chest — deposit on one machine, withdraw on the other.
     The host relays client updates so all peers converge; applying waits if you have that stash
     open; on a simultaneous edit the last-closed screen wins. Limitation: a player-crafted item
-    can't be resolved on the other machine and is skipped (logged loudly). Inert outside co-op.
+    can't be expressed on the wire, so crafted stacks stay machine-local — excluded from the
+    sync and preserved through every update (never deleted), each machine keeping its own.
+    Inert outside co-op.
 
 17. **Join-hold pause escape** — when someone joins your hosted session, BannerlordTogether
     pauses the campaign for their entire save download + load + hero creation (its "keep playing

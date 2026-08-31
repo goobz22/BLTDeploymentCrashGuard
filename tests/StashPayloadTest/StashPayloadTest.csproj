@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DebugType>none</DebugType>
+    <AssemblyName>StashPayloadTest</AssemblyName>
+    <!-- These pure wire files carry no game version; opt out of the payload's per-build
+         wildcard AssemblyVersion inherited via Directory.Build.props. -->
+    <Deterministic>true</Deterministic>
+    <AssemblyVersion>$(Version).0</AssemblyVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Link the ACTUAL shipping wire model + framing (both features: cross-discrimination
+         is part of the contract), so a format change fails THIS test, not a stale copy. -->
+    <Compile Include="..\..\Payload\StashSync\StashPayloadData.cs" />
+    <Compile Include="..\..\Payload\StashSync\StashWireFraming.cs" />
+    <Compile Include="..\..\Payload\PregnancySync\BirthPayloadData.cs" />
+    <Compile Include="..\..\Payload\PregnancySync\BirthWireFraming.cs" />
+  </ItemGroup>
+</Project>
