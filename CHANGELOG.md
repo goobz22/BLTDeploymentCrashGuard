@@ -1,5 +1,25 @@
 # Changelog
 
+## v1.2.4 — co-op shared settlement stash (2026-08-30)
+
+- **Settlement stashes are now shared between co-op players** (`stashSync`, default on).
+  BannerlordTogether has no stash sync at all (assembly scan: zero stash-named members —
+  it syncs the workshop warehouse but not the stash), so a deposit existed only on the
+  machine that made it and a client's deposits silently diverged from the authoritative
+  host. Now closing a stash screen broadcasts that settlement's full stash roster over
+  BT's own channel (the same transport pregnancy-sync uses; new "BTCS" frame, provably
+  non-colliding with births and with all 255 BT packet types); every other machine
+  applies it, the host relays client updates so all peers converge, applying defers
+  while that stash is open locally, and the last-closed screen wins a simultaneous
+  edit. Same-clan players therefore share one stash — deposit on one machine, withdraw
+  on the other. Wire format proven by a headless suite (`tests/StashPayloadTest`).
+  Player-crafted items can't be expressed on the wire, so crafted stacks are
+  machine-local: excluded from snapshots AND preserved through applies — never deleted
+  (the commit review caught that a naive snapshot-apply would silently wipe a crafted
+  item the peer's snapshot structurally couldn't mention; crafted replication is
+  recorded as an upstream item). Corrupt packets (zero/negative counts, empty ids)
+  are rejected on parse.
+
 ## v1.2.3 — hot-reload engine: LoadFrom every generation (2026-08-30)
 
 - **Mid-session payload reload fixed at the root** (field-failed again 2026-08-30 16:00 —

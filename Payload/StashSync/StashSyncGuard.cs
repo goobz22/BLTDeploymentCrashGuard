@@ -33,16 +33,25 @@ namespace BLTDeploymentCrashGuard.StashSync
     ///  works on the live roster); last-closed screen wins on a simultaneous edit.
     ///
     /// Full-snapshot semantics: idempotent, ordering-immune, converges in one packet.
-    /// Limitation: an item the receiver cannot resolve by StringId (player-crafted weapons
-    /// exist only on the crafting machine) is skipped with a loud log — crafted-item
-    /// replication needs design serialization (recorded in UPSTREAM_BUG_REPORT.md).
+    /// MACHINE-LOCAL items (player-crafted weapons carry a WeaponDesign that exists only on
+    /// the crafting machine, and anything whose StringId does not round-trip through the
+    /// local object manager) can never be expressed on the wire, so they are excluded from
+    /// snapshots AND preserved across applies — each machine keeps its own crafted stacks
+    /// while everything nameable stays in sync. Without the preservation half, the peer's
+    /// next snapshot (which structurally cannot mention your crafted item) would delete it
+    /// (commit-review finding, 2026-08-30). Crafted replication needs WeaponDesign
+    /// serialization — recorded in UPSTREAM_BUG_REPORT.md.
     /// Gated on config stashSync (default ON) AND an active BT session; inert otherwise.
     /// </summary>
     internal static class StashSyncGuard
     {
         private static bool _enabled;
         private static FieldInfo _inventoryModeField;
-        private const int StashMode = 3; // Helpers.InventoryScreenHelper.InventoryMode.Stash
+        private static bool _openCheckWarned;
+        /// <summary>Helpers.InventoryScreenHelper.InventoryMode.Stash — re-resolved from the
+        /// live enum at Apply so an ordinal shift in a game update cannot silently
+        /// mis-detect the mode; 3 is only the fallback.</summary>
+        private static int _stashMode = 3;
 
         private static readonly object QueueLock = new object();
         private static readonly Queue<StashPayloadData> Pending = new Queue<StashPayloadData>();
@@ -59,6 +68,7 @@ namespace BLTDeploymentCrashGuard.StashSync
                     return;
                 }
                 _inventoryModeField = AccessTools.Field(typeof(InventoryLogic), "_inventoryMode");
+                ResolveStashModeValue();
                 MethodInfo done = AccessTools.Method(typeof(InventoryLogic), "DoneLogic");
                 bool donePatched = false;
                 if (done != null && _inventoryModeField != null)
@@ -77,6 +87,29 @@ namespace BLTDeploymentCrashGuard.StashSync
             {
                 Log.Info("[STASH-SYNC] apply failed: " + ex.Message);
                 Diag.Report("stash-sync", false, ex.Message);
+            }
+        }
+
+        /// <summary>Read InventoryMode.Stash's actual value from the live enum (fallback 3).</summary>
+        private static void ResolveStashModeValue()
+        {
+            try
+            {
+                Type mode = AccessTools.TypeByName("Helpers.InventoryScreenHelper+InventoryMode");
+                if (mode != null && mode.IsEnum)
+                {
+                    object value = Enum.Parse(mode, "Stash");
+                    int resolved = Convert.ToInt32(value);
+                    if (resolved != _stashMode)
+                    {
+                        Log.Info("[STASH-SYNC] InventoryMode.Stash resolved to " + resolved + " (fallback was " + _stashMode + ") — using the live value");
+                    }
+                    _stashMode = resolved;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Info("[STASH-SYNC] could not resolve InventoryMode.Stash (" + ex.Message + ") — using fallback " + _stashMode);
             }
         }
 
@@ -107,7 +140,7 @@ namespace BLTDeploymentCrashGuard.StashSync
                     return;
                 }
                 object modeValue = _inventoryModeField != null ? _inventoryModeField.GetValue(__instance) : null;
-                if (modeValue == null || Convert.ToInt32(modeValue) != StashMode)
+                if (modeValue == null || Convert.ToInt32(modeValue) != _stashMode)
                 {
                     return;
                 }
@@ -147,12 +180,18 @@ namespace BLTDeploymentCrashGuard.StashSync
         internal static StashPayloadData BuildPayload(string settlementId, ItemRoster roster)
         {
             var payload = new StashPayloadData { SettlementStringId = settlementId ?? "" };
+            int machineLocal = 0;
             for (int i = 0; i < roster.Count; i++)
             {
                 ItemRosterElement element = roster.GetElementCopyAtIndex(i);
                 ItemObject item = element.EquipmentElement.Item;
-                if (item == null || element.Amount == 0)
+                if (item == null || element.Amount <= 0)
                 {
+                    continue;
+                }
+                if (IsMachineLocal(item))
+                {
+                    machineLocal++; // inexpressible on the wire — the peer preserves its own
                     continue;
                 }
                 payload.Entries.Add(new StashPayloadData.Entry
@@ -163,7 +202,32 @@ namespace BLTDeploymentCrashGuard.StashSync
                     Count = element.Amount
                 });
             }
+            if (machineLocal > 0)
+            {
+                Log.Info("[STASH-SYNC] " + machineLocal + " machine-local (crafted/unregistered) stack(s) left out of the snapshot — they stay on this machine only");
+            }
             return payload;
+        }
+
+        /// <summary>An item that cannot be expressed on the wire: a player-crafted weapon
+        /// (its WeaponDesign exists only where it was crafted) or anything whose StringId
+        /// does not resolve back to the same object locally. Such stacks are excluded from
+        /// snapshots and preserved across applies — deleting them on either side would be
+        /// silent data loss.</summary>
+        private static bool IsMachineLocal(ItemObject item)
+        {
+            try
+            {
+                if (item.WeaponDesign != null)
+                {
+                    return true;
+                }
+                return !ReferenceEquals(MBObjectManager.Instance.GetObject<ItemObject>(item.StringId), item);
+            }
+            catch
+            {
+                return true; // unreadable = unexpressible — err toward preserving it
+            }
         }
 
         // ---- RECEIVE: a peer's stash state arrived -------------------------------------------
@@ -254,6 +318,19 @@ namespace BLTDeploymentCrashGuard.StashSync
                 return;
             }
             int before = stash.Count;
+            // Save this machine's wire-inexpressible stacks BEFORE clearing: the sender
+            // structurally cannot mention them, so their absence from the snapshot is not a
+            // withdrawal — wiping them would be silent data loss (crafted-sword scenario).
+            var preserved = new List<ItemRosterElement>();
+            for (int i = 0; i < stash.Count; i++)
+            {
+                ItemRosterElement element = stash.GetElementCopyAtIndex(i);
+                if (element.EquipmentElement.Item != null && element.Amount > 0 &&
+                    IsMachineLocal(element.EquipmentElement.Item))
+                {
+                    preserved.Add(element);
+                }
+            }
             stash.Clear();
             int applied = 0, skipped = 0;
             foreach (StashPayloadData.Entry entry in payload.Entries)
@@ -262,7 +339,7 @@ namespace BLTDeploymentCrashGuard.StashSync
                 if (item == null)
                 {
                     skipped++;
-                    Log.Info("[STASH-SYNC] cannot resolve item '" + entry.ItemStringId + "' on this machine (player-crafted?) — stack skipped");
+                    Log.Info("[STASH-SYNC] cannot resolve item '" + entry.ItemStringId + "' on this machine (peer-side mod/crafted item?) — stack skipped");
                     continue;
                 }
                 ItemModifier modifier = string.IsNullOrEmpty(entry.ModifierStringId)
@@ -270,9 +347,15 @@ namespace BLTDeploymentCrashGuard.StashSync
                 stash.AddToCounts(new EquipmentElement(item, modifier), entry.Count);
                 applied++;
             }
+            foreach (ItemRosterElement element in preserved)
+            {
+                stash.AddToCounts(element.EquipmentElement, element.Amount);
+            }
             SelfHealing.RecordFire("stash-sync");
             Log.Info("[STASH-SYNC] applied stash of " + payload.SettlementStringId + ": " + before +
-                     " -> " + applied + " stack(s)" + (skipped > 0 ? " (" + skipped + " unresolvable stack(s) SKIPPED)" : ""));
+                     " -> " + (applied + preserved.Count) + " stack(s)" +
+                     (preserved.Count > 0 ? " (" + preserved.Count + " machine-local stack(s) preserved)" : "") +
+                     (skipped > 0 ? " (" + skipped + " unresolvable stack(s) SKIPPED)" : ""));
             // The host relays an applied client update so every peer converges; the origin
             // client just re-applies its own identical state (idempotent — apply never sends).
             if (PeerDetection.ReadCoopStaticBool("IsHost") == true && PeerDetection.AnyRemotePeerConnected() == true)
@@ -288,12 +371,25 @@ namespace BLTDeploymentCrashGuard.StashSync
         {
             try
             {
-                object manager = AccessTools.Property(typeof(Campaign), "InventoryManager")?.GetValue(Campaign.Current);
-                object logic = manager != null ? AccessTools.Property(manager.GetType(), "InventoryLogic")?.GetValue(manager) : null;
+                PropertyInfo managerProp = AccessTools.Property(typeof(Campaign), "InventoryManager");
+                object manager = managerProp?.GetValue(Campaign.Current);
+                PropertyInfo logicProp = manager != null ? AccessTools.Property(manager.GetType(), "InventoryLogic") : null;
+                object logic = logicProp?.GetValue(manager);
+                if (managerProp == null || (manager != null && logicProp == null))
+                {
+                    // The reflection chain is broken (game update?) — the open-screen deferral
+                    // cannot engage. Say so ONCE instead of failing silently open forever.
+                    if (!_openCheckWarned)
+                    {
+                        _openCheckWarned = true;
+                        Log.Info("[STASH-SYNC] cannot detect an open inventory screen (Campaign.InventoryManager reflection broke — game update?) — peer updates apply immediately");
+                    }
+                    return false;
+                }
                 if (logic is InventoryLogic il && _inventoryModeField != null)
                 {
                     object mode = _inventoryModeField.GetValue(il);
-                    return mode != null && Convert.ToInt32(mode) == StashMode;
+                    return mode != null && Convert.ToInt32(mode) == _stashMode;
                 }
             }
             catch
@@ -358,10 +454,16 @@ namespace BLTDeploymentCrashGuard.StashSync
                     Entries =
                     {
                         new StashPayloadData.Entry { ItemStringId = "itm_a", ModifierStringId = "", Count = 3 },
-                        new StashPayloadData.Entry { ItemStringId = "itm_b", ModifierStringId = "mod_x", Count = -1 }
+                        new StashPayloadData.Entry { ItemStringId = "itm_b", ModifierStringId = "mod_x", Count = 1 }
                     }
                 };
                 byte[] framed = StashWireFraming.Frame(payload);
+                byte[] corrupt = StashWireFraming.Frame(new StashPayloadData
+                {
+                    SettlementStringId = "town_probe",
+                    Entries = { new StashPayloadData.Entry { ItemStringId = "itm_a", Count = -1 } }
+                });
+                bool rejectsCorrupt = StashWireFraming.TryUnframe(corrupt) == null;
                 byte[] birthFramed = PregnancySync.BirthWireFraming.Frame(new PregnancySync.BirthPayloadData { MotherStringId = "hero_probe" });
                 bool recognizedOnly = StashWireFraming.IsOurPacket(framed)
                     && !StashWireFraming.IsOurPacket(birthFramed)                       // a birth packet must not read as stash
@@ -373,10 +475,10 @@ namespace BLTDeploymentCrashGuard.StashSync
                     && parsed.Entries.Count == 2
                     && parsed.Entries[0].ValueEquals(payload.Entries[0])
                     && parsed.Entries[1].ValueEquals(payload.Entries[1]);
-                bool pass = recognizedOnly && fieldsMatch;
+                bool pass = recognizedOnly && fieldsMatch && rejectsCorrupt;
                 return SelfHealing.TestResult.Of("stash-sync.loopback", pass,
-                    pass ? "payload survived serialize->frame->receive-parse; birth/stash/BT packets discriminate cleanly"
-                         : "recognizedOnly=" + recognizedOnly + " fieldsMatch=" + fieldsMatch);
+                    pass ? "payload survived serialize->frame->receive-parse; birth/stash/BT packets discriminate; corrupt counts rejected"
+                         : "recognizedOnly=" + recognizedOnly + " fieldsMatch=" + fieldsMatch + " rejectsCorrupt=" + rejectsCorrupt);
             }
             catch (Exception ex)
             {
