@@ -1,5 +1,34 @@
 # Changelog
 
+## v1.2.8 — hideout sneak-in explained + command guarantee; co-op receive hooks re-resolved (2026-09-01)
+
+- **"Sneak in spawned me as a soldier and I cannot command my army"** — decoded from
+  the installed build: the hideout "Sneak in" is the new STEALTH ambush mission
+  (`HideoutAmbushMissionController`). It spawns YOUR hero (the control trace confirms
+  MainAgent is you) and re-dresses it in `Hero.StealthEquipment` with the enemy's
+  clothing colors — the "soldier" is your disguise; it starts in stealth with a
+  "locate the main camp" objective, troops held back and orders withheld by design;
+  being spotted too long ends the mission. Orders and your squad arrive when the
+  ambush is sprung (the stealth->battle transition selects the player order
+  controller). Not a bug. Added: an on-screen explainer the moment a sneak-in starts,
+  and a guarantee at every stealth->battle transition that the local player is the
+  team general and owns the order controller (repairs otherwise) — vanilla only
+  assumes it and BT's battle patches make that assumption fragile in co-op.
+- **Hot-reload finally engineered right** (field-failed again 2026-09-01 17:37 with the
+  v1.2.3 engine — the DIAG line said it all: "LoadFrom deduped to already-loaded
+  1.2.7.42191"): the LoadFrom context dedups simple-named assemblies by NAME only, so a
+  unique AssemblyVersion never mattered and the engine fell back to byte-load (the
+  0Harmony identity split). Now every payload BUILD compiles under a unique assembly
+  name (`BLTDeploymentCrashGuard.Payload.b<stamp>`) and is published under the fixed
+  file name; LoadFrom cannot collapse two names, and LoadFrom-context binding gives the
+  correct 0Harmony. The harness API the payload uses (Log/Diag/GuardConfig/SelfHealing)
+  is now public — `InternalsVisibleTo` is matched by exact name and could never cover a
+  stamped one. Requires one game restart (the loaded harness must be 1.2.8+); every
+  reload after that is clean.
+- **Co-op receive hooks re-resolved**: BannerlordTogether moved its network classes to
+  `BannerlordTogether.Network.*`; pregnancy-sync and stash-sync now look there first
+  (the 2026-09-01 health line showed both "not resolved").
+
 ## v1.2.7 — shared-save host handoff: you always load as YOUR hero (2026-08-30)
 
 - **Field report: "when Noah saves as host and I load our co-op, it loads me as his hero"**

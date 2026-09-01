@@ -6,7 +6,22 @@
     <TargetFramework>net472</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
-    <AssemblyName>BLTDeploymentCrashGuard.Payload</AssemblyName>
+    <!-- The FILE is always BLTDeploymentCrashGuard.Payload.dll (TargetName), but the assembly's
+         internal NAME is stamped per build. Reason (field-proven 2026-09-01 17:37): the hot-reload
+         engine loads every generation via Assembly.LoadFrom, and the LoadFrom context dedups
+         simple-named assemblies by NAME ONLY — a dropped build with a new version but the same
+         name came back as the already-loaded generation ("LoadFrom deduped to already-loaded
+         1.2.7.42191"). A unique name per build is the only identity LoadFrom cannot collapse,
+         and LoadFrom-context binding is required for the payload to bind the harness's own
+         0Harmony copy (see HotReload.cs). Nothing depends on the internal name: the harness
+         finds PayloadEntry by type name, tests link source files, SubModule.xml lists only
+         the harness. -->
+    <!-- csc names the assembly after its OUTPUT FILE, so the stamp must be the compile-time
+         output name; the PublishFixedPayloadName target below copies it to the fixed file name
+         (the internal identity keeps the stamp). -->
+    <PayloadBuildStamp>$([System.DateTime]::UtcNow.ToString("yyMMddHHmmss"))</PayloadBuildStamp>
+    <AssemblyName>BLTDeploymentCrashGuard.Payload.b$(PayloadBuildStamp)</AssemblyName>
+    <PayloadFixedFileName>BLTDeploymentCrashGuard.Payload.dll</PayloadFixedFileName>
     <RootNamespace>BLTDeploymentCrashGuard</RootNamespace>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>none</DebugType>
@@ -73,5 +88,12 @@
       <Private>false</Private>
     </Reference>
   </ItemGroup>
+
+  <!-- Publish the stamped-name build under the fixed file name the harness/installer expect,
+       and drop the stamped-name copy so bin/ holds exactly one payload. -->
+  <Target Name="PublishFixedPayloadName" AfterTargets="Build">
+    <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(OutDir)$(PayloadFixedFileName)" />
+    <Delete Files="$(TargetPath)" />
+  </Target>
 
 </Project>

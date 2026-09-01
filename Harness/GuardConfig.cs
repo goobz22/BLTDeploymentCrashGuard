@@ -9,12 +9,12 @@ namespace BLTDeploymentCrashGuard
     /// regex-based key lookup (no JSON dependency), cached per session. On first read
     /// it writes a fully-documented default file so every knob is discoverable.
     /// </summary>
-    internal static class GuardConfig
+    public static class GuardConfig
     {
         private static string _text;
         private static bool _loaded;
 
-        internal static string Path
+        public static string Path
         {
             get
             {
@@ -47,7 +47,7 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
-        internal static bool Bool(string key, bool fallback)
+        public static bool Bool(string key, bool fallback)
         {
             try
             {
@@ -63,7 +63,7 @@ namespace BLTDeploymentCrashGuard
             return fallback;
         }
 
-        internal static string String(string key, string fallback)
+        public static string String(string key, string fallback)
         {
             try
             {

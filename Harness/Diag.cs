@@ -10,11 +10,11 @@ namespace BLTDeploymentCrashGuard
     /// generation (ResetHealth, called by the reload engine before each payload Apply) so a
     /// reload doesn't duplicate entries.
     /// </summary>
-    internal static class Diag
+    public static class Diag
     {
         /// <summary>Single source of truth is &lt;Version&gt; in Directory.Build.props — MSBuild
         /// stamps it into the assembly identity, and this reads it back. Never hardcode.</summary>
-        internal static readonly string Version = ResolveVersion();
+        public static readonly string Version = ResolveVersion();
 
         private static string ResolveVersion()
         {
@@ -29,7 +29,7 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
-        internal static readonly string SessionId = GenerateSessionId();
+        public static readonly string SessionId = GenerateSessionId();
 
         private static readonly List<string> _healthy = new List<string>();
         private static readonly List<string> _degraded = new List<string>();
@@ -42,7 +42,7 @@ namespace BLTDeploymentCrashGuard
             return (Environment.TickCount ^ (pid << 8)).ToString("x8");
         }
 
-        internal static string BuildTime()
+        public static string BuildTime()
         {
             try
             {
@@ -55,20 +55,20 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
-        internal static string Banner()
+        public static string Banner()
         {
             return "===== BLT Deployment Crash Guard v" + Version + " (harness build " + BuildTime() + ") session=" + SessionId + " =====";
         }
 
         /// <summary>Clear per-generation health so a reload starts fresh.</summary>
-        internal static void ResetHealth()
+        public static void ResetHealth()
         {
             _healthy.Clear();
             _degraded.Clear();
             _criticalMissing = false;
         }
 
-        internal static void Report(string component, bool ok, string detail, bool critical = false)
+        public static void Report(string component, bool ok, string detail, bool critical = false)
         {
             if (ok)
             {
@@ -84,7 +84,7 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
-        internal static string HealthSummary()
+        public static string HealthSummary()
         {
             string summary = "MOD HEALTH: " + _healthy.Count + " active";
             if (_degraded.Count > 0)

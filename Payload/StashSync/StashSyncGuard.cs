@@ -117,7 +117,7 @@ namespace BLTDeploymentCrashGuard.StashSync
         private static bool HookReceive(Harmony harmony)
         {
             bool any = false;
-            foreach (string typeName in new[] { "BannerlordTogether.CoopNetworkBase", "BannerlordTogether.CoopServer" })
+            foreach (string typeName in new[] { "BannerlordTogether.Network.CoopNetworkBase", "BannerlordTogether.Network.CoopServer", "BannerlordTogether.CoopNetworkBase", "BannerlordTogether.CoopServer" })
             {
                 Type type = AccessTools.TypeByName(typeName);
                 MethodInfo method = type != null ? AccessTools.Method(type, "ShouldAcceptIncomingPacket") : null;

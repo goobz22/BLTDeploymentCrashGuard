@@ -55,6 +55,7 @@ namespace BLTDeploymentCrashGuard
                 CivilianGateCloseFix.Apply(harmony);
                 SiegeGatePromptFix.Apply(harmony);
                 CoopHeroIdentityLock.Apply();
+                StealthHideoutAdvisor.Apply(harmony);
                 JoinSyncPauseEscape.Apply(harmony);
                 PregnancySync.PregnancySyncGuard.Apply(harmony);
                 StashSync.StashSyncGuard.Apply(harmony);

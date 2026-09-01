@@ -7,7 +7,7 @@ The mod is split into two assemblies:
 - **Payload** (`Payload/` → `BLTDeploymentCrashGuard.Payload.dll`) — all guards/fixes/tracers.
   Hot-reloadable. This is where ~all iteration happens.
 
-Every generation loads via `Assembly.LoadFrom` on a per-generation shadow copy (LoadFrom-context binding is required — byte-loading binds 0Harmony to the wrong copy via app-base probing); each payload build carries a unique AssemblyVersion revision so LoadFrom never dedups to a previous generation. Fresh statics and a per-generation Harmony
+Every generation loads via `Assembly.LoadFrom` on a per-generation shadow copy (LoadFrom-context binding is required — byte-loading binds 0Harmony to the wrong copy via app-base probing); each payload build compiles under a unique assembly NAME (`BLTDeploymentCrashGuard.Payload.b<stamp>`, published under the fixed file name) because the LoadFrom context dedups simple-named assemblies by name only — a unique version alone is collapsed (field-proven 2026-09-01). Fresh statics and a per-generation Harmony
 owner id (`bltogether.crashguard.gen{N}`); the new generation is applied first, then the previous
 generation is `UnpatchAll`'d — a failed reload keeps the previous generation, so the game is never
 left unpatched.

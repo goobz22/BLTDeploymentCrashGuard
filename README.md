@@ -178,18 +178,26 @@ player, and the co-op sync features need it on both ends.
     maintains itself (it also follows death-succession to your heir). So the two of you
     can pass hosting back and forth on one save and each always resumes your own hero.
 
+21. **Hideout sneak-in: explained on screen, command guaranteed** — the new stealth
+    hideout ambush dresses your hero in your **stealth outfit** (enemy colors) and withholds
+    your troops and orders until you locate the main camp and spring the ambush — by design,
+    but it looks like "I spawned as a soldier and can't command". The mod now says so on
+    screen when a sneak-in starts, and at the stealth→battle transition guarantees you are
+    the team general and own the order controller (vanilla assumes it; co-op battle
+    patches make that fragile).
+
 ### Diagnostics & robustness
 
-21. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
+22. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
     of which fixes resolved, and (with `selfTest`) a decision-logic self-test per fix. If a core fix
     fails to resolve, BannerlordTogether was likely updated and this mod needs a matching update.
 
-22. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
+23. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
     launches with caller stacks) and command control (who becomes player-controlled, order/formation
     ownership, a full control map at deployment finish). Verbose tracers are off by default
     (`tracing`) and rotate at 8 MB.
 
-23. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
+24. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
     mod or BannerlordTogether.
 
 ## Sharing your log with your co-op partner

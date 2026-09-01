@@ -23,13 +23,13 @@ namespace BLTDeploymentCrashGuard
     /// PASS/FAIL — runnable proof the suppression/probe logic is correct (matches the bug
     /// signature, rejects unrelated input), independent of the live game hitting the path.
     /// </summary>
-    internal static class SelfHealing
+    public static class SelfHealing
     {
         private static readonly Dictionary<string, int> Fires = new Dictionary<string, int>(StringComparer.Ordinal);
         private static readonly List<Func<TestResult>> Tests = new List<Func<TestResult>>();
         private static readonly object Sync = new object();
 
-        internal struct TestResult
+        public struct TestResult
         {
             public string Name;
             public bool Pass;
@@ -41,7 +41,7 @@ namespace BLTDeploymentCrashGuard
         }
 
         /// <summary>A guard suppressed a crash / corrected state once. Cheap; call every fire.</summary>
-        internal static void RecordFire(string guard)
+        public static void RecordFire(string guard)
         {
             try
             {
@@ -56,7 +56,7 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
-        internal static string FireSummary()
+        public static string FireSummary()
         {
             try
             {
@@ -80,7 +80,7 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
-        internal static void RegisterTest(Func<TestResult> test)
+        public static void RegisterTest(Func<TestResult> test)
         {
             try
             {
@@ -94,7 +94,7 @@ namespace BLTDeploymentCrashGuard
         /// <summary>Cleared by the reload engine before each payload generation applies, so
         /// reloads don't accumulate duplicate self-tests (fire counts are kept — they persist
         /// across reloads to prove shared state survived).</summary>
-        internal static void ResetTests()
+        public static void ResetTests()
         {
             try
             {
@@ -107,7 +107,7 @@ namespace BLTDeploymentCrashGuard
 
         /// <summary>Run all registered decision-logic self-tests; log each and a summary.
         /// Called at startup only when guardconfig selfTest=true.</summary>
-        internal static void RunSelfTests()
+        public static void RunSelfTests()
         {
             int pass = 0, fail = 0;
             Log.Info("[SELFTEST] running " + Tests.Count + " guard decision-logic test(s)…");

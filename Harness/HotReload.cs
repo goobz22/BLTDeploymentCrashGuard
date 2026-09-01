@@ -136,9 +136,9 @@ namespace BLTDeploymentCrashGuard
             try
             {
                 string simpleName = new AssemblyName(args.Name).Name;
-                if (simpleName == "BLTDeploymentCrashGuard.Payload")
+                if (simpleName.StartsWith("BLTDeploymentCrashGuard.Payload", StringComparison.Ordinal)) // per-build stamped names (Payload.b<stamp>)
                 {
-                    return null; // generations load by bytes only — never redirect the payload name
+                    return null; // never redirect a payload name — each generation is its own stamped assembly
                 }
 
                 // The two assemblies whose TYPES cross the harness/payload boundary (IPayload.Apply
@@ -211,7 +211,7 @@ namespace BLTDeploymentCrashGuard
                         continue;
                     }
                     string name = loaded.GetName().Name;
-                    if (name == "BLTDeploymentCrashGuard" || name == "BLTDeploymentCrashGuard.Payload" || name == "0Harmony")
+                    if (name == "BLTDeploymentCrashGuard" || name.StartsWith("BLTDeploymentCrashGuard.Payload", StringComparison.Ordinal) || name == "0Harmony")
                     {
                         Log.Info("[HOTRELOAD][DIAG] loaded: " + loaded.FullName + " @ " + SafeLocation(loaded) +
                                  (ReferenceEquals(loaded, harness) ? " (THIS harness)" : "") +
@@ -287,9 +287,10 @@ namespace BLTDeploymentCrashGuard
                 //    the module-loaded 0Harmony 2.3.6.0 the harness itself is bound to.
                 // LoadFrom dedups identical assembly identities (same name+version returns the
                 // already-loaded generation — stale code, stale statics), so the payload build
-                // stamps a unique AssemblyVersion revision per build (csproj: Deterministic
-                // false + wildcard version). A dedup is detected by Location mismatch and falls
-                // back to byte-load with a warning instead of silently re-applying old code.
+                // stamps a unique assembly NAME per build (csproj: compile as Payload.b<stamp>, publish
+                // under the fixed file name) — field-proven 2026-09-01 17:37 that a unique VERSION is
+                // not enough: LoadFrom dedups simple-named assemblies by name only. A dedup is
+                // detected by Location mismatch and falls back to byte-load with a warning.
                 if (!_useRoslyn && File.Exists(_prebuiltPath))
                 {
                     try
@@ -303,7 +304,12 @@ namespace BLTDeploymentCrashGuard
                         {
                             CleanStaleShadows();
                         }
-                        string shadowPath = _prebuiltPath + "." + System.Diagnostics.Process.GetCurrentProcess().Id + ".gen" + (_gen + 1);
+                        // The shadow path must be unique per ATTEMPT, not per generation: LoadFrom
+                        // caches path -> assembly, so re-using ".genN" after a failed attempt returns
+                        // the FIRST attempt's result without reading the new file (field-proven
+                        // 2026-09-01 17:43: a renamed build still "deduped" through the cached path).
+                        string shadowPath = _prebuiltPath + "." + System.Diagnostics.Process.GetCurrentProcess().Id +
+                                            ".gen" + (_gen + 1) + "." + DateTime.UtcNow.Ticks.ToString("x");
                         File.Copy(_prebuiltPath, shadowPath, overwrite: true);
                         Assembly candidate = Assembly.LoadFrom(shadowPath);
                         if (string.Equals(candidate.Location, Path.GetFullPath(shadowPath), StringComparison.OrdinalIgnoreCase))

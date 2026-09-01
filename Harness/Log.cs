@@ -8,7 +8,7 @@ namespace BLTDeploymentCrashGuard
     /// <summary>Stable file logger in the harness (survives payload reloads). The role tag is
     /// SET by the payload (which owns peer detection) via SetRoleTag, so the harness has no
     /// dependency on payload types.</summary>
-    internal static class Log
+    public static class Log
     {
         private const long MaxLogBytes = 8 * 1024 * 1024; // roll over past 8 MB
 
@@ -17,18 +17,18 @@ namespace BLTDeploymentCrashGuard
         private static string _roleTag = "?";
         private static int _writesSinceRotateCheck;
 
-        internal static string CurrentPath
+        public static string CurrentPath
         {
             get { return LogPath; }
         }
 
-        internal static string RoleTag
+        public static string RoleTag
         {
             get { return _roleTag; }
         }
 
         /// <summary>Called by the payload's tick with the computed H/C/S role.</summary>
-        internal static void SetRoleTag(string tag)
+        public static void SetRoleTag(string tag)
         {
             if (!string.IsNullOrEmpty(tag))
             {
@@ -57,7 +57,7 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
-        internal static void Info(string message)
+        public static void Info(string message)
         {
             try
             {
@@ -103,7 +103,7 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
-        internal static void Screen(string message)
+        public static void Screen(string message)
         {
             try
             {
