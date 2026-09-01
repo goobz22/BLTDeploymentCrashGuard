@@ -196,6 +196,14 @@ player, and the co-op sync features need it on both ends.
     launches with caller stacks) and command control (who becomes player-controlled, order/formation
     ownership, a full control map at deployment finish). Verbose tracers are off by default
     (`tracing`) and rotate at 8 MB.
+    Every fix logs under its own tag, so you can grep for what happened: `[AI-GUARD]`
+    party-AI, `[CONVO-CAM]` conversation camera, `[INCIDENT-GUARD]` map incidents,
+    `[TICK-GUARD]` background-tick throttle, `[GATE]` gate prompts, `[IDENTITY]` player
+    identity / shared-save hero, `[STASH-SYNC]`, `[PREG]` / `[PREG-SYNC]` conception and
+    births, `[STEALTH]` hideout sneak-in, `[BATTLE-MODE]`, `[HOTRELOAD]`. Each launch ends
+    its startup with `MOD HEALTH:` (which fixes resolved) and, with `selfTest`, a
+    `[SELFTEST]` PASS/FAIL per fix; `GUARD ACTIVITY:` every two minutes lists which guards
+    actually fired — a guard that never fires is a bug that never happened.
 
 24. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
     mod or BannerlordTogether.
@@ -238,6 +246,7 @@ documented inline.
 | `noSickness` | `true` | block the local player's hero dying of old-age illness (cures it instead) |
 | `pregnancySync` | `true` | **co-op** — replicate host births to clients so both games share the same child |
 | `stashSync` | `true` | **co-op** — settlement stashes stay identical on every machine (shared clan stash) |
+| `myHero` | `""` | **shared-save co-op** — this machine's hero by name; on load you are switched back to it (needed once per existing campaign; new campaigns record automatically) |
 | `tracing` | `false` | verbose diagnostic tracers — off for play, on for troubleshooting |
 | `selfTest` | `false` | run each fix's decision-logic self-test at startup and log PASS/FAIL |
 | `logStreamBin` | `""` | a filebin.net bin id; when set, the log auto-uploads for remote debugging |
@@ -254,7 +263,8 @@ The mod ships as two assemblies (see `HOTRELOAD.md`):
 - **Payload** (`BLTDeploymentCrashGuard.Payload.dll`) — all guards, fixes, and tracers.
 
 `SubModule.xml` points at the harness, which loads the payload. In a dev build with hot-reload
-enabled, the payload can be rebuilt and reloaded with no game restart.
+enabled, the payload can be rebuilt and reloaded with no game restart (each payload build
+carries a unique assembly name so the runtime never hands back a previous generation).
 
 ## Build from source
 
@@ -274,8 +284,65 @@ wire formats (`tests\BirthPayloadTest`, `tests\StashPayloadTest`), e.g.:
 cd tests\BirthPayloadTest && dotnet build -c Release && bin\Release\BirthPayloadTest.exe
 ```
 
+## Community-reported BannerlordTogether crashes vs. this mod (audit 2026-09-01)
+
+All 66 open reports on BannerlordTogether's Nexus bug tracker (v0.3–v0.5.0.1) were read in full
+— none contains an exception or stack trace (the author triages on Discord), so the mapping is by
+scenario. BT's own changelog was checked for upstream fixes.
+
+**Covered by this mod:**
+
+| Reported | Fix here |
+|---|---|
+| Crash when joining an army / when an army joins your battle / attacking with an army (5 reports) | #6 party-AI guards, #18 freeze guard, tracers on the encounter chokepoints |
+| "There's another me" — a clone of my character with maxed stats receiving my income (client) | #20 shared-save identity lock (loading the save as the other hero) |
+| Client can't control troops / spawns as AI / "have his character as AI" | #12 player-identity guard |
+| Marriage didn't work / second player can't marry / duplicate wife+child in a shared clan | #10 marriage fixes; #15 birth sync reconstructs the same child on both machines. The 0.5.0.1 message *"Marriage could not be safely completed by host-owned sync"* is BT's host **persistence commit** failing after the marriage itself validated (decompiled: `TryCommitOwnerMarriageCompletionPersistence`); #10 keeps your dowry gold safe when it happens, and the cause is printed on the host in `bt-sync-host.txt` as `[MARRIAGE] CompletionApply … reason=` |
+| Crash opening the clan screen after becoming a mercenary | #4 clan-screen crash guard |
+| World freeze while the host is in a tournament and the city gets besieged; freezes during a siege | #18 background-tick freeze guard |
+| Crash on winning a battle next to allies / client crash when a battle ends | #1 deployment guards + #12; BT itself fixed the spectator/duplicate-party cases in 0.4.1.4 |
+| Client visits a settlement stash / crafted items lost on trade or reload | #16 shared stash; crafted items are the documented machine-local limitation |
+| Conversation crash mid-marriage; dead companion returning from a quest crashes | #3, #2 |
+
+**Fixed upstream by BannerlordTogether (per its changelog):** client invincible in battle (0.3.1);
+spectator crash after a battle, duplicate-battle-party mid-battle client crash, native loading-window
+crash, siege defenders on the wrong side (0.4.1.4); kingdom-screen, fief, crafting-daily-order and
+diplomacy-UI crashes (0.5).
+
+**Still open upstream — no root cause reachable from this mod without a live repro** (tracing
+captures them; report with `collect-diagnostics.cmd`):
+
+- Co-op **Assault / Friendly Battle** freezes the second player ~5 s in (3 reports, 0.4.1.3–0.4.1.6;
+  BT calls the mode experimental).
+- **Co-op siege launch**: "launch attack" with both players in the siege camp errors or crashes;
+  client removed from the siege start; client group counts differ from the host (4 reports).
+- Joining while the host is **inside a town** (BT refuses: "cannot transfer the save during a
+  player encounter") — a BT design limit; leave the town first.
+- Client-side gaps that are not crashes: no renown from co-op battles, enemy factions ignore the
+  client, client caravans earn nothing, client can't upgrade to cavalry despite owning mounts,
+  skills not applied in battle, troop banners/firing animations missing for the client, "clan was
+  destroyed" when the other player enters a town, castle ownership shown swapped after a load.
+- Play-as-soldier: picking up a rock or weapon in a siege ejects the spectator and zeroes the unit.
+
 ## Known co-op issues still being tracked
 
-See `UPSTREAM_BUG_REPORT.md`. Outstanding items include dedicated-server role dropping to
-player-host on an in-game save load, two clients forming separate battles on a dedicated server,
-and siege roster truncation — all require a live two-player session to reproduce and fix.
+See `UPSTREAM_BUG_REPORT.md` for the evidence behind each. Items this mod cannot fully fix
+from the outside (each has a workaround or a guard here, and a BannerlordTogether-side fix on
+record):
+
+- **Client bootstrap abort** — the action-cache audit false-negative (fix #9 primes it; BT
+  should regenerate the cache instead of aborting).
+- **Background campaign tick has no time budget** — throttled by #18; BT should bound the
+  per-frame cost.
+- **Army-siege attach gap** — a peer's party rides a besieging army without joining the
+  besieger camp, so every `PlayerSiege`-derived path reads null on that peer (#8 repairs the
+  incident case; `[INCIDENT-GUARD] REPAIRED` lines are the field evidence).
+- **Map incidents are not synced** — an incident's world effects apply only on the peer that
+  confirmed it.
+- **No settlement-stash sync in BT** — #16 provides it; player-**crafted** items cannot be
+  expressed on the wire (each machine keeps its own).
+- **Shared-save identity** — BT's identity registry only fixes the joining client; #20 fixes
+  the loading host.
+- **Dedicated server**: role drops to player-host on an in-game save load; two clients form
+  separate battles (per-client-ghost encounters); siege roster truncation — all need a live
+  multi-player session to reproduce further.

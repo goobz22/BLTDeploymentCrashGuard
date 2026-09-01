@@ -174,3 +174,17 @@ implementation could reuse its warehouse packet machinery nearly verbatim. Note 
 implementation: player-CRAFTED items cannot be resolved by StringId on the other machine —
 crafted-weapon replication needs WeaponDesign serialization (our sync keeps those stacks machine-local instead of syncing
 loudly).
+
+---
+
+## Corroboration from the public bug tracker (Nexus, audited 2026-09-01)
+
+The 66 open Nexus reports contain no stack traces, but several corroborate items above by
+scenario: army-join crashes (#1060091, #1098818, #1098717), the shared-save identity clone
+(#1106238 "There's another me"), marriage failures (#1100305, #1103471, #1121344 "Marriage could
+not be safely completed by host-owned sync"), siege-launch failures (#1089833, #1121970, #1090974,
+#1109683), and the client end-of-battle crash (#1095736, 3 confirmations on 0.4.1.2). Reports this
+companion mod cannot address and BT should own: Co-op Assault second-player freeze (#1100453,
+#1103508, #1106535), client renown/faction-aggro/caravan/cavalry-upgrade gaps (#1089367,
+#1089371, #1089874, #1100098), "clan was destroyed" on town entry (#1094061), soldier-mode rock
+pickup ejection (#1099722).
