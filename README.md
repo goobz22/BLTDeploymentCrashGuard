@@ -186,13 +186,23 @@ player, and the co-op sync features need it on both ends.
     the team general and own the order controller (vanilla assumes it; co-op battle
     patches make that fragile).
 
+22. **Troops on party creation** *(`partyTroopsOnCreate`, default on)* — vanilla creates a new
+    clan party with the **leader only** and silently expects you to find it on the map to give
+    it troops. Now the troop exchange opens the moment the party is created (vanilla's own
+    manage-troops screen, on the map). Solo and co-op host: immediate; co-op client: waits a
+    few seconds for BannerlordTogether to confirm the party. Also explained: the leader popup
+    greys out clan members who are prisoners, children, governors, already in or leading
+    another party, at sea, or whose gold plus yours is under the party-creation threshold; the
+    button is disabled with no free war-party slot (clan tier) or not enough gold — every
+    reason is logged under `[CLAN-PARTY]`.
+
 ### Diagnostics & robustness
 
-22. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
+23. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
     of which fixes resolved, and (with `selfTest`) a decision-logic self-test per fix. If a core fix
     fails to resolve, BannerlordTogether was likely updated and this mod needs a matching update.
 
-23. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
+24. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
     launches with caller stacks) and command control (who becomes player-controlled, order/formation
     ownership, a full control map at deployment finish). Verbose tracers are off by default
     (`tracing`) and rotate at 8 MB.
@@ -200,12 +210,12 @@ player, and the co-op sync features need it on both ends.
     party-AI, `[CONVO-CAM]` conversation camera, `[INCIDENT-GUARD]` map incidents,
     `[TICK-GUARD]` background-tick throttle, `[GATE]` gate prompts, `[IDENTITY]` player
     identity / shared-save hero, `[STASH-SYNC]`, `[PREG]` / `[PREG-SYNC]` conception and
-    births, `[STEALTH]` hideout sneak-in, `[BATTLE-MODE]`, `[HOTRELOAD]`. Each launch ends
+    births, `[STEALTH]` hideout sneak-in, `[CLAN-PARTY]` create-party leader list and greyed-out reasons, `[BATTLE-MODE]`, `[HOTRELOAD]`. Each launch ends
     its startup with `MOD HEALTH:` (which fixes resolved) and, with `selfTest`, a
     `[SELFTEST]` PASS/FAIL per fix; `GUARD ACTIVITY:` every two minutes lists which guards
     actually fired — a guard that never fires is a bug that never happened.
 
-24. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
+25. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
     mod or BannerlordTogether.
 
 ## Sharing your log with your co-op partner
@@ -246,6 +256,7 @@ documented inline.
 | `noSickness` | `true` | block the local player's hero dying of old-age illness (cures it instead) |
 | `pregnancySync` | `true` | **co-op** — replicate host births to clients so both games share the same child |
 | `stashSync` | `true` | **co-op** — settlement stashes stay identical on every machine (shared clan stash) |
+| `partyTroopsOnCreate` | `true` | open the troop exchange with a new clan party the moment it is created |
 | `myHero` | `""` | **shared-save co-op** — this machine's hero by name; on load you are switched back to it (needed once per existing campaign; new campaigns record automatically) |
 | `tracing` | `false` | verbose diagnostic tracers — off for play, on for troubleshooting |
 | `selfTest` | `false` | run each fix's decision-logic self-test at startup and log PASS/FAIL |

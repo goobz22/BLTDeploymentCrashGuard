@@ -95,6 +95,8 @@ namespace BLTDeploymentCrashGuard
 
   ""stashSync"": true,          ""_stashSync"": ""CO-OP: keep settlement stashes identical on every machine — closing a stash screen broadcasts that stash's contents to the other players (same-clan players share one stash, like the workshop warehouse BT already syncs). Inert outside a BT session"",
 
+  ""partyTroopsOnCreate"": true, ""_partyTroopsOnCreate"": ""when you create a new clan party, open the troop exchange with it immediately (vanilla creates the party with the leader only and expects you to find it on the map). Works solo and as co-op host; as a co-op client it waits for BannerlordTogether to confirm the party first"",
+
   ""myHero"": """",              ""_myHero"": ""SHARED-SAVE co-op: this machine's hero, by name (case-insensitive). When you load a shared save that was last played as the OTHER player's hero, the game switches you back to this hero. Only needed once per existing campaign — new campaigns and later sessions are recorded automatically (hero-identity.json)"",
 
   ""tracing"": false,           ""_tracing"": ""true enables verbose diagnostic tracers (mission/menu/control/time/coop-battle/role). Off for normal play; on for troubleshooting"",

@@ -1,5 +1,26 @@
 # Changelog
 
+## v1.2.9 — troops on party creation; "Create New Party" explained (2026-09-01)
+
+- **"I made a party and it didn't let me add anyone" / "it should happen on creation"** —
+  decoded from the installed build's IL (`ClanPartiesVM`): the leader popup greys a card
+  out when the hero is a prisoner/released/fugitive, a child, in someone else's party,
+  already leading a party, a governor, at sea, or when the hero's gold plus yours is under
+  the finance model's party threshold; the button is disabled for prisoner / no free
+  war-party slot (clan tier) / no available hero / not enough gold. On confirm vanilla
+  creates the party with the LEADER ONLY and expects you to find it on the map.
+  BannerlordTogether does not touch this path.
+- **Enhancement (`partyTroopsOnCreate`, default on)**: the moment the party is created, the
+  troop exchange opens against it — vanilla's own manage-troops party screen
+  (`PartyScreenHelper.OpenScreenAsManageTroops`, the call the "manage garrison" menu and
+  the clan-member conversation use), deferred one tick and with the clan screen popped so
+  it sits on the map like those flows. On a co-op client the party is provisional until BT's
+  host confirms it, so the screen waits for the party instance to settle (3 s, 15 s timeout
+  with an on-screen fallback note).
+- New `[CLAN-PARTY]` log lines: the button's disabled reason and every candidate with its
+  greyed-out reason whenever the popup opens (the vanilla iterator is enumerated for
+  logging only — the commit review caught that replacing it would have crashed the popup).
+
 ## v1.2.8 — hideout sneak-in explained + command guarantee; co-op receive hooks re-resolved (2026-09-01)
 
 - **"Sneak in spawned me as a soldier and I cannot command my army"** — decoded from

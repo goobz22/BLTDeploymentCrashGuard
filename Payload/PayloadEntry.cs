@@ -56,6 +56,7 @@ namespace BLTDeploymentCrashGuard
                 SiegeGatePromptFix.Apply(harmony);
                 CoopHeroIdentityLock.Apply();
                 StealthHideoutAdvisor.Apply(harmony);
+                ClanPartyCreationAdvisor.Apply(harmony);
                 JoinSyncPauseEscape.Apply(harmony);
                 PregnancySync.PregnancySyncGuard.Apply(harmony);
                 StashSync.StashSyncGuard.Apply(harmony);
@@ -135,6 +136,7 @@ namespace BLTDeploymentCrashGuard
             PregnancySync.PregnancySyncGuard.Tick(); // drain queued client birth reconstructions
             StashSync.StashSyncGuard.Tick(); // drain queued peer stash updates
             CoopHeroIdentityLock.Tick(); // claim this machine's hero once the map is up
+            ClanPartyCreationAdvisor.Tick(); // open the troop exchange for a just-created party
             ReportGuardActivity();
         }
 
