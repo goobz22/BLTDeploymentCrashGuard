@@ -196,26 +196,46 @@ player, and the co-op sync features need it on both ends.
     button is disabled with no free war-party slot (clan tier) or not enough gold — every
     reason is logged under `[CLAN-PARTY]`.
 
+23. **Siege defense: you command everything, and placed formations hold** *(`siegeCommandAll`,
+    default on)* — field report: "my party runs off to guard the castle instead of staying
+    where I set them down; when the walls are breached they leave and get killed." Decoded
+    from the installed build's IL: in a **siege** vanilla's default formation orders end with
+    **AI control ON** (`BattleDeploymentHandler.SetDefaultFormationOrders`, run by the player
+    side's auto-deploy), and an AI-controlled formation belongs to the castle-defence tactic,
+    which marches it to walls / gate / keep, re-plans on a breach, and re-shuffles troops
+    between formations (`TransferUnits` / `Split`). A wiped-and-refilled formation goes back to
+    the AI too, and inside another lord's army the game demotes you to a sergeant even in your
+    own castle. Now, when your team defends a siege: every regular formation is yours the
+    moment deployment ends (AI-held ones get a MOVE order to where they stand), nothing hands
+    them back to the AI afterwards, and the tactic never moves troops into or out of a
+    formation you command. Defending a settlement your clan owns makes you the general.
+    Deliberate exceptions keep working: **F6 delegate command**, the vanilla hand-off when you
+    fall, and BannerlordTogether's player-down releases on the host. Deployment itself is
+    untouched (vanilla's auto-deploy still positions formations first). Solo and co-op host;
+    on a co-op client the host's command assignment stays authoritative (host the session to
+    command your castle — see #20). Log tag `[SIEGE-CMD]`.
+
 ### Diagnostics & robustness
 
-23. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
+24. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
     of which fixes resolved, and (with `selfTest`) a decision-logic self-test per fix. If a core fix
     fails to resolve, BannerlordTogether was likely updated and this mod needs a matching update.
 
-24. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
+25. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
     launches with caller stacks) and command control (who becomes player-controlled, order/formation
     ownership, a full control map at deployment finish). Verbose tracers are off by default
     (`tracing`) and rotate at 8 MB.
     Every fix logs under its own tag, so you can grep for what happened: `[AI-GUARD]`
     party-AI, `[CONVO-CAM]` conversation camera, `[INCIDENT-GUARD]` map incidents,
-    `[TICK-GUARD]` background-tick throttle, `[GATE]` gate prompts, `[IDENTITY]` player
+    `[TICK-GUARD]` background-tick throttle, `[GATE]` gate prompts, `[SIEGE-CMD]` siege-defense
+    command (formations taken back from the AI, refused hand-offs, stopped troop shuffles), `[IDENTITY]` player
     identity / shared-save hero, `[STASH-SYNC]`, `[PREG]` / `[PREG-SYNC]` conception and
     births, `[STEALTH]` hideout sneak-in, `[CLAN-PARTY]` create-party leader list and greyed-out reasons, `[BATTLE-MODE]`, `[HOTRELOAD]`. Each launch ends
     its startup with `MOD HEALTH:` (which fixes resolved) and, with `selfTest`, a
     `[SELFTEST]` PASS/FAIL per fix; `GUARD ACTIVITY:` every two minutes lists which guards
     actually fired — a guard that never fires is a bug that never happened.
 
-25. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
+26. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
     mod or BannerlordTogether.
 
 ## Sharing your log with your co-op partner
@@ -257,6 +277,7 @@ documented inline.
 | `pregnancySync` | `true` | **co-op** — replicate host births to clients so both games share the same child |
 | `stashSync` | `true` | **co-op** — settlement stashes stay identical on every machine (shared clan stash) |
 | `partyTroopsOnCreate` | `true` | open the troop exchange with a new clan party the moment it is created |
+| `siegeCommandAll` | `true` | **siege defense** — you command every formation and placed formations hold (no AI hand-off after deployment, no tactic troop shuffles; owner of the settlement = general). F6 still delegates on purpose |
 | `myHero` | `""` | **shared-save co-op** — this machine's hero by name; on load you are switched back to it (needed once per existing campaign; new campaigns record automatically) |
 | `tracing` | `false` | verbose diagnostic tracers — off for play, on for troubleshooting |
 | `selfTest` | `false` | run each fix's decision-logic self-test at startup and log PASS/FAIL |
@@ -350,6 +371,11 @@ record):
   incident case; `[INCIDENT-GUARD] REPAIRED` lines are the field evidence).
 - **Map incidents are not synced** — an incident's world effects apply only on the peer that
   confirmed it.
+- **Siege command on a co-op client** — BannerlordTogether's host decides which formations a
+  client may command (`BattleCommandAssignmentPacket`, re-applied by the client every few
+  seconds), so #23 stands down on a client and logs a `[SIEGE-CMD] co-op CLIENT` note. To
+  command every formation of your own castle's defense, host the session (#20 hands the host
+  role back and forth on a shared save).
 - **No settlement-stash sync in BT** — #16 provides it; player-**crafted** items cannot be
   expressed on the wire (each machine keeps its own).
 - **Shared-save identity** — BT's identity registry only fixes the joining client; #20 fixes

@@ -36,6 +36,12 @@ namespace BLTDeploymentCrashGuard
             applied += PatchByName(harmony, "TaleWorlds.MountAndBlade.Team", "set_GeneralAgent", nameof(GeneralAgentPrefix));
             applied += PatchByName(harmony, "TaleWorlds.MountAndBlade.Team", "AssignPlayerAsSergeantOfFormation", nameof(SergeantAssignPrefix));
             applied += PatchByName(harmony, "TaleWorlds.MountAndBlade.Mission", "OnDeploymentFinished", null, nameof(DeploymentFinishedPostfix));
+            // Siege-command evidence (2026-09-03): who flips a formation to/from AI control, who
+            // re-assigns the player's role, the death hand-off, and the tactic's troop shuffles.
+            applied += PatchByName(harmony, "TaleWorlds.MountAndBlade.Formation", "SetControlledByAI", nameof(FormationAiControlPrefix));
+            applied += PatchByName(harmony, "TaleWorlds.MountAndBlade.Team", "SetPlayerRole", nameof(PlayerRolePrefix));
+            applied += PatchByName(harmony, "TaleWorlds.MountAndBlade.Team", "DelegateCommandToAI", nameof(DelegateCommandPrefix));
+            applied += PatchByName(harmony, "TaleWorlds.MountAndBlade.Formation", "TransferUnits", nameof(TransferUnitsPrefix));
             Log.Info("[CONTROL] control tracer active on " + applied + " method(s)");
         }
 
@@ -124,6 +130,58 @@ namespace BLTDeploymentCrashGuard
             try
             {
                 Log.Info("[CONTROL] Formation[" + SafeFormation(__instance) + "].PlayerOwner = " + DescribeAgent(value as Agent) + Stack());
+            }
+            catch
+            {
+            }
+        }
+
+        /// <summary>Logged only when the value actually flips (the setter early-returns otherwise).</summary>
+        private static void FormationAiControlPrefix(Formation __instance, bool isControlledByAI)
+        {
+            try
+            {
+                if (__instance == null || __instance.IsAIControlled == isControlledByAI)
+                {
+                    return;
+                }
+                Log.Info("[CONTROL] Formation[" + SafeFormation(__instance) + "].IsAIControlled " + __instance.IsAIControlled + " -> " + isControlledByAI +
+                         " (units " + __instance.CountOfUnits + ", team " + SafeTeam(__instance.Team) + ")" + Stack());
+            }
+            catch
+            {
+            }
+        }
+
+        private static void PlayerRolePrefix(Team __instance, bool isPlayerGeneral, bool isPlayerSergeant)
+        {
+            try
+            {
+                Log.Info("[CONTROL] Team(" + SafeTeam(__instance) + ").SetPlayerRole(general=" + isPlayerGeneral + ", sergeant=" + isPlayerSergeant + ")" + Stack());
+            }
+            catch
+            {
+            }
+        }
+
+        private static void DelegateCommandPrefix(Team __instance)
+        {
+            try
+            {
+                Log.Info("[CONTROL] Team(" + SafeTeam(__instance) + ").DelegateCommandToAI — every formation to the AI" + Stack());
+            }
+            catch
+            {
+            }
+        }
+
+        private static void TransferUnitsPrefix(Formation __instance, Formation target, int unitCount)
+        {
+            try
+            {
+                Log.Info("[CONTROL] tactic TransferUnits " + unitCount + " from Formation[" + SafeFormation(__instance) + "] (AI " +
+                         (__instance != null && __instance.IsAIControlled) + ") to Formation[" + SafeFormation(target) + "] (AI " +
+                         (target != null && target.IsAIControlled) + ")" + Stack());
             }
             catch
             {

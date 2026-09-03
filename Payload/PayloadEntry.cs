@@ -54,6 +54,7 @@ namespace BLTDeploymentCrashGuard
                 BackgroundTickBudgetGuard.Apply(harmony);
                 CivilianGateCloseFix.Apply(harmony);
                 SiegeGatePromptFix.Apply(harmony);
+                SiegeCommandGuard.Apply(harmony);
                 CoopHeroIdentityLock.Apply();
                 StealthHideoutAdvisor.Apply(harmony);
                 ClanPartyCreationAdvisor.Apply(harmony);
@@ -107,6 +108,7 @@ namespace BLTDeploymentCrashGuard
             ClanModeSoloFix.Apply(Harmony);    // same late-BT-assembly retry (latched once applied)
             JoinSyncPauseEscape.Apply(Harmony); // same late-BT-assembly retry (latched once applied)
             BackgroundTickBudgetGuard.Apply(Harmony); // same late-BT-assembly retry (latched once applied)
+            SiegeCommandGuard.RetryBt(Harmony); // hook BT's host player-down releases if BT loaded after us
             TimeEnforcementGuard.Apply(Harmony);
             BattleMode.DecideAndApply(Harmony, "module-screen");
         }
@@ -123,6 +125,7 @@ namespace BLTDeploymentCrashGuard
         public void OnMissionInit()
         {
             BattleMode.DecideAndApply(Harmony, "mission-init");
+            SiegeCommandGuard.OnMissionInit(); // per-battle counters and hand-off depth reset
         }
 
         public void Tick()

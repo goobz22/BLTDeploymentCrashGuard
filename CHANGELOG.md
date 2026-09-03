@@ -1,5 +1,38 @@
 # Changelog
 
+## v1.3.0 — siege defense: you command every formation, placed formations hold (2026-09-03)
+
+- **"When someone sieges my castle my party runs off to guard the castle instead of staying
+  where I set them down; when the castle is compromised they leave and get killed"** —
+  root-caused in the installed build's IL, never guessed. In a siege battle vanilla's default
+  formation orders END with **AI control ON** (`BattleDeploymentHandler.SetDefaultFormationOrders`:
+  `SetOrder(IsSiegeBattle || IsSallyOutBattle ? AIControlOn : AIControlOff)`), run by the player
+  side's auto-deploy and the Auto-deploy button. An AI-controlled formation belongs to
+  `TacticDefendCastle`: `FormationAI.TickOccasionally` runs behaviors only while
+  `IsAIControlled`, and the tactic assigns lanes and key positions (walls, gate, keep),
+  re-plans on a breach ("retreat to keep", "defend key position") and re-balances troops
+  between formations through `Formation.TransferUnits` / `Formation.Split`.
+  `OrderController.BeforeSetOrder` returns a formation to the player only when it is
+  AI-controlled AND has a `PlayerOwner`; `Formation.RemoveUnit` hands an emptied formation back
+  to the AI (a refilled one is the AI's again); `Team.SetPlayerRole` hands EVERY formation to
+  the AI when the player is not the general, and `MapEvent.IsPlayerSergeant` demotes the player
+  inside another lord's army — even in their own castle.
+- **Fix (`siegeCommandAll`, default on)** — when the player's team defends a siege:
+  `Mission.OnDeploymentFinished` hands every AI-held regular formation to the player with a
+  MOVE order to where it stands; `Formation.SetControlledByAI` refuses AI hand-offs after
+  deployment; `Formation.TransferUnits` (the tactic-only API) never moves troops into or out
+  of a formation the player commands; `Team.SetPlayerRole` + the role controller make the
+  owner of the defended settlement the general. Exceptions that keep working on purpose:
+  F6 delegate command (`OrderController.SetOrder(AIControlOn)`), vanilla's death hand-off
+  (`Team.DelegateCommandToAI`), BannerlordTogether's player-down releases on the host.
+  Deployment is untouched (vanilla's auto-deploy still positions formations first). A BT
+  client stands down — the host's command assignment is authoritative there.
+- Field-proven live: the new payload hot-reloaded into the running game (gen2, MOD HEALTH 19/19).
+- Control tracer (`tracing`) now records every `IsAIControlled` flip, `SetPlayerRole`,
+  `DelegateCommandToAI` and tactic `TransferUnits` with caller stacks — the exact hand-off
+  point of any future report is in the log.
+- New log tag `[SIEGE-CMD]`; README item 23; config `siegeCommandAll`.
+
 ## v1.2.9 — troops on party creation; "Create New Party" explained (2026-09-01)
 
 - **"I made a party and it didn't let me add anyone" / "it should happen on creation"** —

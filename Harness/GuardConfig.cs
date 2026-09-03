@@ -97,6 +97,8 @@ namespace BLTDeploymentCrashGuard
 
   ""partyTroopsOnCreate"": true, ""_partyTroopsOnCreate"": ""when you create a new clan party, open the troop exchange with it immediately (vanilla creates the party with the leader only and expects you to find it on the map). Works solo and as co-op host; as a co-op client it waits for BannerlordTogether to confirm the party first"",
 
+  ""siegeCommandAll"": true,    ""_siegeCommandAll"": ""SIEGE DEFENSE: you command every formation and the ones you place hold where you put them. Vanilla's siege default hands formations to the AI, whose castle-defence tactic marches them to the walls and re-shuffles their troops (and abandons your spot on a breach). Also: defending a settlement your clan owns makes you the general even inside another lord's army. F6 still delegates a formation to the AI on purpose. Solo + co-op host; a co-op client follows the host's assignment"",
+
   ""myHero"": """",              ""_myHero"": ""SHARED-SAVE co-op: this machine's hero, by name (case-insensitive). When you load a shared save that was last played as the OTHER player's hero, the game switches you back to this hero. Only needed once per existing campaign — new campaigns and later sessions are recorded automatically (hero-identity.json)"",
 
   ""tracing"": false,           ""_tracing"": ""true enables verbose diagnostic tracers (mission/menu/control/time/coop-battle/role). Off for normal play; on for troubleshooting"",
