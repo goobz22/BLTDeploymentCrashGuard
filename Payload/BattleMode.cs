@@ -561,6 +561,17 @@ namespace BLTDeploymentCrashGuard
             return ReadStaticBool(name);
         }
 
+        /// <summary>A static string on the co-op session (e.g. the remote player's hero id), or null.</summary>
+        internal static string ReadCoopStaticString(string name)
+        {
+            Type type = SessionType;
+            if (type == null)
+            {
+                return null;
+            }
+            return ReadStaticMember(type, name) as string;
+        }
+
         private static bool? ReadStaticBool(string name)
         {
             Type type = SessionType;

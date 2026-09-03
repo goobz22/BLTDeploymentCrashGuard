@@ -55,6 +55,7 @@ namespace BLTDeploymentCrashGuard
                 CivilianGateCloseFix.Apply(harmony);
                 SiegeGatePromptFix.Apply(harmony);
                 SiegeCommandGuard.Apply(harmony);
+                CoopCommandSplit.Apply(harmony);
                 CoopHeroIdentityLock.Apply();
                 StealthHideoutAdvisor.Apply(harmony);
                 ClanPartyCreationAdvisor.Apply(harmony);
@@ -126,6 +127,7 @@ namespace BLTDeploymentCrashGuard
         {
             BattleMode.DecideAndApply(Harmony, "mission-init");
             SiegeCommandGuard.OnMissionInit(); // per-battle counters and hand-off depth reset
+            CoopCommandSplit.OnMissionInit(); // re-resolve the two players' parties per battle
         }
 
         public void Tick()
@@ -140,6 +142,7 @@ namespace BLTDeploymentCrashGuard
             StashSync.StashSyncGuard.Tick(); // drain queued peer stash updates
             CoopHeroIdentityLock.Tick(); // claim this machine's hero once the map is up
             ClanPartyCreationAdvisor.Tick(); // open the troop exchange for a just-created party
+            CoopCommandSplit.Tick(); // keep each co-op player's troops in their own formation block
             ReportGuardActivity();
         }
 

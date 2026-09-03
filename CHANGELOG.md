@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.3.1 — co-op: each player commands their own army (2026-09-03)
+
+- **"In co-op I should be able to command my own army while the host commands theirs"** —
+  BannerlordTogether's command model, read from the installed build's IL: the host approves a
+  formation for the client only when it holds the client's troops ALONE
+  (`IsClientFormationCommandApproved`: client-owned units present, no host-owned units, or
+  the client is its PlayerOwner/Captain); approved formations form the client's
+  `AllowedFormationMask` (sergeant over them inside an army, general otherwise); the client
+  reports its troops' formations to the host once a second (`SendFormationMembershipSnapshot`)
+  and the host mirrors them (`ApplyClientFormationMembership` → `ResolveFormationByClass`).
+  Vanilla spawns both parties' troops into the same class formations, so every formation is
+  mixed, the mask is empty and the client commands nothing (`[SPNATIVE ORDER-GUARD] blocked`).
+- **Fix (`coopOwnArmyCommand`, default on)** — `CoopCommandSplit`: in a live co-op battle the
+  two parties fight in separate formation blocks on both machines — host party and AI parties
+  in I–IV (infantry / archers / cavalry / horse archers), client party in V–VIII, same order.
+  Applied in a `Mission.SpawnTroop` postfix, re-applied on `Mission.OnDeploymentFinished` and
+  every half second (Order of Battle re-sorts by class; reinforcements). The remote player's
+  party is found through BT's session ghost-hero id; player heroes are never moved,
+  companions travel with their party. Solo play is inert (no remote peer). Self-test pins the
+  members and the block mapping.
+- Known trade-off: four formations per player while a remote player is in the battle
+  (troop preferences beyond the basic four fold into them). README item 24 (25–27 renumbered),
+  config row, log tag `[COOP-CMD]`.
+
 ## v1.3.0 — siege defense: you command every formation, placed formations hold (2026-09-03)
 
 - **"When someone sieges my castle my party runs off to guard the castle instead of staying
