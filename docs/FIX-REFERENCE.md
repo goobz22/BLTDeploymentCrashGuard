@@ -3995,6 +3995,241 @@ immediately live to every player running `install.cmd`. Binary churn accumulates
 
 ---
 
+## Known open items
+
+Tracked in `CHANGELOG.md:376-381` as unfixed:
+
+1. The dedicated-server role drops to player-host on an in-game save load. A tracer is in place
+   (`Payload/RoleTrace.cs`); no fix.
+2. Two clients on a dedicated server form **separate** battles (per-client-ghost encounters).
+   The shared-battle lease formation for that case is explicitly not yet fixed.
+3. `PlayerIdentityGuard` and some crash guards are reactive safety nets, not root fixes.
+
+Two more are carried in the source and docs rather than the changelog: `BattleMode`'s
+foreign-patch stash does not survive a hot-reload (`HOTRELOAD.md:65-68`), and incident effects
+are still not synced between peers (`UPSTREAM_BUG_REPORT.md:126-128`).
+
+---
+
 ## Indexes
 
-Built after all areas are documented — see the end of this file.
+### Index 0: co-op scope
+
+Collected so it does not have to be re-derived per fix.
+
+| Scope | Fixes |
+|---|---|
+| **Client only** | #9 client bootstrap fix (host and solo never run BT's audit); #5 client hero-creation guard (the patch is installed everywhere, but the condition is client-only) |
+| **Host or solo only** | #18 background-tick budget guard; #20 hero identity lock (never as a client — BT assigns that hero); #23 siege command guard (a client stands down; the host's assignment is authoritative); #17 join-hold pause escape (the host is the one held) |
+| **Host-alone, inert once a peer joins** | the marriage solo clan-mode fix (`ClanModeSoloFix`); `TimeEnforcementGuard`'s neutralizer; #13's `ShareTimeControl` acts only on the authority |
+| **Both machines, inert solo** | #24 co-op command split; #15 pregnancy sync; #16 stash sync; #7 encounter-loop breaker (co-op only) |
+| **Both / solo** | #1, #2, #3, #4, #6, #8, #11, #12, #14, #19, #21, #22, and every diagnostics and harness mechanism |
+
+`BootstrapWatch` scans host, client and solo BT logs, though in practice the abort it looks for
+is a client-session condition.
+
+### Index 1: log tag → file
+
+| Tag | File |
+|---|---|
+| `[AI-GUARD]` | `Payload/PartyAiCrashGuard.cs` |
+| `[BATTLE-MODE]` | `Payload/BattleMode.cs` |
+| `[BOOTSTRAP-WATCH]` | `Payload/BootstrapWatch.cs` |
+| `[CHARGEN]` | `Payload/CharacterCreationTrace.cs` |
+| `[CLAN-GUARD]` | `Payload/ClanScreenCrashGuard.cs` |
+| `[CLAN-PARTY]` | `Payload/ClanPartyCreationAdvisor.cs` |
+| `[CLANMODE-FIX]` | `Payload/ClanModeSoloFix.cs` |
+| `[CLICK-SPEED]` | `Payload/MapClickSpeedKeeper.cs` |
+| `[CLIENT-FIX]` | `Payload/ClientBootstrapFix.cs` |
+| `[CONTROL]` | `Payload/ControlTrace.cs` |
+| `[CONVO-CAM]` | `Payload/ConversationCameraCrashGuard.cs` |
+| `[COOP-BATTLE]` | `Payload/CoopBattleTrace.cs` |
+| `[COOP-CMD]` | `Payload/CoopCommandSplit.cs` |
+| `[DEADHERO]` | `Payload/DeadHeroReactivationFix.cs` |
+| `[DIAG]` | `Payload/RuntimeDiagnostics.cs` |
+| `[ENCOUNTER-GUARD]` | `Payload/EncounterLoopGuard.cs` |
+| `[GATE]` | `Payload/SiegeGatePromptFix.cs` **and** `Payload/CivilianGateCloseFix.cs` (shared tag) |
+| `[HEROCREATE-GUARD]` | `Payload/ClientHeroCreationGuard.cs` |
+| `[HOTRELOAD]`, `[HOTRELOAD][DIAG]` | `Harness/HotReload.cs`, `Harness/PayloadCompiler.cs` |
+| `[IDENTITY]` | `Payload/PlayerIdentityGuard.cs` **and** `Payload/CoopHeroIdentityLock.cs` (shared tag) |
+| `[INCIDENT-GUARD]` | `Payload/MapIncidentCrashGuard.cs` |
+| `[JOIN-ESCAPE]` | `Payload/JoinSyncPauseEscape.cs` |
+| `[MARRIAGE-GUARD]` | `Payload/MarriageBarterGuard.cs` |
+| `[MO-INIT]` | `Payload/MovementOrderTypeInitGuard.cs` |
+| `[MO-PROBE]` | `Payload/MovementOrderInitProbe.cs` |
+| `[NOSICK]` | `Payload/IllnessDeathGuard.cs` |
+| `[PEER-DETECT]` | `Payload/BattleMode.cs` (the `PeerDetection` type) |
+| `[PREG]`, `[PREG-SYNC]` | `Payload/PregnancySync/PregnancySyncGuard.cs` |
+| `[repeat]` | `Payload/TraceThrottle.cs` (the first line carries the caller's own tag) |
+| `[ROLE]` | `Payload/RoleTrace.cs` |
+| `[SHARE-TIME]` | `Payload/ShareTimeControl.cs` |
+| `[SIEGE-CMD]` | `Payload/SiegeCommandGuard.cs` |
+| `[STASH-SYNC]` | `Payload/StashSync/StashSyncGuard.cs` |
+| `[STEALTH]` | `Payload/StealthHideoutAdvisor.cs` |
+| `[STREAM]` | `Payload/LogStreamer.cs` |
+| `[TICK-GUARD]` | `Payload/BackgroundTickBudgetGuard.cs` |
+| `[TIME]` | `Payload/TimeTrace.cs` |
+| `[TIME-FLOW]` | `Payload/TimeFlowPatch.cs` |
+| `[TIME-GUARD]` | `Payload/TimeEnforcementGuard.cs` |
+| `[TRACE]` | `Payload/TracePatches.cs` |
+| `GUARD ACTIVITY:` | `Harness/SelfHealing.cs:67`, emitted from `Payload/PayloadEntry.cs:189-209` |
+| `MOD HEALTH:` | `Harness/Diag.cs:89` |
+| `===== BLT Deployment Crash Guard … =====` | `Harness/Diag.cs:60` |
+| `[Deploy Guard]` (on-screen prefix) | `Harness/Log.cs:126` |
+| `[H]` / `[C]` / `[S]` / `[?]` (role tag) | `Harness/Log.cs:19,69`; set from `Payload/PayloadEntry.cs:173,177,181` |
+| `[SELFTEST]` | `Harness/SelfHealing.cs` (self-test results) |
+| *(untagged)* `SUPPRESSED crash in DeploymentMissionController.…`, `recovery …` | `Payload/DeploymentCrashGuards.cs:23,44,60,67,69,71,76` |
+| *(untagged)* `payload build …`, `SAFE MODE …`, `tracing ENABLED …`, `patches applied …`, `FAILED to apply patches …` | `Payload/PayloadEntry.cs:29,33,92,101,110` |
+| `CHARGEN-FC <ExceptionType> @ <Type.Method>` | throttle key surfaced inside `[repeat]` lines — `Payload/CharacterCreationTrace.cs:177` |
+
+Not ours, but seen in the same logs: `[SPNATIVE ORDER-GUARD]` and `[HARMONY]` are
+BannerlordTogether's own tags (referenced at `Payload/CoopCommandSplit.cs:31` and in
+`UPSTREAM_BUG_REPORT.md:11-13`).
+
+### Index 2: config key → file
+
+Every key is declared with a sibling `_<key>` documentation string in the default file written
+by `Harness/GuardConfig.cs:84-113`; those `_`-prefixed siblings are never read.
+
+| Key | Default | Read at |
+|---|---|---|
+| `safeMode` | false | `Payload/PayloadEntry.cs:31` (declared `Harness/GuardConfig.cs:86`) |
+| `battleMode` | `"auto"` | `Payload/BattleMode.cs:363` (`GuardConfig.cs:88`) |
+| `soloVanillaBattles` | — (legacy v2.0) | `Payload/BattleMode.cs:370` — only the literal `false` is honoured, mapping to `coop` |
+| `timeAlwaysFlows` | true | `Payload/TimeFlowPatch.cs:90` (`GuardConfig.cs:89`); also written into the auto-generated default file by `Payload/BattleMode.cs:358` |
+| `shareTimeControl` | true | `Payload/ShareTimeControl.cs:190-209` (`GuardConfig.cs:90`) |
+| `noSickness` | true | `Payload/IllnessDeathGuard.cs:38` (`GuardConfig.cs:92`) |
+| `pregnancySync` | true | `Payload/PregnancySync/PregnancySyncGuard.cs` (`GuardConfig.cs:94`) |
+| `stashSync` | true | `Payload/StashSync/StashSyncGuard.cs` (`GuardConfig.cs:96`) |
+| `partyTroopsOnCreate` | true | `Payload/ClanPartyCreationAdvisor.cs` (`GuardConfig.cs:98`) |
+| `coopOwnArmyCommand` | true | `Payload/CoopCommandSplit.cs:72` (`GuardConfig.cs:100`) |
+| `siegeCommandAll` | true | `Payload/SiegeCommandGuard.cs:87` (`GuardConfig.cs:102`) |
+| `myHero` | `""` | `Payload/CoopHeroIdentityLock.cs:129` (`GuardConfig.cs:104`) |
+| `tracing` | false | `Payload/PayloadEntry.cs:211-232` (fresh from disk; `GuardConfig.cs:106`); read directly by `Payload/SiegeGatePromptFix.cs:74` and `Payload/PregnancySync/PregnancySyncGuard.cs:147` |
+| `selfTest` | false | `Payload/PayloadEntry.cs:103` (`GuardConfig.cs:107`); runs `Harness/SelfHealing.cs:108-110` |
+| `logStreamBin` | `""` | `Payload/LogStreamer.cs:62-63` (`GuardConfig.cs:109`) |
+| `hotReload` | false | `Harness/HotReload.cs:70` (`GuardConfig.cs:111`) — also requires a `.hotreload-dev` marker file |
+| `hotReloadRoslyn` | false | `Harness/HotReload.cs:71` (`GuardConfig.cs:112`) — also requires `PayloadCompiler.CompiledIn` |
+| `payloadSourceDir` | `""` shipped | `Harness/HotReload.cs:72` (`GuardConfig.cs:113`) — the shipped empty string overrides the code fallback, because `String()` treats an empty value as a hit |
+
+Not JSON keys, but part of the same configuration surface: the `logstream.txt` sidecar in the
+module root, which takes precedence over `logStreamBin` (`Payload/LogStreamer.cs:48-58`,
+written by `install.cmd:62-64`); the `.hotreload-dev` marker file; and the `BANNERLORD_DIR` and
+`BLTGUARD_BIN` environment variables read by `install.cmd`.
+
+### Index 3: patched member → fix
+
+"Lift/restore" means `BattleMode` moves *other mods'* patches on that member; this mod does not
+patch it itself.
+
+#### Game members (TaleWorlds / SandBox)
+
+| Member | Kind | Fix |
+|---|---|---|
+| `Agent.set_Controller` | prefix | `ControlTrace` |
+| `Agent.Controller` (write) | — | `PlayerIdentityGuard`; replayed by the FinishDeployment guard |
+| `Agent.Formation` (write) | — | `CoopCommandSplit` |
+| `AgingCampaignBehavior.DailyTickHero` | prefix | `IllnessDeathGuard` |
+| `AgingCampaignBehavior.IsItTimeOfDeath` | prefix | `IllnessDeathGuard` |
+| `AssignPlayerRoleInTeamMissionController.AfterStart` | prefix (optional) | `SiegeCommandGuard` |
+| `BarterManager.ApplyAndFinalizePlayerBarter` | prefix | `MarriageBarterGuard` |
+| `BattleAgentLogic.OnAgentBuild` / `.CheckUpgrade` / `.OnAgentHit` / `.OnAgentRemoved` | lift/restore | `BattleMode` |
+| `BattleDeploymentHandler.SetDefaultFormationOrders` | read (root cause) | `SiegeCommandGuard` (pinned by its self-test) |
+| `BattleEndLogic.MissionEnded` / `.OnAgentRemoved` | lift/restore | `BattleMode` |
+| `BattleInitializationModel.CanPlayerSideDeployWithOrderOfBattle` | lift/restore | `BattleMode` |
+| `BattleObserverMissionLogic.OnAgentRemoved` | lift/restore | `BattleMode` |
+| `Campaign.set_TimeControlMode` | prefix | `TimeEnforcementGuard`, `MapClickSpeedKeeper`; prefix + postfix in `TimeTrace` |
+| `Campaign.SetTimeControlModeLock` / `set_TimeControlModeLock` | prefix | `TimeEnforcementGuard`, `TimeTrace` |
+| `CastleGate.AfterMissionStart` | postfix | `CivilianGateCloseFix` |
+| `CastleGate.OnTick` | finalizer | `CivilianGateCloseFix` |
+| `CastleGate.ServerTick` | postfix / finalizer | `SiegeGatePromptFix` / `CivilianGateCloseFix` |
+| `ChangePlayerCharacterAction.Apply(Hero)` | called | `CoopHeroIdentityLock` |
+| `CharacterCreationState.OnInitialize` / `.OnActivate` / `.OnStageActivated` / `.Refresh` / `.FinalizeCharacterCreationState` | prefix + finalizer | `CharacterCreationTrace` |
+| `ClanPartiesVM.GetCanCreateNewParty` / `.GetNewPartyLeaderCandidates` | postfix | `ClanPartyCreationAdvisor` |
+| `DefaultBattleMissionAgentSpawnLogic.OnSideDeploymentOver` | lift/restore | `BattleMode` |
+| `DefaultEncounterGameMenuModel.GetGenericStateMenu` | postfix | `TracePatches` |
+| `DefaultSettlementValueModel.FindMostSuitableHomeSettlement(Clan)` | finalizer | `ClientHeroCreationGuard` |
+| `DefaultTroopSupplierProbabilityModel.EnqueueTroopSpawnProbabilities…` | lift/restore | `BattleMode` |
+| `DeploymentMissionController.FinishDeployment` | finalizer (+ lift/restore) | FinishDeployment crash guard; `BattleMode` |
+| `DeploymentMissionController.OnMissionTick` / `.SetupAIOfEnemyTeam` | lift/restore | `BattleMode` |
+| `DeploymentMissionController.SetupTeams` | finalizer | SetupTeams crash guard |
+| `EncounterManager.HandleEncounterForMobileParty` | finalizer | `PartyAiCrashGuard` layer 3 |
+| `EncounterManager.StartSettlementEncounter` / `.StartPartyEncounter` | prefix | `TracePatches` |
+| `Formation.CreateNewOrderWorldPosition` / `.SetMovementOrder` | called | `SiegeCommandGuard` |
+| `Formation.SetControlledByAI` | prefix | `SiegeCommandGuard`; prefix in `ControlTrace` |
+| `Formation.set_PlayerOwner` | prefix | `ControlTrace`; written by `PlayerIdentityGuard` |
+| `Formation.TransferUnits` | prefix | `SiegeCommandGuard`; prefix in `ControlTrace` |
+| `GameMenu.ActivateGameMenu` / `.SwitchToMenu` | prefix | `TracePatches` |
+| `GauntletClanScreen.CreateDataSource` | finalizer | `ClanScreenCrashGuard` |
+| `Hero.ChangeState` | prefix | `DeadHeroReactivationFix` (invariant) |
+| `Hero.DeathMark` (private setter) | reflection write | `IllnessDeathGuard` |
+| `Hero.StringId` / `.StaticBodyProperties` / `.SetName` | write | `PregnancySyncGuard` (`AlignToHost`) |
+| `HideoutAmbushMissionController.AfterStart` + `ChangeHideoutMissionModeToBattle` / `StartBossFightBattleModeInternal` / `StartBossFightDuelModeInternal` | postfix / transitions | `StealthHideoutAdvisor` |
+| `Incident.InvokeOption` | finalizer | `MapIncidentCrashGuard` (outer belt) |
+| `IncidentEffect.Consequence` | finalizer | `MapIncidentCrashGuard` (class net) |
+| `IncidentEffect.<SiegeProgressChange>b__N` | prefix (IL-selected) | `MapIncidentCrashGuard` (root fix) |
+| `InventoryLogic.DoneLogic` | postfix | `StashSyncGuard` |
+| `IssueManager.MakeAlternativeTroopsReturn(TroopRoster)` | prefix | `DeadHeroReactivationFix` (caller) |
+| `MakePregnantAction.Apply(Hero)` | postfix | conception visibility |
+| `MapEvent.CanPartyJoinBattle` | postfix | `TracePatches` |
+| `MapEventSide.MakeReadyForMission` / `.OnTroopKilled` / `.OnTroopWounded` / `.OnTroopScoreHit` | lift/restore | `BattleMode` |
+| `MapScreen.HandleLeftMouseButtonClick` | prefix + finalizer | `MapClickSpeedKeeper` |
+| `MapTimeControlVM.ExecuteTimeControlChange` | prefix | `TimeTrace` |
+| `MBObjectManager.UnregisterObject` / `.RegisterPresumedObject` | called | `PregnancySyncGuard` |
+| `MBSaveLoad.LoadSaveGameData` | prefix + postfix | `RoleTrace` |
+| `Mission.OnDeploymentFinished` | postfix | `ControlTrace`, `SiegeCommandGuard`, `CoopCommandSplit` |
+| `Mission.set_MainAgent` | prefix | `ControlTrace` |
+| `Mission.SpawnTroop` (every `Agent`-returning overload) | postfix | `CoopCommandSplit` |
+| `Mission.OnAfterDeploymentFinished` / `.RemoveMissionBehavior` / `.SetFallAvoidSystemActive` | replayed | FinishDeployment crash guard |
+| `MissionConversationCameraView.MakeSpeakerLookToListener` / `.UpdateAgentLooksForConversation` | finalizer | `ConversationCameraCrashGuard` |
+| `MissionObject.IsDisabled` (setter) | reflection invoke | `CivilianGateCloseFix` |
+| `MissionState.OpenNew` | prefix | `TracePatches` |
+| `MobileParty.ComputeIsWaiting` | postfix | `TimeFlowPatch` |
+| `MobilePartyAi.GetBehaviors` | finalizer | `PartyAiCrashGuard` layer 2 |
+| `MobilePartyAi.Tick` | prefix | `PartyAiCrashGuard` layer 1 |
+| `MovementOrder..ctor(MovementOrderEnum)` | prefix + finalizer / transpiler | `MovementOrderInitProbe` / `MovementOrderTypeInitGuard` |
+| `OrderController.set_Owner` | prefix | `ControlTrace`; written by `PlayerIdentityGuard` |
+| `OrderController.SetOrder(OrderType)` | prefix + finalizer | `SiegeCommandGuard` |
+| `OrderOfBattleCampaignBehavior.GetFormationDataAtIndex` / `.SetFormationInfos` | lift/restore | `BattleMode` |
+| `OrderOfBattleVM.Initialize` / `.ExecuteBeginMission` / `.OnDeploymentFinalized` / `.RefreshValues` | lift/restore | `BattleMode` |
+| `PlayerEncounter.Finish` | prefix | `TracePatches` (stamps `EncounterLoopGuard`) |
+| `PlayerEncounter.StartBattle` | prefix | `TracePatches` (re-decides battle mode) |
+| `PregnancyCampaignBehavior.CheckAreNearby` | postfix | spouse-proximity tracer |
+| `SandboxBattleInitializationModel.GetAllAvailableTroopTypes` | lift/restore | `BattleMode` |
+| `ScreenManager.PopScreen()` | reflection invoke | `ClanScreenCrashGuard` (recovery) |
+| `StandingPoint.SetIsDeactivatedSynched` | write | `SiegeGatePromptFix` |
+| `CastleGate.SetUsableTeam(Team)` | called | `CivilianGateCloseFix` |
+| `Team.AssignPlayerAsSergeantOfFormation` / `.set_GeneralAgent` | prefix | `ControlTrace`; `GeneralAgent` written by `PlayerIdentityGuard` |
+| `Team.DelegateCommandToAI()` | prefix + finalizer | `SiegeCommandGuard`; prefix in `ControlTrace` |
+| `Team.SetPlayerRole(bool,bool)` | prefix | `SiegeCommandGuard`; prefix in `ControlTrace` |
+
+#### BannerlordTogether members
+
+| Member | Kind | Fix |
+|---|---|---|
+| `BattleSyncBehavior.ApplyEncounterRequestNow` | prefix | `EncounterLoopGuard` |
+| `BattleSyncBehavior.SendEncounterRequest` / `.ApplyClientStartedBattleLeaseState` | prefix | `CoopBattleTrace` |
+| `ClanModeSyncBehavior.get_CurrentMode` | transpiler | `ClanModeSoloFix` |
+| `CoopCampaignBehavior.EnforcePlaySpeed` | prefix + finalizer | `TimeEnforcementGuard` |
+| `CoopNetworkBase.ShouldAcceptIncomingPacket` / `CoopServer.ShouldAcceptIncomingPacket` (both namespaces) | prefix | `PregnancySyncGuard` **and** `StashSyncGuard` |
+| `CoopSession.Server.BroadcastRawReliableOrdered` / `Client.SendRaw` | reflection invoke | `PregnancySyncGuard`, `StashSyncGuard` |
+| `CoopSubModule.ApplyHostNormalSpeed` | postfix (optional) | `JoinSyncPauseEscape` |
+| `CoopSubModule.SetPaused` / `.ApplyTimeState` | log-only prefix | `TimeEnforcementGuard` (pause tracer); `SetPaused` also invoked by `JoinSyncPauseEscape` |
+| `CoopSubModule.ToggleClientTimeControlPermission` / `.IsClientTimeControlEnabledForCurrentMenu` | reflection invoke | `ShareTimeControl` |
+| `CoopSubModule.ToggleHostManualPause` | postfix | `JoinSyncPauseEscape` |
+| `CoopSubModule.TryBackgroundCampaignTick` | prefix + postfix | `BackgroundTickBudgetGuard` |
+| `CoopSubModule.TryVerifyNativeActionCacheWhenCampaignMapReady` | prefix | `ClientBootstrapFix` |
+| `CoopSubModule._nativeActionCacheVerified` | reflection write | `ClientBootstrapFix` |
+| `CoopSubModule._pauseCoordinator` + its `IsActive(reason)`, `MapPauseReason`, the transfer-cancel `A(string,string,bool)` | read / invoke | `JoinSyncPauseEscape` |
+| `SpNativeBattleBehavior.StartLiveBattle` / `.AttackLiveConsequence` | prefix | `CoopBattleTrace` |
+| `SpNativeBattleHostMissionBehavior.ReleaseHostMainFormationsToAi` / `.ReleaseClientOwnedFormationsToAi` / `.ReleaseFieldBattleSourceFormationsToAi` | prefix + finalizer | `SiegeCommandGuard` |
+
+#### Runtime and engine hooks (not Harmony patches)
+
+| Hook | Fix |
+|---|---|
+| `AppDomain.CurrentDomain.AssemblyResolve` | `HotReload` identity pin |
+| `AppDomain` first-chance exceptions | `CharacterCreationTrace` |
+| `CampaignEvents.OnGivenBirthEvent` | `PregnancySyncGuard` |
+| `ActionIndexCache` static mirror fields, `ActionIndexCache.Create`, `MBAnimation.*` | `ClientBootstrapFix` |
+| `RuntimeHelpers.RunClassConstructor(MovementOrder)` | `MovementOrderTypeInitGuard` |
