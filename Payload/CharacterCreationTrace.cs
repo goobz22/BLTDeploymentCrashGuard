@@ -8,39 +8,44 @@ using HarmonyLib;
 namespace BLTDeploymentCrashGuard
 {
     /// <summary>
-    /// Log-only tracer for the NEW-CHARACTER / BANNER-EDITOR flow at co-op campaign setup.
-    /// Symptom under investigation (field report 2026-09-04, screenshot): in a co-op setup
-    /// the character in the banner-editor preview is rendered LYING SIDEWAYS instead of
-    /// standing — a visuals/pose failure, the kind the engine typically swallows.
+    /// Two diagnostics, off unless guardconfig tracing=true; neither changes game behaviour.
     ///
-    /// This tracer does two things, only while character creation is active:
-    ///  1. logs the character-creation lifecycle (OnInitialize / OnActivate / stage changes /
-    ///     Refresh / Finalize) with the active stage's type name, and logs any exception a
-    ///     lifecycle method throws (via a finalizer — observed, never swallowed);
-    ///  2. arms an AppDomain FirstChanceException observer for the duration of the flow, so a
-    ///     SWALLOWED exception in the scene/agent-visuals/pose path is named with its type,
-    ///     message and the game frames that threw it. FirstChance can be chatty, so lines are
-    ///     coalesced by exception-type + throwing frame and capped per activation.
+    /// 1. CHARACTER-CREATION lifecycle ([CHARGEN]): logs the new-character flow
+    ///    (OnInitialize / OnActivate / each stage / Refresh / Finalize) with the active
+    ///    stage's type name, plus any exception a lifecycle method throws (finalizer —
+    ///    observed, never swallowed). Added for the 2026-09-04 report of the banner-editor
+    ///    preview rendering the character lying sideways.
     ///
-    /// It is a diagnostic: off unless guardconfig tracing=true. It changes NO game behavior.
+    /// 2. SESSION-WIDE first-chance exception capture: armed once at Apply, it logs every
+    ///    exception thrown in game code (SandBox / StoryMode / TaleWorlds, excluding
+    ///    TaleWorlds.Library churn) with its FULL inner-exception chain and the throwing
+    ///    frames — even when the game swallows it, and even when it is fatal. This exists
+    ///    because the 2026-09-04 battle-load crash was a TypeInitializationException on
+    ///    MovementOrder whose real cause lives in the INNER exception; ButterLib wrote no
+    ///    report, so the mod must capture it itself. Coalesced by exception type + throwing
+    ///    frame and capped, so a throw-in-a-loop cannot refill the log.
     /// </summary>
     internal static class CharacterCreationTrace
     {
         private const string StateType = "TaleWorlds.CampaignSystem.CharacterCreationContent.CharacterCreationState";
-        private static bool _armed;
+        private const string ArmedSlot = "BLTCG_FirstChanceArmed"; // AppDomain slot: only ONE handler across payload generations
         private static int _firstChanceEmitted;
-        private const int FirstChanceCap = 300; // per activation, so a throw-in-a-loop cannot refill the log
-        private static EventHandler<FirstChanceExceptionEventArgs> _handler;
+        private const int FirstChanceCap = 400;
+
+        [ThreadStatic]
+        private static bool _inHandler; // re-entrancy guard: never let the handler observe its own throws
 
         internal static void Apply(Harmony harmony)
         {
             int applied = 0;
             applied += Patch(harmony, StateType, "OnInitialize", nameof(LifecyclePrefix), nameof(LifecycleFinalizer));
-            applied += Patch(harmony, StateType, "OnActivate", nameof(ActivatePrefix), nameof(LifecycleFinalizer));
+            applied += Patch(harmony, StateType, "OnActivate", nameof(LifecyclePrefix), nameof(LifecycleFinalizer));
             applied += Patch(harmony, StateType, "OnStageActivated", nameof(StageActivatedPrefix), nameof(LifecycleFinalizer));
             applied += Patch(harmony, StateType, "Refresh", nameof(LifecyclePrefix), nameof(LifecycleFinalizer));
-            applied += Patch(harmony, StateType, "FinalizeCharacterCreationState", nameof(FinalizePrefix), nameof(LifecycleFinalizer));
-            Log.Info("[CHARGEN] character-creation tracer active on " + applied + " method(s); first-chance exception capture arms while creating a character");
+            applied += Patch(harmony, StateType, "FinalizeCharacterCreationState", nameof(LifecyclePrefix), nameof(LifecycleFinalizer));
+            Arm();
+            Log.Info("[CHARGEN] character-creation tracer active on " + applied + " method(s); session-wide first-chance exception capture " +
+                     (IsArmed() ? "ARMED" : "NOT armed") + " (full inner-exception chains)");
         }
 
         private static int Patch(Harmony harmony, string typeName, string methodName, string prefixName, string finalizerName)
@@ -84,23 +89,11 @@ namespace BLTDeploymentCrashGuard
             return count;
         }
 
-        // ---- lifecycle hooks ----
+        // ---- character-creation lifecycle hooks ----
 
         private static void LifecyclePrefix(MethodBase __originalMethod)
         {
             Log.Info("[CHARGEN] " + (__originalMethod != null ? __originalMethod.Name : "?"));
-        }
-
-        private static void ActivatePrefix(MethodBase __originalMethod)
-        {
-            Arm();
-            Log.Info("[CHARGEN] " + (__originalMethod != null ? __originalMethod.Name : "OnActivate") + " — first-chance capture ARMED");
-        }
-
-        private static void FinalizePrefix(MethodBase __originalMethod)
-        {
-            Log.Info("[CHARGEN] " + (__originalMethod != null ? __originalMethod.Name : "Finalize") + " — first-chance capture disarming (emitted " + _firstChanceEmitted + " this run)");
-            Disarm();
         }
 
         private static void StageActivatedPrefix(object[] __args)
@@ -123,65 +116,52 @@ namespace BLTDeploymentCrashGuard
         {
             if (__exception != null)
             {
-                Log.Info("[CHARGEN] EXCEPTION in " + (__originalMethod != null ? __originalMethod.Name : "?") +
-                         ": " + __exception.GetType().Name + ": " + __exception.Message + TrimStack(__exception.StackTrace));
+                Log.Info("[CHARGEN] EXCEPTION in " + (__originalMethod != null ? __originalMethod.Name : "?") + ": " + FormatChain(__exception));
             }
             return __exception; // never swallow
         }
 
-        // ---- first-chance exception capture (armed only during character creation) ----
+        // ---- session-wide first-chance capture ----
+
+        private static bool IsArmed()
+        {
+            try { return AppDomain.CurrentDomain.GetData(ArmedSlot) != null; }
+            catch { return false; }
+        }
 
         private static void Arm()
         {
-            if (_armed)
-            {
-                return;
-            }
-            _armed = true;
-            _firstChanceEmitted = 0;
-            TraceThrottle.Reset();
             try
             {
-                _handler = OnFirstChance;
-                AppDomain.CurrentDomain.FirstChanceException += _handler;
+                // Only one handler across all payload generations (a hot-reload leaves the
+                // previous generation's handler attached; the slot stops them piling up).
+                if (AppDomain.CurrentDomain.GetData(ArmedSlot) != null)
+                {
+                    return;
+                }
+                AppDomain.CurrentDomain.SetData(ArmedSlot, "1");
+                AppDomain.CurrentDomain.FirstChanceException += OnFirstChance;
             }
             catch (Exception ex)
             {
                 Log.Info("[CHARGEN] could not arm first-chance capture: " + ex.Message);
-                _armed = false;
-            }
-        }
-
-        private static void Disarm()
-        {
-            _armed = false;
-            try
-            {
-                if (_handler != null)
-                {
-                    AppDomain.CurrentDomain.FirstChanceException -= _handler;
-                    _handler = null;
-                }
-            }
-            catch
-            {
             }
         }
 
         private static void OnFirstChance(object sender, FirstChanceExceptionEventArgs e)
         {
-            if (!_armed || e == null || e.Exception == null)
+            if (_inHandler || e == null || e.Exception == null)
             {
                 return;
             }
+            _inHandler = true;
             try
             {
                 Exception ex = e.Exception;
-                string type = ex.GetType().FullName ?? "Exception";
-                // Ignore our own guards internal catches and pure-framework churn; keep game code.
-                if (type.StartsWith("BLTDeploymentCrashGuard", StringComparison.Ordinal))
+                string top = ex.GetType().FullName ?? "Exception";
+                if (top.StartsWith("BLTDeploymentCrashGuard", StringComparison.Ordinal))
                 {
-                    return;
+                    return; // our own internal catches are not interesting
                 }
                 string frame = FirstGameFrame(ex);
                 if (frame == null)
@@ -194,17 +174,40 @@ namespace BLTDeploymentCrashGuard
                 }
                 _firstChanceEmitted++;
                 string key = "CHARGEN-FC " + ex.GetType().Name + " @ " + frame;
-                string message = "[CHARGEN] first-chance " + ex.GetType().Name + ": " + ex.Message + TrimStack(ex.StackTrace);
+                string message = "[CHARGEN] first-chance " + FormatChain(ex);
                 TraceThrottle.Emit(key, message);
             }
             catch
             {
                 // a tracer must never take the game down
             }
+            finally
+            {
+                _inHandler = false;
+            }
         }
 
-        /// <summary>The first stack frame that is game code (SandBox/TaleWorlds/StoryMode),
-        /// used both as the dedup key and as the "who threw it" hint; null if none.</summary>
+        /// <summary>Full exception chain: outer, then each InnerException, each with its own
+        /// throwing frames. A TypeInitializationException's real cause is always its inner —
+        /// this is what the 2026-09-04 crash logger was missing.</summary>
+        private static string FormatChain(Exception ex)
+        {
+            var sb = new StringBuilder();
+            int depth = 0;
+            for (Exception cur = ex; cur != null && depth < 8; cur = cur.InnerException, depth++)
+            {
+                if (depth > 0)
+                {
+                    sb.Append("\n   <- INNER: ");
+                }
+                sb.Append(cur.GetType().FullName).Append(": ").Append(cur.Message);
+                sb.Append(TrimStack(cur.StackTrace));
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>The first stack frame that is game code (SandBox/StoryMode/TaleWorlds,
+        /// excluding TaleWorlds.Library), used as the dedup key and the "who threw it" hint.</summary>
         private static string FirstGameFrame(Exception ex)
         {
             try
@@ -252,7 +255,7 @@ namespace BLTDeploymentCrashGuard
                     continue;
                 }
                 sb.Append("\n      ").Append(s);
-                if (++shown >= 12)
+                if (++shown >= 14)
                 {
                     break;
                 }
