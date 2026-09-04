@@ -2222,7 +2222,9 @@ printed on every successful generation apply (`:380-381`). Watching and Roslyn c
 gated on `hotReload=true` **and** the presence of a `.hotreload-dev` marker file in the module
 root (`Harness/HotReload.cs:70-72`); the shadow-copy `LoadFrom` generation loader itself runs
 on the player path too, since that is the normal load-once path. See `HOTRELOAD.md` for the
-workflow.
+workflow. A failed payload load used to be silent — the player kept playing unguarded — so a
+loud on-screen `CRASH GUARD NOT ACTIVE` warning fires if the payload ever fails to load
+(`CHANGELOG.md:309-311`).
 
 **Limitations.** Any exception in the shadow-copy path falls back to a byte-load with a logged
 warning (`:327-329`). Shadow files accumulate on disk until `CleanStaleShadows` runs, which
@@ -2350,6 +2352,436 @@ first thing in `OnSubModuleLoad` (`:58-61`, `Harness/SubModule.cs:19`).
 
 **Limitations.** `BuildTime` here is the **harness** write time; the comment notes the
 generation banner uses the payload build time instead (`:49`).
+
+### Fire tracking (auto-retire detection) and the self-test runner
+
+**README item** 25 · **Source** `Harness/SelfHealing.cs` · **Class** `SelfHealing` · **Tag**
+`GUARD ACTIVITY:` · **Config** `selfTest` (read by `PayloadEntry`) · **Scope** both
+
+**Bug.** A guard whose underlying bug BT or TaleWorlds has since fixed keeps running forever,
+and nobody can tell which guards are still earning their keep.
+
+**Mechanism.** Every guard calls `SelfHealing.RecordFire(guard)` each time it actually
+suppresses a crash or corrects state; counts live in a lock-protected `Dictionary<string,int>`
+with `StringComparer.Ordinal` (`:28`, `:43-57`). `FireSummary()` renders
+`GUARD ACTIVITY: none fired this session (nothing crashed on a guarded path)` or
+`GUARD ACTIVITY: guard=N, …` (`:59-81`). A crash-guard finalizer that never fires across a
+session did nothing — the bug it guards no longer occurs — so a permanently-inert guard is safe
+to retire (`:9-14`). Fire counts are deliberately kept across reloads; only tests are cleared,
+which proves shared state survived (`:94-96`). `RunSelfTests` is gated by `selfTest`
+(`:108-110`).
+
+**Limitations.** `RegisterTest` appends to a plain `List<Func<TestResult>>` **without** the
+`Sync` lock the fire dictionary uses (`:83-92`); `ResetTests` likewise clears unlocked
+(`:97-106`).
+
+**Self-test.** This is the self-test runner; it pins nothing itself. Individual guards pin
+their reflected members and decision logic through it.
+
+### Self-documenting config with regex reader
+
+**README item** n/a · **Source** `Harness/GuardConfig.cs` · **Class** `GuardConfig` · **Tag**
+n/a · **Config** writes and reads every key · **Scope** both
+
+**Bug.** Knobs are undiscoverable, and adding a JSON parser dependency to a Bannerlord module
+is a binding risk.
+
+**Mechanism.** `GuardConfig.Path` = `<moduleRoot>/guardconfig.json`, derived from the assembly
+`Location` directory + `"../.."` (`:17-24`). On first read (latched by `_loaded`) it **writes**
+a fully-documented `DefaultJson` if the file is missing, then caches the raw text for the
+session; any failure yields an empty string (`:26-48`). `Bool(key, fallback)` matches
+`"<key>"\s*:\s*(true|false)` ignoring case; `String(key, fallback)` matches
+`"<key>"\s*:\s*"([^"]*)"` — both regex-escape the key and swallow exceptions to return the
+fallback (`:50-80`). Every setting ships with a sibling `"_<key>"` documentation string in the
+default file (`:82-115`), which is never read back.
+
+**Limitations.** The text is cached for the whole session — editing `guardconfig.json` requires
+a restart, it is **not** hot-reloaded (the one exception is `tracing`, which `PayloadEntry`
+re-reads from disk). Regex matching is structure-blind: the first match anywhere in the file
+wins. `String()` treats an explicit empty value as a **hit**, so the shipped
+`"payloadSourceDir": ""` overrides the caller's fallback (`:70-73`, `:113` vs
+`Harness/HotReload.cs:72`).
+
+### Harness-owned cross-reload state bag
+
+**README item** n/a · **Source** `Harness/SharedState.cs` · **Class** `SharedState` /
+`ISharedState` · **Tag** n/a · **Config** none · **Scope** both
+
+**Bug.** A payload reload creates a fresh assembly with fresh statics, so any state the payload
+held is wiped — guard state, the launch session id, and `BattleMode`'s foreign-patch stash
+would be lost on every generation swap.
+
+**Mechanism.** `HotReload` holds `private readonly ISharedState _shared = new SharedState()`
+created **once** (`Harness/HotReload.cs:36`) and passes the same instance into every
+generation's `payload.Apply(harmony, _shared)` (`:367`). `SharedState` is a lock-protected
+`Dictionary<string,object>` exposing `Get<T>`, `GetObject`, `Set`, `Has` (`:6-48`); `Get<T>`
+silently returns `default(T)` when the key is missing **or** the stored value is not a `T`
+(`:11-22`).
+
+**Limitations.** `Get<T>`'s type-mismatch path is indistinguishable from "missing" — use
+`Has`/`GetObject` when that matters.
+
+### Thin lifecycle forwarder
+
+**README item** n/a · **Source** `Harness/SubModule.cs` · **Class** `SubModule` · **Tag** n/a ·
+**Config** none · **Scope** both
+
+**Bug.** Anything living in the harness needs a full game restart to change, so logic placed
+here would kill the hot-reload dev loop.
+
+**Mechanism.** `SubModule : MBSubModuleBase` holds a single static `HotReload _engine` and does
+nothing but call `base` then forward, each behind a null check: `OnSubModuleLoad` →
+`Log.Info(Diag.Banner())` + `new HotReload()` + `Start()`;
+`OnBeforeInitialModuleScreenSetAsRoot` → `OnBeforeInitialModuleScreen()`;
+`OnGameStart(Game, IGameStarter)` → `OnGameStart()`; `OnMissionBehaviorInitialize(Mission)` →
+`OnMissionInit()`; `OnApplicationTick(float dt)` → `Tick()` (`:12-59`). This is the only
+assembly Bannerlord loads via `SubModule.xml` (`:6-11`).
+
+### Public harness API instead of `InternalsVisibleTo`
+
+**README item** n/a · **Source** `Harness/AssemblyInfo.cs` · **Class** n/a (assembly
+attributes) · **Tag** n/a · **Config** none · **Scope** both
+
+**Bug.** `InternalsVisibleTo` is matched by **exact** assembly name, but payload builds carry a
+per-build stamped assembly name (`Payload.b<stamp>`) — so an `InternalsVisibleTo` entry could
+never cover them and the payload would lose access to `Log`/`Diag`/`GuardConfig`/`SelfHealing`.
+
+**Mechanism.** The harness API the payload uses (`Log`, `Diag`, `GuardConfig`, `SelfHealing`,
+`IPayload`, `ISharedState`) is declared **public**; the
+`[assembly: InternalsVisibleTo("BLTDeploymentCrashGuard.Payload")]` line is retained for the
+fixed-name / Roslyn-compiled case (`:1-9`).
+
+---
+
+## Ops, build and install
+
+These are not in-game guards. They are the mechanisms that get the right two DLLs onto a
+player's machine, keep the version honest, and get evidence back off the machine. None of them
+reads `guardconfig.json` at runtime except where noted.
+
+### Locked-DLL in-place update (rename-aside `.prev`)
+
+**README item** n/a · **Source** `install.cmd` · **Class** n/a (batch) · **Tag** n/a ·
+**Config** none · **Scope** both (per-machine installer)
+
+**Bug.** A player tries to update the mod while Bannerlord is running; the game holds the loaded
+module DLLs open, so a plain overwrite or download fails and can leave a half-updated install —
+harness new and payload old, or a zero-byte DLL.
+
+**Mechanism.** Before downloading, for each of the two DLLs: delete any stale `<name>.prev`,
+then `ren` the live file to `<name>.prev`. A rename is permitted on a file that is
+locked-for-write, so the loaded DLL is moved aside and the fresh copy is `curl`'d in next to it
+(`install.cmd:46-60`). The explicit comment at `install.cmd:49-50` states: "If the game is
+running it locks the loaded DLLs; a rename is still allowed, so move the old files aside and
+download the new ones next to them."
+
+**Limitations.** `.prev` files accumulate in `bin/Win64_Shipping_Client` — only the immediately
+previous one is pruned. The already-loaded old code keeps running until the game restarts, so an
+update applied mid-session is not live. The `:fail` branch (`install.cmd:76-80`) still tells the
+player to close the game and retry, because `curl` can fail for other reasons.
+
+### Two-assembly install invariant
+
+**README item** n/a · **Source** `install.cmd` · **Class** n/a (batch) · **Tag** n/a ·
+**Config** none · **Scope** both
+
+**Bug.** Since v1.2.0 the mod is **two** assemblies. Installing only
+`BLTDeploymentCrashGuard.dll` — the file `SubModule.xml` names — gives a module that loads but
+has no guards at all, every fix silently absent. `CHANGELOG.md` records the field version of
+this: `dist/` still held the v1.1 monolithic DLL while the installer downloaded only the
+harness, so anyone installing from the README one-liner got a build with no v1.2.x fix and no
+payload.
+
+**Mechanism.** The installer always fetches all three artifacts from the repo's `dist/` folder —
+`SubModule.xml`, `BLTDeploymentCrashGuard.dll` (harness) and
+`BLTDeploymentCrashGuard.Payload.dll` (payload) — each with `curl -fsSL ... || goto :fail`, so
+any single failure aborts the whole install rather than leaving a mismatched pair
+(`install.cmd:51-60`). The comment at `install.cmd:46-48` states that the harness is "the module
+Bannerlord loads", the payload is "every guard/fix/tracer — the harness loads it", and "Both
+must be installed together."
+
+**Limitations.** No version or hash cross-check between the two downloaded DLLs — a
+partially-updated `dist/` on GitHub would ship a mismatched harness/payload pair to every
+player. The `dist/` listing shows exactly this drift risk (`BLTDeploymentCrashGuard.dll` dated
+Sep 4 13:30 versus `BLTDeploymentCrashGuard.Payload.dll` Sep 4 15:07).
+
+### Bannerlord install auto-detection
+
+**README item** n/a · **Source** `install.cmd` · **Class** n/a (batch) · **Tag** n/a ·
+**Config** `BANNERLORD_DIR` environment variable · **Scope** both
+
+**Bug.** Players cannot reliably find their Bannerlord folder, and Steam libraries live on
+arbitrary drives, so a hand-install lands the DLLs in the wrong place and the mod never appears
+in the launcher.
+
+**Mechanism.** Three-tier resolution: (1) `BANNERLORD_DIR` wins outright (`install.cmd:10-12`);
+(2) otherwise scan an 11-entry hardcoded list of Steam layouts — `C:\Program Files (x86)\Steam\…`,
+`C:\Program Files\Steam\…`, `C:\SteamLibrary\…`, and Steam/SteamLibrary variants on D:, E:, F:,
+G: — taking the first whose `\Modules` subfolder exists (`install.cmd:14-28`); (3) prompt the
+player to paste the path (`install.cmd:31-32`). Then strip embedded quotes
+(`set "GAME=%GAME:\"=%"`, `:35`) and validate `%GAME%\Modules` exists or exit 1 (`:36-39`).
+
+**Limitations.** Steam-only layouts; Epic, GOG, Xbox Game Pass installs and drives beyond G: are
+never auto-found — `BANNERLORD_DIR` or the prompt is the only route. Detection accepts any
+folder containing `Modules` as a valid Bannerlord install, with no `bin\Win64_Shipping_Client`
+check, despite the prompt text asking for a folder that "contains bin\ and Modules\"
+(`install.cmd:32`).
+
+### Log-streaming opt-in (`BLTGUARD_BIN` → `logstream.txt`)
+
+**README item** 26 · **Source** `install.cmd` · **Class** n/a (batch) · **Tag** n/a ·
+**Config** writes the `logstream.txt` sidecar read by `Payload/LogStreamer.cs` · **Scope** both
+
+**Bug.** A developer or support helper wants the mod's log streamed off-box, but there is no
+in-game UI to configure it.
+
+**Mechanism.** If `BLTGUARD_BIN` is set at install time, the installer echoes its value into
+`<Mod>\logstream.txt` and prints "Log streaming enabled (bin `<BLTGUARD_BIN>`)." — the module
+root file is the runtime switch the mod reads (`install.cmd:62-65`).
+
+**Limitations.** The value is written verbatim with no validation. There is no way to disable it
+again except deleting `logstream.txt` by hand; the installer never removes an existing
+`logstream.txt` when `BLTGUARD_BIN` is unset.
+
+### One-click log sharing
+
+**README item** 26 · **Source** `share-log.cmd` · **Class** n/a (batch) · **Tag** n/a ·
+**Config** none · **Scope** both
+
+**Bug.** Getting a crash log from a non-technical co-op partner is friction: they cannot find
+`CrashGuard.log`, and pasting a 10k-line file into Discord is useless.
+
+**Mechanism.** Locate the game (the same Steam scan plus `BANNERLORD_DIR` override and prompt,
+`share-log.cmd:10-34`), verify `<Mod>\CrashGuard.log` exists or exit 1 (`:35-39`), then POST it
+to `litterbox.catbox.moe` with `reqtype=fileupload` and `time=24h` (`:45`); if the response does
+not start with `https://`, retry against `https://0x0.st` with a plain `file=@` field
+(`:48-51`). On success, read the URL out of the response file, pipe it to `clip` so it is on the
+clipboard, and print it in a banner (`:59-71`). On double failure, print the absolute local path
+and tell the player to send it directly (`:53-57`).
+
+**Limitations.** 24-hour link expiry on the primary host. It uploads the log to a public
+anonymous file host with no redaction — paths, save names and hero names become world-readable
+to anyone with the link. Success is detected purely by `findstr /b "https://"`, so an HTML error
+page beginning with a URL would be mistaken for a link.
+
+### Full diagnostics bundle
+
+**README item** 26 · **Source** `collect-diagnostics.cmd` · **Class** n/a (batch) · **Tag** n/a
+· **Config** bundles `guardconfig.json` · **Scope** both — it collects the host/client/solo BT
+sync logs by name, so one bundle identifies which co-op role the machine was playing
+
+**Bug.** One log is never enough to diagnose a co-op crash: BannerlordTogether's own sync logs
+and Bannerlord's crash report live in three different folders, and asking a player for each one
+round-trips for days.
+
+**Mechanism.** Stage into `%TEMP%\bltguard-diag`: `CrashGuard.log`, the rotated
+`CrashGuard.log.1`, `guardconfig.json` (all from the module root), and BT's `bt-sync-host.txt` /
+`bt-sync-client.txt` / `bt-sync-solo.txt` from `%USERPROFILE%\Desktop`
+(`collect-diagnostics.cmd:33-38`); then pick the newest `*.html` in `%USERPROFILE%\Documents`
+whose filename contains "crash" (`dir /b /o-d`, `findstr /i "crash"`) and copy it in as
+`crashreport.html` (`:41-43`). `Compress-Archive` the stage to
+`%TEMP%\bltguard-diagnostics.zip` (`:46`), upload with a 72 h litterbox link falling back to
+`0x0.st` (`:52-55`), and put the URL on the clipboard (`:60-61`). Every copy is `>nul 2>&1` so a
+missing file is skipped, not fatal.
+
+**Limitations.** Depends on `powershell -NoProfile -Command Compress-Archive` (`:46`) — a
+PowerShell dependency inside a player-facing `.cmd`; if PowerShell is blocked or restricted the
+zip step silently fails and only the "files are staged in `%STAGE%`" error remains (`:47`). The
+Steam auto-detect list here is **shorter** than `install.cmd`'s and `share-log.cmd`'s — only six
+entries (`:13-20`), missing `D:\Steam`, `E:\Steam`, `F:\Steam` and every `G:` path — so a player
+whose install `install.cmd` found automatically may still be prompted here. It `rmdir /s /q`s
+the stage folder on every run (`:28`), destroying a prior bundle.
+
+### Single-version-source enforcement (`StampSubModuleVersion`)
+
+**README item** 25 · **Source** `Directory.Build.props` · **Class** n/a (MSBuild target) ·
+**Tag** n/a · **Config** none · **Scope** n/a (build time)
+
+**Bug.** The launcher-visible version in `SubModule.xml` drifts from the built assembly version,
+so neither the player nor a log reader can tell which build is actually installed —
+`SubModule.xml` had drifted to v1.0.0 while the assemblies carried a different version.
+
+**Mechanism.** MSBuild target `StampSubModuleVersion`, `AfterTargets="Build"`, guarded by
+`Condition="'$(MSBuildProjectName)' == 'BLTDeploymentCrashGuard'"` so it runs exactly once per
+build (harness only, not repeated by the payload build). It uses
+`<XmlPoke XmlInputPath="$(MSBuildThisFileDirectory)SubModule.xml" Query="/Module/Version/@value" Value="v$(Version)" />`
+(`Directory.Build.props:12-19`). The single source is `<Version>1.3.2</Version>` (`:9`), from
+which MSBuild also stamps both assemblies' `AssemblyVersion`/`FileVersion` and which `Diag`
+reads back at runtime for the log banner (`:3-7`).
+
+**Limitations.** It pokes only the repo-root `SubModule.xml` (`$(MSBuildThisFileDirectory)`) —
+`dist/SubModule.xml` must be copied by hand as part of deploy. Nothing stamps the payload build
+if the harness is not rebuilt.
+
+**Self-test.** `Directory.Build.props:3-7` asserts the contract in prose: "THE single source of
+truth for the mod version. Everything derives from it … Never write a version number anywhere
+else."
+
+### Unique per-build assembly name (`LoadFrom` dedup fix)
+
+**README item** n/a · **Source** `Payload/BLTDeploymentCrashGuard.Payload.csproj` · **Class**
+n/a (MSBuild) · **Tag** `[HOTRELOAD]` · **Config** `hotReload` · **Scope** n/a (dev build time)
+
+**Bug.** A hot-reload appeared to succeed but the fix under test never ran: dropping a
+freshly-built payload gave you back the already-loaded generation. Field-proven 2026-09-01
+17:37, log line quoted in the comment: "LoadFrom deduped to already-loaded 1.2.7.42191". The
+`LoadFrom` context dedups simple-named assemblies by **name only**, so the unique
+`AssemblyVersion` revision added in v1.2.3 never mattered.
+
+**Mechanism.** Stamp the assembly's internal name per build —
+`<PayloadBuildStamp>$([System.DateTime]::UtcNow.ToString("yyMMddHHmmss"))</PayloadBuildStamp>`
+and `<AssemblyName>BLTDeploymentCrashGuard.Payload.b$(PayloadBuildStamp)</AssemblyName>`
+(csproj `:22-23`) — because "the LoadFrom context dedups simple-named assemblies by NAME ONLY …
+A unique name per build is the only identity LoadFrom cannot collapse" (`:12-16`). Then the
+`PublishFixedPayloadName` target copies `$(TargetPath)` to the fixed
+`BLTDeploymentCrashGuard.Payload.dll` and deletes the stamped file "so bin/ holds exactly one
+payload" (`:92-97`), because "csc names the assembly after its OUTPUT FILE, so the stamp must be
+the compile-time output name" (`:19-21`).
+
+**Limitations.** Nothing may depend on the internal assembly name; the comment enumerates why
+that holds — "the harness finds PayloadEntry by type name, tests link source files,
+SubModule.xml lists only the harness" (`:16-18`). A second build inside the same UTC **second**
+would collide on the stamp. This change also required making the harness API public, since
+`InternalsVisibleTo` cannot match a stamped name, and it requires one game restart (the loaded
+harness must be 1.2.8+); every reload after that is clean.
+
+### Apply-new-then-unpatch-old reload ordering
+
+**README item** n/a · **Source** `HOTRELOAD.md` (mechanism implemented in
+`Harness/HotReload.cs`) · **Class** `HotReload` · **Tag** `[HOTRELOAD]` · **Config**
+`hotReload` · **Scope** both (dev only)
+
+**Bug.** A failed hot-reload could leave the game with **no** guards patched at all — old
+generation already unpatched, new one failed to apply — silently reintroducing every crash the
+mod fixes, mid-session.
+
+**Mechanism.** "Fresh statics and a per-generation Harmony owner id
+(`bltogether.crashguard.gen{N}`); the new generation is applied first, then the previous
+generation is `UnpatchAll`'d — a failed reload keeps the previous generation, so the game is
+never left unpatched" (`HOTRELOAD.md:10-13`). Success is visible in the log as
+`[HOTRELOAD] gen2 applied (reload), unpatched …gen1` and the engine reloads within about 400 ms
+of the DLL landing (`HOTRELOAD.md:34`).
+
+**Limitations.** Both generations are briefly patched simultaneously — a double-patch window
+between apply and unpatch. Old assemblies cannot unload on .NET Framework, so roughly 1–3 MB
+leaks per reload (`HOTRELOAD.md:63`).
+
+### Two-condition hot-reload gate
+
+**README item** n/a · **Source** `HOTRELOAD.md`, `Harness/HotReload.cs:70-72` · **Class**
+`HotReload` · **Tag** `[HOTRELOAD]` · **Config** `hotReload` · **Scope** both (dev only)
+
+**Bug.** Shipping a runtime code-loading path — `Assembly.LoadFrom` of a watched file, or a live
+Roslyn compiler — to players is a stability and security hazard: a dropped DLL would execute
+in-process.
+
+**Mechanism.** Hot-reload requires **both** `"hotReload": true` in `guardconfig.json` **and** an
+empty marker file `.hotreload-dev` in the module root
+(`Modules/BLTDeploymentCrashGuard/.hotreload-dev`). "Both conditions are required — this makes
+runtime code loading impossible on a normal player install" (`HOTRELOAD.md:15-21`). The section
+header is explicit: "Enabling hot-reload (dev only — never ship this on)".
+
+### Roslyn edit-`.cs` auto-reload (mode B)
+
+**README item** n/a · **Source** `HOTRELOAD.md` (implementation in
+`Harness/PayloadCompiler.cs`) · **Class** `PayloadCompiler` · **Tag** `[HOTRELOAD]` ·
+**Config** `hotReloadRoslyn`, `payloadSourceDir` · **Scope** both (dev only)
+
+**Mechanism.** Compile Roslyn support into the harness only under `-p:Roslyn=true` (harness
+csproj `:17-19` sets `DefineConstants ROSLYN`; `:25-27` adds `Microsoft.CodeAnalysis.CSharp
+4.8.0` conditionally), set `"hotReloadRoslyn": true`, and point `"payloadSourceDir"` at the repo
+`Payload/` folder; then "editing any `Payload/*.cs` triggers a runtime Roslyn recompile +
+reload — no `dotnet build`" (`HOTRELOAD.md:36-45`). On compile failure "the engine logs it and
+falls back to the prebuilt DLL" (`:47-48`).
+
+**Limitations.** "Roslyn on .NET Framework 4.8 inside Bannerlord can bind-conflict with
+ButterLib's older `System.Collections.Immutable` / `System.Reflection.Metadata`"
+(`HOTRELOAD.md:46-47`). Mode (A) build-and-drop is described as "default, bulletproof, zero
+extra deps" (`:24`) and mode (B) as "slicker, fragile on net472" (`:36`).
+
+### Battle-mode stash: documented reload gap
+
+**README item** 14 · **Source** `HOTRELOAD.md:65-68` · **Class** `BattleMode` · **Tag**
+`[BATTLE-MODE]` · **Config** `battleMode` · **Scope** solo (`battleMode=coop` lifts nothing and
+is unaffected)
+
+**Known gap (Phase B).** "`BattleMode`'s foreign-patch stash does not yet survive a reload …
+reloading while in `battleMode=solo` (vanilla, BT battle patches lifted) can leave them lifted.
+Reloading in `battleMode=coop` is unaffected (nothing is lifted). Restart if battle mode
+misbehaves after a reload."
+
+### IL-probe root-cause method (`MovementOrder` type initializer)
+
+**README item** n/a · **Source** `tools/il-probes/README.md` · **Class** n/a (tooling) ·
+**Tag** n/a · **Config** none · **Scope** both
+
+**Mechanism.** The `MovementOrder` type-initializer crash was root-caused with two `IlDump` runs
+and one reflection check, no decompiler:
+`IlDump.exe TaleWorlds.MountAndBlade.dll "TaleWorlds.MountAndBlade.MovementOrder::.cctor"`
+shows it "builds six defaults via `newobj MovementOrder::.ctor`";
+`IlDump.exe … "MovementOrder::.ctor"` shows "the one null-capable line:
+`call Mission::get_Current; callvirt Mission::get_CurrentTime`"; plus "a reflection check that
+`MovementOrder` is a `beforefieldinit` value type" — so the cctor fires lazily at an
+unpredictable first touch (`tools/il-probes/README.md:34-44`).
+
+**Limitations.** Because the resulting guard is a load-time fix that must run before the game
+touches the type, it cannot be hot-reloaded — it needs a fresh game launch.
+
+### Pinned package sources
+
+**README item** n/a · **Source** `NuGet.config` · **Class** n/a · **Tag** n/a · **Config** none
+· **Scope** n/a (build time)
+
+**Bug.** A machine-level or user-level `NuGet.config` feed (corporate, private, offline)
+silently changes what the build resolves, or breaks the build entirely on someone else's box.
+
+**Mechanism.** `<packageSources><clear /><add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources>`
+— the `<clear />` discards all inherited sources so exactly one feed is in play
+(`NuGet.config:3-6`).
+
+**Limitations.** No `packageSourceMapping` and no lock file — versions are pinned only by the
+two `PackageReference` declarations (`Microsoft.NETFramework.ReferenceAssemblies` 1.0.3,
+`Microsoft.CodeAnalysis.CSharp` 4.8.0).
+
+### Module manifest: dependency ordering and optional BT
+
+**README item** n/a · **Source** `SubModule.xml` · **Class** `BLTDeploymentCrashGuard.SubModule`
+· **Tag** n/a · **Config** none · **Scope** both
+
+**Bug.** If the guard loads before `Bannerlord.Harmony` there is no Harmony to patch with; if it
+hard-depends on BannerlordTogether it refuses to load for players who do not have BT; if it
+declares itself a multiplayer module it will not appear where BT co-op is actually launched
+from.
+
+**Mechanism.** `<DependedModules>`: `Bannerlord.Harmony`, `Native`, `SandBoxCore`, `Sandbox` all
+at `DependentVersion v1.4.8`, plus `<DependedModule Id="BannerlordTogether" Optional="true" />`
+(`SubModule.xml:8-14`). `SingleplayerModule=true`, `MultiplayerModule=false`,
+`IsTWCompatible=false` (`:5-7`). One SubModule entry: name `BLTDeploymentCrashGuard`, DLLName
+`BLTDeploymentCrashGuard.dll`, `SubModuleClassType BLTDeploymentCrashGuard.SubModule`, with an
+empty `<Assemblies />` (`:15-22`).
+
+**Limitations.** `Optional="true"` does **not** guarantee load order after BT — `install.cmd:70-71`
+has to tell the player to tick the mod "in the Singleplayer mods list, AFTER BannerlordTogether"
+by hand. `<Assemblies />` is empty, so the payload DLL is invisible to the launcher and must be
+loaded by the harness itself.
+
+### `dist/` is tracked on purpose
+
+**README item** n/a · **Source** `.gitignore` · **Class** n/a · **Tag** n/a · **Config** none ·
+**Scope** n/a (release)
+
+**Bug.** A conventional `.gitignore` would ignore build output, but `install.cmd` downloads the
+shipped binaries straight out of the repo, so ignoring them would break every install.
+
+**Mechanism.** `.gitignore` contains only `bin/`, `obj/`, `.runner/` (`:1-3`) — `dist/` is
+deliberately absent, so the three shipped artifacts are committed. `install.cmd:9` sets
+`REPO=https://raw.githubusercontent.com/goobz22/BLTDeploymentCrashGuard/main` and `:58-60` fetch
+`%REPO%/dist/SubModule.xml`, `%REPO%/dist/BLTDeploymentCrashGuard.dll` and
+`%REPO%/dist/BLTDeploymentCrashGuard.Payload.dll`.
+
+**Limitations.** There is no staging or tag gate — any push to `main` that touches `dist/` is
+immediately live to every player running `install.cmd`. Binary churn accumulates in git history
+(`dist/BLTDeploymentCrashGuard.Payload.dll` is 191,488 bytes, the harness 40,960 bytes).
 
 ---
 
