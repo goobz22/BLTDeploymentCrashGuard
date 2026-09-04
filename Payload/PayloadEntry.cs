@@ -81,6 +81,7 @@ namespace BLTDeploymentCrashGuard
                     CoopBattleTrace.Apply(harmony);
                     CharacterCreationTrace.Apply(harmony);
                     RoleTrace.Apply(harmony);
+                    RuntimeDiagnostics.Enabled = true; // memory/state heartbeat + rich exception context
                     Log.Info("tracing ENABLED (guardconfig tracing=true)");
                 }
 
@@ -129,6 +130,7 @@ namespace BLTDeploymentCrashGuard
             BattleMode.DecideAndApply(Harmony, "mission-init");
             SiegeCommandGuard.OnMissionInit(); // per-battle counters and hand-off depth reset
             CoopCommandSplit.OnMissionInit(); // re-resolve the two players' parties per battle
+            RuntimeDiagnostics.Mark("mission-init"); // memory + engine-state snapshot at every mission transition
         }
 
         public void Tick()
@@ -144,6 +146,7 @@ namespace BLTDeploymentCrashGuard
             CoopHeroIdentityLock.Tick(); // claim this machine's hero once the map is up
             ClanPartyCreationAdvisor.Tick(); // open the troop exchange for a just-created party
             CoopCommandSplit.Tick(); // keep each co-op player's troops in their own formation block
+            RuntimeDiagnostics.Heartbeat(); // periodic memory + engine-state telemetry (tracing only)
             ReportGuardActivity();
         }
 
