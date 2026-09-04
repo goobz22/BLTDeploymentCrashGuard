@@ -320,6 +320,29 @@ The mod ships as two assemblies (see `HOTRELOAD.md`):
 enabled, the payload can be rebuilt and reloaded with no game restart (each payload build
 carries a unique assembly name so the runtime never hands back a previous generation).
 
+### How each fix works
+
+Every fix lives in its own `Payload/*.cs` file whose header explains the bug and the fix. A fix is
+a Harmony patch (prefix/postfix/finalizer/transpiler) or a by-name reflection hook into the game or
+BannerlordTogether. Game and BT members are resolved by reflection so that a game or BT update
+degrades gracefully instead of crashing, and each fix carries a startup self-test that pins the
+members and its decision logic (`selfTest`), reports health (`MOD HEALTH`), and logs under its own
+tag so you can grep the log for exactly what happened. The single version number lives in
+`Directory.Build.props` and is stamped into both assemblies and `SubModule.xml` at build time.
+
+### For developers and AI agents
+
+The how-it-works-so-we-don't-re-derive-it docs:
+
+- **`CLAUDE.md`** — operating guide: architecture, build/deploy (deploy both DLLs + `SubModule.xml`
+  to the game module *and* `dist/`, hash-verify; pushing == releasing), and the house rules.
+- **`docs/DIAGNOSTICS.md`** — how to investigate a crash without guessing: the IL-probe toolchain,
+  runtime tracing, the session-wide first-chance exception capture, log tags, and rotation.
+- **`docs/ENGINE-NOTES.md`** — engine/BT facts proven from IL (e.g. the `MovementOrder`
+  `beforefieldinit` type-init crash, mission load order, siege command, the BT battle command model).
+- **`tools/il-probes/`** — small standalone tools to read the installed game assemblies
+  (`NameSearch`, `Inspect`, `IlDump`, `Callers`, `VerCheck`).
+
 ## Build from source
 
 Requires the .NET SDK and the game installed. Game path is set in the `.csproj` (`GameDir`);
