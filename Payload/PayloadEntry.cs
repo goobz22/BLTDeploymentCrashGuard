@@ -80,6 +80,7 @@ namespace BLTDeploymentCrashGuard
                     TimeTrace.Apply(harmony);
                     CoopBattleTrace.Apply(harmony);
                     CharacterCreationTrace.Apply(harmony);
+                    MovementOrderInitProbe.Apply(harmony); // origin probe for the MovementOrder type-init crash
                     RoleTrace.Apply(harmony);
                     RuntimeDiagnostics.Enabled = true; // memory/state heartbeat + rich exception context
                     Log.Info("tracing ENABLED (guardconfig tracing=true)");
