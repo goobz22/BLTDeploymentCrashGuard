@@ -976,3 +976,1249 @@ runtime plus the way the game loads modules.
   not a Harmony patch, so there is nothing to interfere with another mod and nothing to break on an
   upstream update beyond the two reflected members — each individually reported when missing.
 - **Now** — `Payload/ShareTimeControl.cs:12-21,52-119`, driven from `Payload/PayloadEntry.cs:147`.
+
+---
+
+## 6. Engine — encounters and the campaign map
+
+### E29 · A rate limiter that cannot tell a pathology from a busy moment
+
+- **What happened** — Version 1 of the encounter loop breaker was a **pure rate** breaker (N
+  applications in a window). A partner's legitimate join storm looks exactly like that, so the breaker
+  would have suppressed real joins.
+- **Lesson** — Gate the limiter on the pathological **signature**, not on rate alone. Only
+  applications that closely follow a *local* `PlayerEncounter.Finish` (within 4 s) count toward
+  tripping; join requests have no preceding local `Finish`, so they can never trip it. False positives
+  become structurally impossible rather than merely unlikely.
+- **Now** — `Payload/EncounterLoopGuard.cs:37-41,109-112`.
+
+### E30 · A guard whose trip signal comes from an optional subsystem
+
+- **What happened** — The finish stamp that gates E29 comes from a **tracing-only** patch:
+  `EncounterLoopGuard.NoteEncounterFinish` is called only from `TracePatches`' `PlayerEncounter.Finish`
+  prefix, and `TracePatches.Apply` runs only when `guardconfig` `tracing=true` — which defaults to
+  **false**. With tracing off, `_lastFinishTick` stays 0, `followsFinish` is always false, and the
+  breaker can never trip.
+- **Lesson** — A guard is only as live as the subsystem that produces its signal. If a decision
+  depends on a debug-only code path, the documented behaviour differs between troubleshooting and
+  normal play.
+- **Now** — `Payload/EncounterLoopGuard.cs:42-45,109-112`; `Payload/TracePatches.cs:44,185-188`;
+  `Payload/PayloadEntry.cs:86-89`; `Harness/GuardConfig.cs:106` (`"tracing": false` default).
+
+### E31 · Trying to repair transient half-synced co-op state
+
+- **What happened** — BT's join syncs a `MobileParty`'s fields **piecemeal**, producing states vanilla
+  can never produce. The party heals on its own once sync completes.
+- **Lesson** — Prefer skipping one tick — which reruns — over repairing the state: "skipping one
+  party's encounter handling for a tick is benign; it reruns next tick, and the party heals when its
+  sync completes."
+- **Now** — `Payload/PartyAiCrashGuard.cs:18-23,22-23,86-93,92,127-130`.
+
+### E32 · A computed getter has no settable mirror
+
+- **What happened** — `PlayerSiege.PlayerSiegeEvent` is
+  `MainParty.SiegeEvent ?? MainParty.CurrentSettlement?.SiegeEvent` — you cannot repair the null by
+  assigning it.
+- **Lesson** — When the engine **derives** a value, the fix has to happen at the **effect site**:
+  apply the effect to the object you found yourself, rather than patching the derivation. Knowing the
+  `AttachedTo` / `Army.LeaderParty` derivations vanilla ignores is what makes an army-riding party's
+  siege findable at all — a real siege is reachable five ways.
+- **Now** — `Payload/MapIncidentCrashGuard.cs:19-22,189-197`; `UPSTREAM_BUG_REPORT.md:114-116`.
+
+### E33 · One null with two causes, treated as one
+
+- **What happened** — The same null had a co-op army-attach gap **and** a genuinely-over siege behind
+  it. A single "skip the effect" would silently delete a game feature for co-op players.
+- **Lesson** — Split the diagnosis before writing the fix: repair the recoverable case with the exact
+  vanilla effect, and report the truth in the unrecoverable one — never a feature downgrade. Probe an
+  ordered array of alternate derivations using the **same validity predicate the crash site needs**,
+  so the object you find cannot re-trigger the original NRE. Check the exact dereference chain first
+  and return early when it is intact, so the patch is live only in the state that would have crashed.
+- **Now** — `Payload/MapIncidentCrashGuard.cs:22-31,160-175,177-211,213-246`, called at `:215-218`.
+
+### E34 · Tracing an engine event that AI parties fire constantly
+
+- **What happened** — Tracing `EncounterManager.StartSettlementEncounter` unfiltered drowned the log
+  on 2026-08-18 — AI parties enter settlements all the time.
+- **Lesson** — Only the player's own encounters are diagnostic signal. Filter by
+  `MobileParty.IsMainParty` (also through `PartyBase.MobileParty`) before emitting.
+- **Now** — `Payload/TracePatches.cs:104-131,151-177`.
+
+---
+
+## 7. Engine — heroes, clans, and campaign actions
+
+### E35 · Skipping a daily tick to disable one of its effects
+
+- **What happened** — The third-party NoSickness mod skips `AgingCampaignBehavior.DailyTickHero`
+  entirely while the hero is ill and never clears the ill flag. That leaves a **permanently stuck**
+  ill flag and skips everything else `DailyTickHero` owns — aging events, come-of-age events.
+- **Lesson** — **Cure forward**: repair the state (`MainHeroIllDays = -1`, death mark cleared) and
+  return **true** so vanilla runs normally. A prefix returning false suppresses the original *and*
+  every event it raises.
+- **Now** — `Payload/IllnessDeathGuard.cs:19-23,116-127`.
+
+### E36 · Guarding each consumer of bad state instead of blocking its source
+
+- **What happened** — The old-age death path has several stages (ill days, HP drain, death mark,
+  extra-life consumption). Guarding each one is endless.
+- **Lesson** — Prefix `IsItTimeOfDeath` and block the **roll**, not the kill — one patch removes the
+  whole downstream state machine.
+- **Now** — `Payload/IllnessDeathGuard.cs:17-19,79-100`.
+
+### E37 · Guarding the frame where the NRE surfaces
+
+- **What happened** — The issue-quest CTD manifests in
+  `CharacterDevelopmentCampaignBehavior.OnHeroActivated → HeroDeveloper.DevelopCharacterStats()`,
+  dereferencing a null `HeroDeveloper`. Guarding the perk code is the obvious move and the wrong one:
+  the defect is that a **dead hero is being reactivated and re-added to the party at all**, from an
+  `IsAlive`-less loop in `IssueManager`. `Hero.OnDeath()` nulls `_heroDeveloper` and is the only place
+  that happens.
+- **Lesson** — Proving "this field is nulled in exactly one place" is what converts a hypothesis into
+  a fix. Then ship **both**: the caller fix for the known repro (`IssueManager.MakeAlternativeTroopsReturn`)
+  and a class-level domain invariant for every unknown caller (`Hero.ChangeState`, blocking
+  `dead → Active`). The test of a good invariant is that the legitimate path is unaffected — a real
+  revive clears `IsDead` first, so it is never blocked.
+- **Now** — `Payload/DeadHeroReactivationFix.cs:9-27,21-31,108-147`.
+
+### E38 · A destructive predicate that removes on uncertainty
+
+- **What happened** — `TroopRoster.RemoveIf` with a predicate whose `catch` returned **true** would
+  delete living troops on any reflection or engine hiccup.
+- **Lesson** — `catch { return false; } // never remove on uncertainty`. For a destructive predicate
+  the exception path must be the conservative one — and `TroopRosterElement` is a struct, so
+  `default(TroopRosterElement)` (null `Character`) is the cheapest degenerate input for pinning it in
+  a self-test.
+- **Now** — `Payload/DeadHeroReactivationFix.cs:91-104,163`.
+
+### E39 · A transaction split across two mods stops being atomic
+
+- **What happened** — `BarterManager.ApplyAndFinalizePlayerBarter` applies all offered barterables in
+  one loop. BT suppresses the marriage barterable while its siblings apply natively, so when BT's gate
+  then rejects, "the dowry is gone and no marriage happened."
+- **Lesson** — Gold cannot be un-applied from a patch. The whole transaction must be cancelled
+  **before anything applies** — the reusable answer to "mod A suppresses one leg, the other legs still
+  commit".
+- **Now** — `Payload/MarriageBarterGuard.cs:11-21,54-91`.
+
+### E40 · Opening a screen from inside a postfix whose stack is still unwinding
+
+- **What happened** — Opening the manage-troops screen inline from the `CreateNewClanParty` postfix
+  runs while "the clan screen's popup + inquiry are still unwinding on this call stack".
+- **Lesson** — Defer screen work to the next main-thread `Tick`, with the clan screen popped first, so
+  the party screen sits on the map exactly like vanilla's own flows. Record pending state and act from
+  the tick pump.
+- **Now** — `Payload/ClanPartyCreationAdvisor.cs:30-37,185-197,199-267`; pumped at
+  `Payload/PayloadEntry.cs:154`.
+
+### E41 · Pushing a screen without checking what is on the stack
+
+- **What happened** — A helpful mod that pushes a screen over a mission or over another screen wedges
+  the UI.
+- **Lesson** — Reproduce the preconditions vanilla's own callers satisfy: refuse over a `Mission`,
+  refuse when a `PartyState` is already active ("the player opened one — wait for it to close"),
+  `PopState(0)` a `ClanState` to land on `MapState`, and refuse on anything else (inquiry,
+  encyclopedia) to retry next tick.
+- **Now** — `Payload/ClanPartyCreationAdvisor.cs:235-256`.
+
+### E42 · Treating a freshly created `MobileParty` on a BT **client** as final
+
+- **What happened** — BT's `ClientWarPartyCreationPatch` registers a pending host-side creation, so
+  the local party is **provisional** and can be swapped for the host-authoritative instance.
+- **Lesson** — Wait a settle window (3 s here) and re-check **identity**, not just presence: on a
+  `ReferenceEquals` mismatch, adopt the new instance and restart the window rather than acting on a
+  doomed object.
+- **Now** — `Payload/ClanPartyCreationAdvisor.cs:34-37,48-51,226-233`.
+
+### E43 · Waiting forever for co-op state that may never arrive
+
+- **What happened** — A pending action keyed on a networked object can hang indefinitely.
+- **Lesson** — Bound the wait (`PendingTimeoutMs = 15000`) and give up with **both** a log line and an
+  on-screen fallback telling the player what to do instead ("click the party on the map").
+- **Now** — `Payload/ClanPartyCreationAdvisor.cs:51,210-215`.
+
+### E44 · Flooding the log from a prefix that fires every in-game day
+
+- **What happened** — A permanently-active daily prefix writes a line per day for the life of the save.
+- **Lesson** — A one-shot flag with explicit wording — "logged once, active every day" — proves the
+  guard engaged without the flood.
+- **Now** — `Payload/IllnessDeathGuard.cs:32,87-92`.
+
+### E45 · Checking a config flag before resolving the patch targets
+
+- **What happened** — A feature turned off by config would hide the fact that a game update broke its
+  targets.
+- **Lesson** — Resolve **both** targets first and only then honour the off-switch, so drift is still
+  reported when the feature is disabled — and report disabled-by-config as `ok = TRUE` with the detail
+  "disabled by config", so it is never mistaken for a failure.
+- **Now** — `Payload/IllnessDeathGuard.cs:38-52`.
+
+### E46 · Two mods patching the same vanilla behaviour
+
+- **What happened** — This guard and the standalone NoSickness mod both patch the illness path.
+- **Lesson** — The safe composition is for one of them to be strictly **state-reducing**: because this
+  guard only ever cures and never increments ill days, NoSickness's prefix always sees a healthy hero
+  and passes through. That reasoning has to be written down, or the next change breaks it. (Note the
+  documentation drift here: CHANGELOG.md:303-304 describes a *stand-down*; what shipped is
+  coexistence — say which of the two you built.)
+- **Now** — `Payload/IllnessDeathGuard.cs:25-27`; CHANGELOG.md:303-304,369-370.
+
+> **Good to know — the vanilla old-age illness machine, and identity switching.**
+> `BecomeOldAge` at 55, `MainHeroIllDays`, `Hero.DeathMark` with a private setter, and the
+> `ApplyByDeathMark` branch — an IL-proven map of a mechanic many mods disable badly. Clearing a
+> pending death mark:
+> `AccessTools.PropertySetter(typeof(Hero),"DeathMark")?.Invoke(hero, new object[]{ KillCharacterActionDetail.None })`
+> (`Payload/IllnessDeathGuard.cs:9-16,112-123`).
+> `ChangePlayerCharacterAction.Apply(Hero)` is vanilla's supported player-identity switch (the
+> death-succession path), and a save stores exactly **one** player identity — there is no per-machine
+> identity in the save format, which is the whole shared-save co-op handoff problem
+> (`Payload/CoopHeroIdentityLock.cs:12-16,22-24,167`).
+
+---
+
+## 8. Engine — settlements and scene objects
+
+### E47 · An exact float threshold that vanilla itself never reaches
+
+- **What happened** — `CastleGate.ServerTick` activates the gate's interaction points only on an exact
+  `animation parameter >= 1.0`, while vanilla's own `SetInitialStateOfGate` parks a **closed** gate at
+  a frozen **0.99** and freezes the skeleton. The gate looks at rest and is permanently
+  un-interactable.
+- **Lesson** — "It is there but has no prompt" is the signature of an exact-threshold test against an
+  animation or float parameter. Correct only inside a narrow at-rest band (`[0.98, 1.0)`), leaving
+  genuinely mid-swing (`< 0.98`) and already-correct (`>= 1.0`) cases to vanilla, so the fix cannot
+  mask real motion.
+- **Now** — `Payload/SiegeGatePromptFix.cs:13-27,32,88-91,134`; CHANGELOG.md:151-157.
+
+### E48 · Unlocking one of several independent locks
+
+- **What happened** — A civilian gate is locked **three** independent ways: `MissionObject.IsDisabled`
+  on the gate machine, `IsDisabled` on every standing point, and `UsableTeam` set to
+  `Mission.DefenderTeam`, which `StandingPointWithTeamLimit.IsDisabledForAgent` compares against
+  `agent.Team` and which never equals the player's team. `CloseDoor()` also early-outs on
+  `IsDisabled`.
+- **Lesson** — Enumerate **all** the gates on a capability from IL before writing the fix; unlocking
+  one does nothing. All three here are deliberate "gates are scenery in town" design, not an oversight.
+  `MissionObject.IsDisabled` has no public setter — use `AccessTools.PropertySetter` + `Invoke`.
+- **Now** — `Payload/CivilianGateCloseFix.cs:11-25,41,82-87`; CHANGELOG.md:161-169.
+
+### E49 · Making previously-dead code run
+
+- **What happened** — Civilian scenes never ticked gates before this fix re-enabled them, so
+  `CastleGate.OnTick` / `ServerTick` now run in a context they were never written for and could hit a
+  siege-only assumption.
+- **Lesson** — When a fix activates a dormant code path, add self-disabling insurance in the **same
+  change** — here a tick finalizer that swallows and logs — even when no failure is known ("none
+  known; self-disabling insurance").
+- **Now** — `Payload/CivilianGateCloseFix.cs:27-28,98-114`; CHANGELOG.md:170-171.
+
+### E50 · Overriding a deliberate scenario decision
+
+- **What happened** — `MissionObject.IsDeactivated` (machine-level deactivation) can be a deliberate
+  scene or scenario decision; overriding it would break scripted scenes.
+- **Lesson** — Respect machine-level deactivation and correct only the specific frozen-parameter case.
+- **Now** — `Payload/SiegeGatePromptFix.cs:66-69`.
+
+### E51 · "Fixing" a correct-but-similar-looking case
+
+- **What happened** — A ram-**destroyed** gate has no close prompt, and that is correct vanilla
+  behaviour, not the bug being fixed. "Fixing" it would let players close a broken gate.
+- **Lesson** — Carve the correct case out explicitly and log it under tracing, so the next
+  investigator does not chase it.
+- **Now** — `Payload/SiegeGatePromptFix.cs:24-26,70-80`.
+
+### E52 · Restoring more than the capability requires
+
+- **What happened** — The civilian gate fix deliberately does **not** restore the nav-mesh ability
+  flags vanilla cleared for the open state.
+- **Lesson** — Restore only what blocks the capability you are restoring. An open civilian gate then
+  behaves identically to before, and closing goes through vanilla's own `CloseDoor` — animation,
+  `SetGateNavMeshState`, colliders — instead of a reimplementation.
+- **Now** — `Payload/CivilianGateCloseFix.cs:22-25`; CHANGELOG.md:169-170.
+
+### E53 · Enabling an interaction with nobody local to use it
+
+- **What happened** — Re-enabling a town gate with a null `Mission.Current.PlayerTeam` would make it
+  interactable with no local team, and `SetUsableTeam(null)` would be meaningless.
+- **Lesson** — Bail early: "nobody local to use the gate — leave it as scenery."
+- **Now** — `Payload/CivilianGateCloseFix.cs:77-81`.
+
+---
+
+## 9. Engine — UI, screens, and view models
+
+### E54 · Substituting your own enumeration into a live UI path
+
+See **H6** for the mechanism. The rule in one line: enumerate a vanilla `yield` iterator for
+**logging only**; the result is never replaced (`Payload/ClanPartyCreationAdvisor.cs:119-155`;
+CHANGELOG.md:101-103).
+
+### E55 · Reading view-model members with `AccessTools.Field` alone
+
+See **H7**. Field-first with a property fallback, and a self-test that accepts *either* shape for
+each of `Title` / `IsDisabled` / `DisabledReason`
+(`Payload/ClanPartyCreationAdvisor.cs:157-167,332-336`).
+
+### E56 · Letting a failed screen build leave the UI unusable
+
+- **What happened** — Swallowing an exception in a screen-construction path normally strands the
+  player on a dead screen.
+- **Lesson** — A finalizer can **recover**: `TaleWorlds.ScreenSystem.ScreenManager.PopScreen()` is
+  static and parameterless (`Invoke(null, null)`), so a failed `CreateDataSource` pops back to the map
+  — a CTD becomes a graceful cancel.
+- **Now** — `Payload/ClanScreenCrashGuard.cs:55-65`.
+
+### E57 · Building a screen instead of calling the game's own entry point
+
+- **What happened** — Re-implementing a flow loses everything the engine does around it.
+- **Lesson** — Reuse the vanilla entry point: `Helpers.PartyScreenHelper.OpenScreenAsManageTroops(MobileParty)`
+  is the exact call the "manage garrison" menu and the clan-member conversation use, so you inherit
+  its behaviour and its preconditions (it expects the map state). The same principle covers
+  `CastleGate.CloseDoor`/`OpenDoor`, `ChangePlayerCharacterAction`, and `SetProgress` with vanilla's
+  own report text.
+- **Now** — `Payload/ClanPartyCreationAdvisor.cs:32-38,256,337`; CHANGELOG.md:95-98,142-144,169-170,251-253.
+
+### E58 · Applying a peer's data update under an open screen
+
+- **What happened** — Bannerlord screens bind to the **live** `ItemRoster`; clearing it under an open
+  stash screen is visible corruption.
+- **Lesson** — Check for the open screen **before dequeuing**, still under the queue lock, so the
+  update is deferred rather than lost.
+- **Now** — `Payload/StashSync/StashSyncGuard.cs:285-289`.
+
+> **Good to know — `ClanPartiesVM` and the clan Parties tab.**
+> The exact greyed-card and disabled-button reason sets, the yield-iterator candidate list, and
+> `ClanCardSelectionItemInfo`'s public fields — everything needed to instrument or extend the tab —
+> plus the vanilla gap behind "I made a party and it did not let me add anyone": `CreateNewClanParty`
+> makes a **leader-only** party with no troop step.
+> `Payload/ClanPartyCreationAdvisor.cs:19-28,119-121,157-167,277-300`.
+
+---
+
+## 10. BannerlordTogether — interoperating with a peer mod
+
+BT is a second mod patching the same engine, loaded by the same launcher, sometimes **after** this
+one, with obfuscated members and no published API. Everything in this section is about the seam
+between two mods rather than about the engine.
+
+### B1 · Assuming the peer will verify or bootstrap again later
+
+- **What happened** — BT's `CoopSubModule.TryVerifyNativeActionCacheWhenCampaignMapReady` audits the
+  engine's `ActionIndexCache` before applying its deferred Harmony patches. On a **client** it
+  compares the engine's *static* mirror fields — all sitting at `-1`, unprimed — against fresh native
+  lookups, logs `BootstrapAborted reason=action-cache-mismatch … restartRequired=True`, and sets
+  `_harmonyPatchBootstrapAttempted = true`, which permanently blocks retry. The whole session then
+  runs with BT's sync patches unapplied: invisible partner armies, joins not registering on the host,
+  speed desync, no client hero selection, a host-style map shell. BT's own log proves the native
+  catalog is fully loaded (`actions=5167`, every action code valid, `diskLoad=False`) — the audit is
+  a **false negative**. It is written only to `bt-sync-client.txt` on the Desktop; nothing reaches
+  the player.
+- **Lesson** — An interop fix that has to beat a **one-shot** must be installed before the peer
+  reaches that code. On a mid-game payload reload the same code can only install its prefix and wait
+  for the next process. And a peer's silent half-load is your job to surface — a session-long silent
+  degradation costs whole evenings before anyone opens a log.
+- **Now** — `Payload/ClientBootstrapFix.cs:9-30,74-82,173-176`; the ordering note at
+  `Payload/PayloadEntry.cs:72-74`; `UPSTREAM_BUG_REPORT.md:22-32`; `docs/UPSTREAM_CONTRIBUTION.md:68-70`.
+
+### B2 · A "restart required" that has no mechanism to become true
+
+- **What happened** — `BootstrapAborted` reports `restartRequired=True`, but BT's shipped
+  `RuntimeDataCache` (dated 2026-06-30) never loads for game build 1.4.8.119303 and **no fresh cache
+  is ever persisted**, so the next launch is identical. Proven by reproducing with the `.rdc` present
+  (2026-08-19 20:46) and with it removed (21:41): `diskLoad=False` and all-`(-1)` sentinels both ways.
+- **Lesson** — Test a "restart and it will fix itself" claim **both** with and without the artefact
+  it depends on. If nothing writes that artefact, the loop is permanent and the cure is somewhere
+  else; do not present cache-clearing as the remedy.
+- **Now** — `UPSTREAM_BUG_REPORT.md:16-22`; `Payload/BootstrapWatch.cs:97-99` (detection and hygiene
+  only); the actual fix is `Payload/ClientBootstrapFix.cs` priming the static mirrors.
+
+### B3 · Patching a peer's readiness check out instead of satisfying it
+
+- **What happened** — Force-passing BT's verification wholesale would let it patch **before** the
+  engine catalog is loaded — the exact thing that check exists to prevent.
+- **Lesson** — Reproduce the peer's own preconditions (num action codes > 0, the four probe actions
+  resolve, no animation disk load in flight), prime the stale state so its audit legitimately passes,
+  and remove only the one over-strict requirement. When the catalog is genuinely not ready, the
+  prefix returns `true` and BT's original wait logic runs unchanged.
+- **Now** — `Payload/ClientBootstrapFix.cs:22-30,147-191,250-284,288-320`.
+
+### B4 · A self-disable probe that inspects one field
+
+- **What happened** — Judging "the mirrors are already primed" from a single `ActionIndexCache` field
+  would see a **partially** primed state — sentinel valid, other mirrors still `-1` — and make the
+  fix stand down, silently re-opening the bug it exists to fix.
+- **Lesson** — A stand-down probe must inspect every element of the state it claims is healthy and
+  return false the moment one is bad. Log **which** of the two explanations applies — "primed by us"
+  versus "already primed and we never intervened — BT/engine handles it" — because that distinction
+  is what makes retiring the workaround a decidable question instead of a guess.
+- **Now** — `Payload/ClientBootstrapFix.cs:155-170,216-248`; the mechanism at `Harness/SelfHealing.cs:16-19`.
+
+### B5 · Reading a peer's log for a **previous** session's event with a tail scan
+
+- **What happened** — A 256 KB tail scan missed `BootstrapAborted` entirely: live test 2026-08-19
+  21:14, the abort line sat at ~50 KB of a 12.7 MB log.
+- **Lesson** — Scan the **whole file** at startup, because a previous session's event can be
+  anywhere; only mid-session polls can rely on the tail, where new lines land. Open with
+  `FileShare.ReadWrite` — that is what makes reading a file another process is actively writing
+  possible at all. Persist a handled-offset ledger so an old event is not re-handled every launch,
+  and treat that offset as a **monotonic marker**, never a byte-exact seek position: the arithmetic
+  assumes 2-byte line endings (`consumed += line.Length + 2`).
+- **Now** — `Payload/BootstrapWatch.cs:66-70,75-79,132-189,191-218,203-210`.
+
+### B6 · Remediating a peer's regenerable data by deleting it
+
+- **What happened** — The stale `.rdc` has to be out of the way before BT's next audit, but deleting
+  another mod's file outright is unrecoverable and leaves no trail.
+- **Lesson** — **Rename, never delete**: `<name>.stale-<timestamp>` is reversible by hand, auditable,
+  and still forces the owner to rebuild. Reach the sibling module through `Assembly.Location` plus
+  three `..` levels rather than a hardcoded Steam path (two levels reach your own module root).
+- **Now** — `Payload/BootstrapWatch.cs:97-129,105-107,136-137`.
+
+### B7 · By-name reflection into a peer mod degrades **silently**
+
+- **What happened** — BT moved its network classes into `BannerlordTogether.Network.*`. Both
+  pregnancy-sync and stash-sync simply stopped working; the only signal anywhere was `not resolved`
+  in the 2026-09-01 mod-health line.
+- **Lesson** — Resolve through an **ordered candidate list** of fully-qualified type names, patch
+  wherever the member is found, and report DEGRADED when none resolved; refuse to activate on a
+  *partial* resolve, so a half-resolved reflection set cannot silently skip checks. The startup
+  health line is the only thing that converts a peer's refactor into a signal instead of a mystery
+  "the feature stopped working".
+- **Now** — `Payload/PregnancySync/PregnancySyncGuard.cs:225-239`;
+  `Payload/StashSync/StashSyncGuard.cs:117-131`; `Payload/ClientBootstrapFix.cs:105-138`;
+  `Payload/BattleMode.cs:457-491`; CHANGELOG.md:129-132.
+
+### B8 · Latching the **attempt** instead of the **success** when the peer loads late
+
+- **What happened** — BT frequently loads after this module, so the first `Apply` finds nothing.
+  `ShareTimeControl`'s `_resolved` flag latches after a *single* resolution attempt, so if BT is not
+  in the AppDomain on the first tick, resolution is never retried for the rest of the process —
+  while `TimeEnforcementGuard` and `JoinSyncPauseEscape` return early **without** latching and are
+  retried from later lifecycle hooks.
+- **Lesson** — Latch the success, never the attempt, and retry from `OnBeforeInitialModuleScreen` /
+  `OnGameStart`. Decide per-lookup whether a *negative* result should be cached at all: `BattleMode`'s
+  `_searched` latch means a late-loading BT is never found for that generation, in the same codebase
+  that deliberately retries elsewhere. A negative cache and a retry policy side by side will disagree.
+- **Now** — `Payload/ShareTimeControl.cs:152-158` against `Payload/TimeEnforcementGuard.cs:56-59`,
+  `Payload/JoinSyncPauseEscape.cs:69-73` and `Payload/PayloadEntry.cs:115-124`; the negative cache at
+  `Payload/BattleMode.cs:497-503`.
+
+### B9 · The peer-assembly scan is single-assembly by construction
+
+- **What happened** — `FindTransferCancel` and `PeerDetection.FindCoopType` both `return null` from
+  **inside** the assembly loop, once the first assembly named `BannerlordTogether` has been scanned.
+- **Lesson** — Know the shape you shipped: if BT were ever loaded twice — two AppDomain entries, a
+  shadow copy — only the first is searched and every lookup silently resolves nothing. The BT
+  assembly's simple name is exactly `BannerlordTogether`; that string plus the late-load retry is the
+  whole entry point for reflecting into it without a compile-time reference.
+- **Now** — `Payload/JoinSyncPauseEscape.cs:217-219`; `Payload/BattleMode.cs:476-479`.
+
+### B10 · Disabling a peer's per-frame feature to stop a freeze
+
+- **What happened** — BT's `CoopSubModule.TryBackgroundCampaignTick` runs `Campaign.RealTick` + `Tick`
+  on **every** application tick while the host is in a mission, with no time budget. When a campaign
+  tick became pathologically expensive — a third army joining an ongoing battle put
+  `EncounterManager.HandleEncounters`, encounter-hold checks and hourly-AI catch-up into multi-second
+  ticks — every frame drowned in background campaign work. Turning the feature off would have killed
+  the co-op background world: the other player's map stops advancing.
+- **Lesson** — **Throttle, do not disable.** An equal-time backoff — exceed a 100 ms budget, then
+  pause background ticking for exactly as long as that tick took, capped at 10 s — bounds the worst
+  case, keeps the feature, and degrades proportionally with the pathology instead of needing a tuned
+  constant per scenario. Prove skipping is safe **by construction** first: BT's own method begins with
+  unconditional early-outs (paused / saving / not host), so its callers demonstrably tolerate no-op
+  ticks. Extract the decision into a pure static function so it is testable with no game running.
+- **Now** — `Payload/BackgroundTickBudgetGuard.cs:8-30,36-40,85-95,143-156`;
+  `UPSTREAM_BUG_REPORT.md:148-151`.
+
+### B11 · A prefix/postfix timing pair silently measures garbage
+
+- **What happened** — When the prefix **skips** the call, the postfix still runs and the measurement
+  is meaningless.
+- **Lesson** — Use a zero sentinel: stamp `_startTimestamp` only when the call actually proceeds,
+  return early from the postfix when it is 0, and reset it to 0 immediately after measuring.
+  `Stopwatch.GetTimestamp`/`Frequency` gives allocation-free high-resolution timing for a per-tick
+  hook.
+- **Now** — `Payload/BackgroundTickBudgetGuard.cs:97-121`.
+
+### B12 · A peer's own log line inside a hot prefix is part of the pathology
+
+- **What happened** — BT's `SuppressClientMirroredPartyHandleEncounterPatch.Prefix` builds a log
+  string (`String.Concat`) on **every** invocation; under encounter churn that is itself a measurable
+  cost, and it was part of the observed freeze.
+- **Lesson** — Never build a log string unconditionally in a per-call hot path — build the message
+  only when you will emit it, and route high-frequency lines through a rate-limited or coalescing
+  emitter that carries a since-last-report count.
+- **Now** — `UPSTREAM_BUG_REPORT.md:143-145,156-157`; the counter-pattern at
+  `Payload/PartyAiCrashGuard.cs:149-167` and `Payload/BackgroundTickBudgetGuard.cs:129-136`.
+
+### B13 · Stripping the peer's patches while a partner is connected
+
+- **What happened** — Lifting BT's battle patches sabotages a live session: the partner's army never
+  enters the authoritative battle. The mirror-image failure was already recorded — hosting alone with
+  BT active brings battles up with empty formations and a `SetupTeams` NRE, because BT's pipeline
+  strips the player side (proven 2026-08-18).
+- **Lesson** — When your fix works by **disabling someone else's code**, enumerate the blast radius
+  of being wrong and bias the default away from it. Keep the target list narrow and say why: this one
+  is battle-mission-only, and "campaign/map co-op machinery is intentionally not listed" because
+  lifting map sync would break co-op even in a solo-hosted session's overworld. A compatibility mod
+  sometimes has to *restore vanilla behaviour* rather than add behaviour.
+- **Now** — `Payload/BattleMode.cs:16-19,37-38,127-132`.
+
+### B14 · Patching out a peer's refusal instead of satisfying its rule
+
+- **What happened** — BT approves a formation for the client only when it holds the client's troops
+  **alone** (`IsClientFormationCommandApproved` = `FormationHasClientOwnedUnit &&
+  !FormationHasHostOwnedUnit`, or the client is its `PlayerOwner`/`Captain`). Vanilla spawns *both*
+  parties' troops into the same class formations, so every formation is mixed, the client's
+  `AllowedFormationMask` stays empty, and every client order is refused with
+  `[SPNATIVE ORDER-GUARD] blocked local`.
+- **Lesson** — Read the peer's rule from **its** IL and change the **input** so the rule grants the
+  capability, rather than patching the refusal path. Splitting the two parties into separate formation
+  blocks (host I–IV, client V–VIII) makes BT's own approval, membership snapshot and order forwarding
+  do the rest — with no patch on BT's decision code at all.
+- **Now** — `Payload/CoopCommandSplit.cs:19-42`; `docs/ENGINE-NOTES.md`, the BT client command model.
+
+### B15 · Applying a fix on the side of the session that cannot own it
+
+- **What happened** — On a BT client the host's command assignment is authoritative, so a siege
+  command fix there would silently fight the network layer.
+- **Lesson** — Detect the peer role and **stand down** with an honest, actionable on-screen message
+  ("host the session"), rather than half-applying and leaving the player with a fix that looks
+  installed and does nothing.
+- **Now** — `Payload/SiegeCommandGuard.cs:52-53,221,399-405`.
+
+### B16 · Assuming the peer owns identity in a shared save
+
+- **What happened** — A Bannerlord save stores exactly **one** player identity — whoever was
+  `MainHero` when it was saved. BT's identity registry (slots, Steam/password claims) is consulted
+  only on the **client join** flow, and `SharedSaveMode` is a bare session flag (verified by assembly
+  scan). Nothing fixes the identity of the person *loading* the save, so the second host plays as the
+  first host's hero.
+- **Lesson** — Find exactly where the peer's handling stops and supply only the missing piece: a
+  per-machine hero map keyed by `Campaign.UniqueGameId`, applied through vanilla's own
+  `ChangePlayerCharacterAction` (the death-succession path). Prefer an explicit one-time claim plus
+  one unambiguous auto-case (a campaign created here) over any inference — a wrong guess replicates
+  the very bug being fixed. Only follow the record **forward** when the recorded hero is gone or dead;
+  a living mismatch is never overwritten, and switching to a dead or missing recorded hero would be
+  worse than doing nothing.
+- **Now** — `Payload/CoopHeroIdentityLock.cs:11-33,117-125,167,176-178,199-209`; CHANGELOG.md:137-141.
+
+### B17 · Inventing a teardown instead of reusing the peer's own recovery routine
+
+- **What happened** — A stuck join hold freezes the host. A bespoke teardown would leave BT in a
+  state it has no code path out of.
+- **Lesson** — Invoke the exact method the peer's own watchdog/timeout calls — here its
+  transfer-cancel router — so all of its cleanup happens the way it intends. Then clear what your own
+  change left behind: cancelling the transfer alone is not enough, because the player's pause presses
+  may have toggled BT's **manual** pause reason on, and the fix then appears to do nothing.
+- **Now** — `Payload/JoinSyncPauseEscape.cs:22-33,313-322,323-325`.
+
+> **Good to know — BT's external observability surface.**
+> Everything a companion mod can learn about a BT session without a compile-time reference:
+> `CoopSession` statics `IsClient` / `IsHost` / `IsActive` / `Server.GameplayPeerIds` /
+> `Server.ConnectedPeerIds`, read **static-property-first then static-field**, because peer mods
+> convert between the two across releases (`Payload/BattleMode.cs:493-562,575-600`); BT's per-role
+> logs on the Desktop — `bt-sync-host.txt` / `bt-sync-client.txt` / `bt-sync-solo.txt` — and its
+> `Modules/BannerlordTogether/RuntimeDataCache/*.rdc` (`Payload/BootstrapWatch.cs:8-13,54-65,100-123`);
+> and the assembly itself at
+> `<Game>/Modules/BannerlordTogether/bin/Win64_Shipping_Client/BannerlordTogether.dll`, which is where
+> you point an IL probe (`tools/il-probes/README.md:32`).
+> Two BT-side facts that cost real sessions and belong in a report rather than in a workaround: the
+> client bootstrap trio (`TryVerifyNativeActionCacheWhenCampaignMapReady`,
+> `_nativeActionCacheVerified`, `_harmonyPatchBootstrapAttempted`) runs on **client sessions only**;
+> and BT's dedicated-server flow has the owner window and the spawned authority instance both binding
+> the same hardcoded port 47770, so the authority fails all five bind attempts and self-destructs
+> (`UPSTREAM_BUG_REPORT.md:34-38`) — two components of one flow must never share a hardcoded port.
+
+> **Good to know — obfuscated members, and how these names were recovered.**
+> Several BT targets here came from **runtime stack traces**, not from a decompile (`SetPaused`,
+> `ApplyTimeState`, `BattleSyncBehavior.ProcessPendingClientEncounterRequests`), so a rename disables
+> the hook with no error beyond a missing "tracer active" line — always log the patched **count** and
+> treat zero as drift rather than as absence of the problem
+> (`Payload/TimeEnforcementGuard.cs:22-25,133-137`; `Payload/EncounterLoopGuard.cs:8-14`). Where the
+> name is obfuscated but the shape is known, search by **signature** — return type plus parameter
+> types, including a parameter type discovered at runtime from another member's `ReturnType`
+> (`Payload/JoinSyncPauseEscape.cs:140-157`) — and locate an obfuscated declaring type by requiring
+> **two independent facts** of the same type (it references `SaveTransferAckPacket` *and* declares
+> `static void A(string,string,bool)`), logging the resolved type name so drift stays diagnosable
+> (`:159-226`). `ClanModeSyncBehavior.CurrentMode` returns obfuscated enum `af` (`bI` = 0 Unknown,
+> `bi` = 1 Separate) and stays Unknown forever when hosting with no peer, which is what produces
+> "[BT] Marriage is blocked until clan mode is synchronized" in a solo-hosted session
+> (`Payload/ClanModeSoloFix.cs:10-21,66-71`).
+
+---
+
+## 11. Co-op sync — wire protocols and shared state
+
+Two features replicate state between machines over BT's transport: pregnancy/birth sync
+(`Payload/PregnancySync/`) and settlement stash sync (`Payload/StashSync/`). Both parse hostile bytes
+on someone else's network thread and mutate the campaign on ours. The stash feature can **delete
+player items**, which is why most of this section is about the failure directions of a snapshot.
+
+### S1 · Treating absence from a snapshot as deletion
+
+- **What happened** — The first stash design was `Clear()` then re-add whatever the payload names.
+  The recorded path: a client stashes a player-crafted sword; the host applies the snapshot and skips
+  it (the id does not resolve there); later the host edits that stash and its snapshot has no sword;
+  the client clears and re-adds only what the payload names — and the sword is gone irrecoverably,
+  with **no log line at all**, because the `skipped` counter only counts entries the payload
+  contained.
+- **Lesson** — Snapshot semantics are correct for anything both sides can **name** and destructive
+  for anything the sender cannot **express**. An item's absence from a snapshot is a withdrawal only
+  if the sender was capable of mentioning it. Enumerate what your wire format cannot express, and
+  preserve exactly that across an apply: read the machine-local stacks out **before** the clear, then
+  re-add them after.
+- **Now** — `Payload/StashSync/StashSyncGuard.cs:36-45,324-345,362-365`; CHANGELOG.md:204-209.
+
+### S2 · Re-adding every preserved stack after the apply
+
+- **What happened** — Naive preservation duplicates. If the two machines classify an item differently
+  — a peer on an older version that sent everything resolvable, a different mod set, or the
+  classifier's `catch { return true; }` firing on only one side — the receiver applies the peer's
+  stack **and** re-adds its own.
+- **Lesson** — Condition preservation on the payload's contents: build a `HashSet` of every id the
+  payload names and never preserve one of those. "The payload's word wins for ids it mentions."
+- **Now** — `Payload/StashSync/StashSyncGuard.cs:327-345`.
+
+### S3 · A property that sounds like the test you want
+
+- **What happened** — `item.WeaponDesign != null` reads like "was crafted by the player". It is true
+  for **every** `<CraftedItem>` definition — 260 in SandBoxCore `weapons.xml` plus 23 tournament
+  weapons on Native v1.4.8 — so ~283 ordinary vanilla weapons (most swords, axes, mauls, spears,
+  polearms) were classified machine-local and silently stopped syncing, permanently, with a log line
+  worded as if that were expected.
+- **Lesson** — Verify a predicate against the game's own `ModuleData` counts, not against the name it
+  reads like. `ItemObject.IsCraftedByPlayer` is the real test; a StringId round-trip through
+  `MBObjectManager` is the second clause. And when the classifier itself throws, err toward
+  **preserving** — "unreadable = unexpressible".
+- **Now** — `Payload/StashSync/StashSyncGuard.cs:41-43,213-234`.
+
+### S4 · Validating structure but not semantics at parse time
+
+- **What happened** — The parser bounded the entry **count** but not the per-item values. A corrupt
+  or truncated packet with `Count = -1` flowed straight into `stash.AddToCounts(item, -1)` on a
+  freshly cleared roster. Worse, the original test suite **asserted that negative counts round-trip**
+  — the test actively certified the bug.
+- **Lesson** — Reject semantically impossible values where you parse them: `Count <= 0`, empty ids,
+  implausible totals. And when a review finds a bug, check whether a test is **pinning** it: a
+  round-trip test proves fidelity, never validity.
+- **Now** — `Payload/StashSync/StashPayloadData.cs:101-104`; `tests/StashPayloadTest/Program.cs:37-53`
+  (corrected assertions); `Payload/StashSync/StashSyncGuard.cs:473-478` (the self-test now asserts
+  rejection).
+
+### S5 · An assertion that cannot fail
+
+- **What happened** — The "no BT packet with first byte 1..255 is misread as ours" loop can never
+  fail, because `IsOurPacket` short-circuits on `data[0] != Marker` by construction — every iteration
+  exits at byte 0. The risk it claimed to cover (a real BT packet that actually starts
+  `0x00 'B' 'T' 'C' 'S'`) was untested.
+- **Lesson** — Ask of every assertion what change would make it **fail**. If there is none, it is
+  documentation, not a test — keep it, but say so in the file, and put the transport fact it stands
+  for where it belongs (in the framing type's own comment). Derive framing constants from behaviour
+  (`framed.Length - payload.ToBytes().Length`) so the test stays honest through refactors.
+- **Now** — `tests/StashPayloadTest/Program.cs:70-79`; `tests/BirthPayloadTest/Program.cs:84-97`.
+
+### S6 · Doing engine work in the packet-receive hook
+
+- **What happened** — BT's `ShouldAcceptIncomingPacket` runs on the **LiteNetLib network thread**.
+  `HeroCreator`, `MBObjectManager` and `ItemRoster` mutation are main-thread-only; doing them there is
+  silent state corruption rather than an exception.
+- **Lesson** — Parse on the network thread (bytes are thread-safe), enqueue under a lock, and do all
+  engine work on the game `Tick`, with a per-item `try/catch` so one bad item cannot throw onto the
+  game loop. This is the general shape for consuming **any** foreign mod's network callback.
+- **Now** — `Payload/PregnancySync/PregnancySyncGuard.cs:38-41,99-127,326-333`;
+  `Payload/StashSync/StashSyncGuard.cs:57-58,248-254,270-300`.
+
+### S7 · A re-entrancy flag whose thread discipline is unstated
+
+- **What happened** — `_reconstructing` — the flag that stops a birth we create during reconstruction
+  from being re-broadcast — is a plain `static bool`, not `[ThreadStatic]`. It is sound **only**
+  because reconstruction is confined to the main-thread `Tick` drain.
+- **Lesson** — A re-entrancy flag's thread discipline is part of its correctness argument, so write
+  it down next to the flag. If the guarded call ever moves off the single thread, the flag has to
+  become `[ThreadStatic]` or a depth counter.
+- **Now** — `Payload/PregnancySync/PregnancySyncGuard.cs:36,247-250,369-390` against the single-thread
+  constraint at `:38-41`.
+
+### S8 · Subscribing to `CampaignEvents` at module or patch time
+
+- **What happened** — `CampaignEvents` resolves through `Campaign.Current`, which is **null at module
+  load** and is per-campaign. A subscription made at patch time binds to nothing, or to a dead
+  campaign — so the host would never broadcast a birth, silently.
+- **Lesson** — Split load-time Harmony patching (safe at load) from per-campaign event subscription
+  (must be re-wired at game start). Key the subscription on
+  `ReferenceEquals(_subscribedCampaign, Campaign.Current)` with a stable sentinel owner, so it is
+  idempotent across payload reloads and re-subscribes on a new campaign. Without that identity key
+  you get no listener, a dead listener, or N duplicates after N reloads.
+- **Now** — `Payload/PregnancySync/PregnancySyncGuard.cs:59-62,75-96`.
+
+### S9 · Expecting two machines to agree on an object they each created
+
+- **What happened** — Two machines that independently create "the same" hero disagree forever, because
+  the engine keys objects by `StringId`.
+- **Lesson** — Re-key: `MBObjectManager.Instance.UnregisterObject(obj)`, set `Hero.StringId` to the
+  host's id, then `RegisterPresumedObject(obj)`. Make it idempotent by looking the id up first, so a
+  resend or a shared base save is harmless.
+- **Now** — `Payload/PregnancySync/PregnancySyncGuard.cs:359-362,413-420`.
+
+### S10 · Serializing what the receiver can re-derive
+
+- **What happened** — The SPEC called for clan, culture and birthday on the wire. `CampaignTime` has
+  no round-trippable form, and `DeliverOffSpring(mother, father)` reproduces all three identically on
+  both machines anyway.
+- **Lesson** — Send only what the receiver **cannot** deterministically re-derive — here id, gender,
+  name and appearance. It shrinks the wire and removes whole classes of serialization problems by
+  making the engine's own determinism part of the protocol.
+- **Now** — `Payload/PregnancySync/BirthPayloadData.cs:33-43`; `Payload/PregnancySync/PregnancySyncGuard.cs:372`.
+
+### S11 · A magic ordinal for a foreign enum, behind a health flag that does not cover it
+
+- **What happened** — `private const int StashMode = 3` for
+  `Helpers.InventoryScreenHelper+InventoryMode.Stash`. If the enum shifted, no stash would ever sync
+  while `Diag.Report` still printed **active**, because the `ok` flag reflects only *patch* success,
+  not mode detection — and the loopback self-test covered framing only.
+- **Lesson** — Resolve enum values from the live type at runtime (`AccessTools.TypeByName` +
+  `Enum.Parse` + `Convert.ToInt32`), keep the known value only as a labelled fallback, and log when
+  the live value differs. Then check that your health signal actually covers the thing that can
+  silently break, not just the thing that throws.
+- **Now** — `Payload/StashSync/StashSyncGuard.cs:52-55,95-115`.
+
+### S12 · A fail-open reflection check with a bare `catch {}`
+
+- **What happened** — `IsLocalStashScreenOpen` returned "not open" whenever anything failed, so if
+  `Campaign.InventoryManager` were ever renamed the deferral would never engage and peer updates would
+  clear the roster underneath a live stash screen — with zero diagnostic, forever.
+- **Lesson** — Where a fail-open path exists, make it **audible**: distinguish "legitimately absent"
+  (the manager is null) from "the reflection chain broke" (a property lookup returned null), and log
+  once, naming the suspected cause and the consequence. One line, once, converts a permanent silent
+  behaviour loss into a diagnosable one.
+- **Now** — `Payload/StashSync/StashSyncGuard.cs:51,382-400`.
+
+### S13 · Dropping the whole packet on one bad entry
+
+- **What happened** — `FromBytes` returns null on the first malformed entry, so one bad stack discards
+  the entire stash snapshot rather than the offending stack.
+- **Lesson** — Accepted deliberately as the fail-safe direction now that the sender can no longer emit
+  those, but the blast radius is the **packet**, not the entry. Record such a decision instead of
+  silently living with it.
+- **Now** — `Payload/StashSync/StashPayloadData.cs:101-104`.
+
+### S14 · Confusing "inherent to the design" with "a bug that looks inherent"
+
+- **What happened** — The **first** sync between two players whose stashes have already diverged — the
+  exact state the feature exists to fix — silently replaces one side wholesale, with no warning. That
+  is inherent to snapshot semantics and was knowingly accepted. The crafted-item deletion (S1) looked
+  the same but was **not** inherent: the sender *has* the item and merely cannot say so.
+- **Lesson** — Before accepting a destructive edge as inherent, ask whether the sender actually lacks
+  the information or merely lacks the vocabulary. Only the first is inherent.
+- **Now** — `Payload/StashSync/StashSyncGuard.cs:36-45`; both findings recorded against
+  CHANGELOG.md:204-209.
+
+### S15 · Shipping the data-destructive feature default-on
+
+- **What happened** — `stashSync` shipped default **true** with the crafted-item deletion path live,
+  while `pregnancySync` — which can only *add* a hero — was held off pending a live two-machine
+  validation. The review asked for the same bar on both.
+- **Lesson** — The default-on decision belongs to the risk of the **worst** path, not to how confident
+  the wire tests are. A feature that can delete player data should not out-rank a feature that cannot.
+- **Now** — `Harness/GuardConfig.cs:94,96` (both ship `true` today).
+
+### S16 · Claiming a channel on a marker byte alone
+
+- **What happened** — Byte 0 is free on BT's transport, but only because **three** facts hold
+  together: dispatch is `(PacketType)data[0]`, the `PacketType` byte enum consumes every value 1..255,
+  and `OnNetworkReceive` rejects empty packets while the dispatch switch has no `case 0` and no
+  `default`.
+- **Lesson** — Write down every fact a safety argument rests on, in the file, with the note that it
+  was decompile-proven — and add a 4-byte magic anyway so a misread is impossible in both directions
+  ("safe twice over"). A per-feature magic (`BTCG` for births, `BTCS` for stash) multiplexes several
+  features on one borrowed channel: adding feature N+1 costs one constant and cannot break feature N,
+  and the property is testable as four-way discrimination rather than assumed.
+- **Now** — `Payload/PregnancySync/BirthWireFraming.cs:5-25`; `Payload/StashSync/StashWireFraming.cs:5-20`;
+  the receive prefixes at `Payload/PregnancySync/PregnancySyncGuard.cs:316-346` and
+  `Payload/StashSync/StashSyncGuard.cs:238-267`.
+
+### S17 · Choosing your own choke point when the peer already has one
+
+- **What happened** — Stash sync needs a commit point that is UI-driven and does not fire mid-drag.
+- **Lesson** — Reuse the choke point the host mod already patches — `InventoryLogic.DoneLogic`, which
+  BT patches for the workshop warehouse — and the same private `_inventoryMode` discriminator. You
+  inherit its correctness argument and stay phase-aligned with the other mod.
+- **Now** — `Payload/StashSync/StashSyncGuard.cs:16-24,71-79`.
+
+> **Good to know — the shapes that make this safe.**
+> **Consuming a foreign packet**: a Harmony prefix on the peer's accept hook that sets
+> `ref __result = false` and returns `false` for your own frames — with the deliberate choice to
+> return **true** on any exception, so the host mod handles anything you failed to parse
+> (`Payload/PregnancySync/PregnancySyncGuard.cs:316-346`; `Payload/StashSync/StashSyncGuard.cs:238-267`).
+> **Never-throw parsers**: return null rather than throwing, drop on an exact format-version
+> mismatch (mixed-version co-op is the normal case), and validate semantics at parse time
+> (`Payload/PregnancySync/BirthPayloadData.cs:81-126`; `Payload/StashSync/StashPayloadData.cs:67-114`).
+> **Topology**: a host relay with an apply-never-sends invariant on a client→server-only star
+> (`CoopSession.Client.SendRaw` reaches only the host) gives N-peer convergence with no peer list and
+> no per-peer addressing, and the loop-freedom is one line you can check
+> (`Payload/StashSync/StashSyncGuard.cs:29-31,371-376,440-448`).
+> **Liveness**: both features' send gates read BT session state through the tri-state helper, because
+> a confident `false` there silently disables replication — see **E18** and
+> `Payload/BattleMode.cs:396-416,511-554`, consumed at
+> `Payload/PregnancySync/PregnancySyncGuard.cs:251-258` and `Payload/StashSync/StashSyncGuard.cs:148-157,373`.
+
+> **Good to know — testing a wire format with no game.**
+> The engine-free wire model is `<Compile Include>`d into a headless net472 console test — the
+> **shipping** source, never a copy, which structurally prevents the stale-copy failure mode. The
+> stash suite links all four wire files because cross-discrimination between the two magics is part
+> of the contract, and both suites exit 1 on failure
+> (`tests/BirthPayloadTest/BirthPayloadTest.csproj:15-19`;
+> `tests/StashPayloadTest/StashPayloadTest.csproj:19-24`; `tests/BirthPayloadTest/Program.cs:108`;
+> `tests/StashPayloadTest/Program.cs:92`). In-game, a loopback self-test runs the real
+> serialize → frame → receive-path parse against **real** engine data (real StringIds, real
+> `BodyProperties` XML, real unicode names), creates nothing, is registered even when the feature is
+> disabled, and reports PASS-with-explanation when the probe object is legitimately absent — with
+> negative cross-feature and cross-protocol assertions, because "nothing else parses as mine" is the
+> half that protects the host mod's traffic
+> (`Payload/PregnancySync/PregnancySyncGuard.cs:48-49,486-523`; `Payload/StashSync/StashSyncGuard.cs:65,459-499`).
+> Diagnostics are deliberately separated from the feature flag: the conception observer installs
+> regardless of `pregnancySync`, because turning a feature off should not blind you to the game
+> behaviour you need in order to debug it — scoped to the player's own clan so it is not a log bomb
+> (`Payload/PregnancySync/PregnancySyncGuard.cs:50-53,188-191`).
+
+---
+
+## 12. Tooling, build and deploy
+
+Distribution here is deliberately zero-infrastructure: `install.cmd` `curl`s three files out of the
+tracked `dist/` folder on `raw.githubusercontent.com`, so **a push is a release**. That one fact is
+behind most of this section.
+
+### T1 · Forgetting that `dist/` is the release
+
+- **What happened** — After the v1.2.0 split into two assemblies, `dist/` still held the v1.1
+  **monolithic** DLL and `install.cmd` downloaded only the harness. Every README one-liner install got
+  zero v1.2.x fixes — and, on the harness alone, no payload at all. Local builds and local tests were
+  all fine.
+- **Lesson** — After an architecture change, the **distribution artefacts are part of the change**.
+  All three files (both DLLs and `SubModule.xml`) move together and are hash-verified across build
+  output, the live game module and `dist/`. The corollary every contributor has to internalise: do not
+  push mid-investigation, because a push ships to players.
+- **Now** — `install.cmd:9,58-60`; `.gitignore:1-3` (only `bin/`, `obj/`, `.runner/` are ignored, so
+  `dist/` is tracked); CHANGELOG.md:265-271; the deploy checklist in `CLAUDE.md`.
+
+### T2 · The build stamps only one of the two `SubModule.xml` files
+
+- **What happened** — `StampSubModuleVersion` pokes
+  `XmlInputPath="$(MSBuildThisFileDirectory)SubModule.xml"` — the repo root copy. It never touches
+  `dist/SubModule.xml`, so copying it across is a manual step, and it is the easiest of the three
+  artefacts to forget.
+- **Lesson** — Know which artefacts your build actually stamps, and treat the rest as an explicit,
+  checklisted copy.
+- **Now** — `Directory.Build.props:12-19`.
+
+### T3 · Writing the version number anywhere but the single source
+
+- **What happened** — `SubModule.xml`'s launcher-visible version drifted to v1.0.0 while the
+  assemblies carried a different number.
+- **Lesson** — One source (`Directory.Build.props` `<Version>`), stamped into both assemblies and
+  poked into `SubModule.xml` by the build, and **read back from the assembly identity** at runtime for
+  the log banner. A log or crash report then cannot lie about which build produced it — which is the
+  prerequisite for any field report being usable.
+- **Now** — `Directory.Build.props:3-9`; `Harness/Diag.cs:15-30,58-61`; CHANGELOG.md:260-263.
+
+### T4 · Installing or deploying one of the two assemblies
+
+- **What happened** — Since v1.2.0 the mod is two assemblies. A module with only the harness loads and
+  runs with **zero** guards.
+- **Lesson** — "Both must be installed together." The installer downloads harness + payload +
+  `SubModule.xml` and aborts on any single failure; replicate that invariant in every manual deploy.
+- **Now** — `install.cmd:46-60`.
+
+### T5 · A folder check that accepts the wrong folder
+
+- **What happened** — The installer's validity test is only `exist "%GAME%\Modules"`, even though the
+  prompt asks for the folder containing `bin\` and `Modules\`. Any folder with a `Modules` subfolder
+  passes, and the installer happily creates
+  `Modules\BLTDeploymentCrashGuard\bin\Win64_Shipping_Client` somewhere useless and reports success.
+- **Lesson** — Validate against something that can only be true of the real target.
+- **Now** — `install.cmd:32,36-39`.
+
+### T6 · Three player-facing scripts with three different auto-detect lists
+
+- **What happened** — `install.cmd` scans 11 candidate paths, `share-log.cmd` 10, and
+  `collect-diagnostics.cmd` only 6 (`D:\Steam`, `E:\Steam`, `F:\Steam` and all `G:` paths are missing
+  from the collector). A player whose install was auto-found at install time is dropped to a manual
+  prompt when they try to collect diagnostics — the worst possible moment.
+- **Lesson** — Duplicated detection logic drifts. One shared helper, or one list, and a documented
+  env-var override (`BANNERLORD_DIR`) so CI or a dev can target a non-standard install.
+- **Now** — `install.cmd:13-27`; `share-log.cmd:13-24`; `collect-diagnostics.cmd:13-20`.
+
+### T7 · A PowerShell dependency inside a player-facing script
+
+- **What happened** — `collect-diagnostics.cmd` shells out to
+  `powershell -NoProfile -Command "Compress-Archive …"` — the only PowerShell dependency in the repo's
+  tooling. Its output is swallowed (`>nul 2>&1`), so if PowerShell is restricted or blocked the zip
+  step fails silently and the player is left with a staged folder and an error.
+- **Lesson** — A player-facing script should depend only on what every install has, and a failure in
+  it must be visible. This one also means the collector cannot be exercised from an agent environment
+  that forbids PowerShell.
+- **Now** — `collect-diagnostics.cmd:46-47`.
+
+### T8 · Detecting upload success from the first characters of the response body
+
+- **What happened** — Both upload scripts decide success with `findstr /b "https://"` on the response.
+  Any host response that merely *starts* with a URL — an error page, a rate-limit notice — is treated
+  as a successful link and handed to the player. There is no HTTP status check beyond `curl -f`.
+- **Lesson** — Copy the shape knowingly: a body prefix is not a status code. The rest of the design is
+  worth keeping — stage with `>nul 2>&1` per copy so missing files are skipped rather than fatal, try
+  a second host, `echo %URL%| clip`, and print the local path if both hosts fail, so the flow never
+  dead-ends.
+- **Now** — `share-log.cmd:46,51`; `collect-diagnostics.cmd:53,56`.
+
+### T9 · Uploading logs unredacted to a public host
+
+- **What happened** — `CrashGuard.log`, `guardconfig.json`, BT's sync logs and the crash report all go
+  up as-is to an anonymous public file host with a 24h/72h link; the in-game streamer additionally
+  publishes to a **public** `filebin.net` bin whose id lives in a plain-text sidecar
+  (`logstream.txt`) written by the installer from `BLTGUARD_BIN`, and tags uploads with the sanitized
+  machine name.
+- **Lesson** — Zero-touch remote diagnostics trade privacy for convenience. Anything written to the
+  log — file paths including the Windows user name, save names, hero names — becomes publicly
+  fetchable once a bin is configured. Say so where the feature is enabled.
+- **Now** — `share-log.cmd:45,50`; `collect-diagnostics.cmd:33-38,52-54,66-67`;
+  `Payload/LogStreamer.cs:8-17,44-74,150,184-195`; `install.cmd:62-64`.
+
+### T10 · Path values that carry embedded quotes
+
+- **What happened** — Both the `for` auto-detect loop and the `set /p` prompt can leave a value with
+  embedded double quotes, which then breaks every subsequent path concatenation.
+- **Lesson** — Strip them once, immediately after the value is obtained: `set "GAME=%GAME:"=%"`. All
+  three scripts do it.
+- **Now** — `install.cmd:35`; `share-log.cmd:34`; `collect-diagnostics.cmd:25`.
+
+### T11 · Overwriting a DLL the running game has locked
+
+- **What happened** — A plain overwrite of the mod DLLs fails while Bannerlord is running, because it
+  locks the loaded module assemblies — so an update while the game is open just failed.
+- **Lesson** — Windows still permits **renaming** a file that is locked for write: move the old file
+  aside to `.prev` and write the new one at the original name. The `:fail` path still tells the player
+  to close the game, because `curl` can fail for other reasons.
+- **Now** — `install.cmd:49-56,76-80`.
+
+### T12 · Expecting the manifest to order the load
+
+- **What happened** — `<DependedModule Id="BannerlordTogether" Optional="true" />` makes the
+  dependency non-fatal but does **not** order it; ordering is the launcher list order, and ticking
+  this mod *before* BT is wrong.
+- **Lesson** — The manifest looks like it guarantees ordering and does not, so the instruction has to
+  reach the player: the installer prints "tick it in the Singleplayer mods list, **AFTER**
+  BannerlordTogether". A BT companion also declares `SingleplayerModule=true` /
+  `MultiplayerModule=false` (BT co-op runs off the singleplayer list) and `IsTWCompatible=false` as an
+  unsigned Harmony mod.
+- **Now** — `SubModule.xml:5-7,13`; `install.cmd:70-71`.
+
+### T13 · Shipping the runtime code-loading capability enabled
+
+- **What happened** — Hot-reload watches the filesystem and loads assemblies at runtime. Enabled on a
+  player install, that is a code-injection surface.
+- **Lesson** — Gate it behind **two** conditions: the config flag *and* a developer-only marker file
+  (`.hotreload-dev`) in the module root. Shipped config defaults get flipped and copied around; a file
+  a developer must create by hand does not survive a normal install.
+- **Now** — `HOTRELOAD.md:15-21`; `Harness/HotReload.cs:69-71`; `Harness/GuardConfig.cs:111`.
+
+### T14 · Reloading while foreign patches are lifted — a known open gap
+
+- **What happened** — `BattleMode`'s stash of **BT's** lifted patches is a payload static, and every
+  static is fresh per generation. Reloading while in `battleMode=solo` can therefore leave BT's battle
+  patches permanently lifted for that session. Reloading in `battleMode=coop` is unaffected, because
+  nothing is lifted.
+- **Lesson** — Any component that stashes **foreign** state must serialize that stash across
+  generations or refuse to reload. Until it does, the honest instruction is "restart if battle mode
+  misbehaves after a reload".
+- **Now** — `HOTRELOAD.md:65-68`; `Payload/BattleMode.cs:75`; CHANGELOG.md:329-331; the cross-generation
+  bag that should hold it at `Harness/SharedState.cs:6-48`.
+
+### T15 · Testing a harness or load-time change in a stale process
+
+- **What happened** — The harness DLL is locked while the game runs, and a fix that must beat the CLR
+  touching a type (`MovementOrderTypeInitGuard`) cannot be delivered by a payload reload at all.
+- **Lesson** — Know which changes a hot-reload can carry. Payload guard/fix/tracer edits: yes. Harness
+  edits and load-time fixes: a fresh launch, every time. A load-time fix that arrived too late must
+  say so in its own log line rather than appearing to work.
+- **Now** — `HOTRELOAD.md:5,63-64`; `Payload/MovementOrderTypeInitGuard.cs:36-39,67-71`;
+  `CLAUDE.md`, "While the game is running".
+
+### T16 · A config file that is cached for the whole session
+
+- **What happened** — `GuardConfig` reads `guardconfig.json` once behind a `_loaded` latch and holds
+  the text for the session. Editing the file does **not** take effect on a hot-reload — so code
+  changes could land mid-session but the flag that selects them could not, and enabling tracing meant
+  restarting the game and losing the live repro.
+- **Lesson** — Any flag you will need to flip **during** a reproduction must be read fresh from disk
+  at apply time, with the cached accessor only as a fallback on read failure. Everything else can stay
+  cached.
+- **Now** — `Harness/GuardConfig.cs:26-48`; the bypass at `Payload/PayloadEntry.cs:77-93,211-232`.
+
+### T17 · An empty string in the shipped config defeating a code-side fallback
+
+- **What happened** — `GuardConfig.String()` treats an explicitly **empty** JSON value as a successful
+  match, so the shipped `"payloadSourceDir": ""` returns `""` and overrides the caller's fallback.
+  `HotReload` passes `<moduleRoot>/PayloadSource` as its fallback, receives `""`, and logs
+  `sourceDir=(none)`.
+- **Lesson** — A regex "key present" test is not the same as "key has a usable value". Either treat
+  empty as absent, or do not ship empty-string defaults for keys whose fallback lives in code. The
+  same reader has two further documented quirks worth knowing: a commented-out or duplicated key still
+  matches, and only exact literals are honoured.
+- **Now** — `Harness/GuardConfig.cs:66-80,113` against `Harness/HotReload.cs:72,74-75`.
+
+### T18 · Leaving a superseded diagnosis in the log message
+
+- **What happened** — The LoadFrom-dedup warning still blames a missing "unique `AssemblyVersion`
+  revision (Deterministic build?)", a few lines below the field-proven root cause that LoadFrom dedups
+  by **name** only.
+- **Lesson** — When a diagnosis is superseded, update the log text too. A stale message sends the next
+  investigator down the version path instead of the name path — the same weeks that were already paid
+  for once.
+- **Now** — `Harness/HotReload.cs:288-293` against `:321-323`.
+
+### T19 · A "summary" getter with a side effect
+
+- **What happened** — `Diag.HealthSummary()` calls `Log.Screen` when a critical component is missing,
+  so every call re-warns the player.
+- **Lesson** — A function named like a read is expected to be idempotent. Either make it one, or call
+  it exactly once per generation — which is what the reload engine does.
+- **Now** — `Harness/Diag.cs:87-104`; called once at `Harness/HotReload.cs:380-381`.
+
+### T20 · Not knowing which lifecycle points can recover a failed load
+
+- **What happened** — `EnsureLoaded` is wired only into `OnGameStart` and
+  `OnBeforeInitialModuleScreenSetAsRoot`. `Tick()` and `OnMissionInit()` never retry, so a payload that
+  fails at both wired points stays off for the whole session.
+- **Lesson** — Write down the recovery points you actually have, and make the terminal failure loud:
+  the first payload-load failure was **file-log only**, and a whole unprotected session was played with
+  the game looking completely normal. "Not installed" must be as loud as a crash.
+- **Now** — `Harness/HotReload.cs:90-131,247-263`.
+
+> **Good to know — the IL probes, and what they are for.**
+> Five self-contained net472 console exes read the **installed** assemblies by path, resolving
+> dependencies out of the game `bin` plus module folders: `NameSearch` (find every name containing a
+> term), `Inspect` (a type's methods with signatures, fields, properties, enum members **with
+> values**), `IlDump` (disassemble a method — `.cctor` and `.ctor` supported), `Callers` (who calls
+> this member), `VerCheck` (assembly identity). They read the exact bytes the player is running, so a
+> mismatch between your reference assemblies and the deployed game cannot fool you; no licence, no
+> GUI, and scriptable from an agent loop. The worked example in the README is the whole
+> `MovementOrder` root cause in two commands: dump the `.cctor` (six defaults via `newobj`), dump the
+> `.ctor` (`call Mission::get_Current; callvirt Mission::get_CurrentTime`), then a reflection check
+> that the type is a `beforefieldinit` value type. `tools/il-probes/README.md:1-44`.
+
+> **Good to know — the Bannerlord module layout and load contract.**
+> Engine DLLs live in `<Game>/bin/Win64_Shipping_Client`; Harmony is its own module
+> (`<Game>/Modules/Bannerlord.Harmony/bin/Win64_Shipping_Client/0Harmony.dll`); `SandBox.View.dll` is
+> in the SandBox module. A module targets **net472** for game 1.4.8. The launcher loads only
+> `<DLLName>` and instantiates `<SubModuleClassType>` — with an empty `<Assemblies />`, any second
+> assembly must be loaded by the module itself, which is exactly what the harness does. A module
+> reaches its own root as the assembly directory plus two `..` levels, which is how `guardconfig.json`
+> and `hero-identity.json` are found with no hardcoded path.
+> `SubModule.xml:15-22`; `Harness/BLTDeploymentCrashGuard.csproj:6,13-14,30-49`;
+> `Payload/BLTDeploymentCrashGuard.Payload.csproj:6,37-38`; `Harness/GuardConfig.cs:17-24`;
+> `tools/il-probes/README.md:30-32`.
+
+---
+
+## 13. Process and diagnosis discipline
+
+The habits, not the code. Every one of these was learned by getting it wrong first, and each has cost
+at least one session.
+
+### P1 · "The crash is gone" is not "the bug is fixed"
+
+- **What happened** — Suppressing the `DeploymentMissionController` NRE removed the CTD and left
+  battles unplayable: every player formation 0/0, with a 105-member unwounded party. The guard worked
+  perfectly and the game did not.
+- **Lesson** — Verify the **gameplay outcome**, not the absence of an exception. Ship the guard *and*
+  file the root cause upstream, and record explicitly which components are reactive safety nets versus
+  root fixes, so nobody mistakes a suppressed symptom for a solved bug. Track suppressions as debt
+  with the root cause named — a working suppression must not close the investigation.
+- **Now** — `UPSTREAM_BUG_REPORT.md:86-92,104-108`; `Payload/PlayerIdentityGuard.cs:16-23`;
+  CHANGELOG.md:381.
+
+### P2 · Fixing a report before investigating it
+
+- **What happened** — Two field reports turned out to be by-design behaviour. "Sneak in spawned me as
+  a soldier and I cannot command my army" is vanilla's stealth ambush: your own hero re-dressed in
+  `Hero.StealthEquipment` with the enemy's colours, orders withheld until the stealth→battle
+  transition. Changing the spawn would have broken the designed mission.
+- **Lesson** — Prove what the behaviour **is** before deciding it is wrong. The correct ship for a
+  discoverability failure is an on-screen explainer plus a guarantee for the part that genuinely is
+  fragile — not a behaviour change.
+- **Now** — `Payload/StealthHideoutAdvisor.cs:8-26`; CHANGELOG.md:106-118,180-183.
+
+### P3 · Reaching for exception tooling on a hang
+
+- **What happened** — During the whole-game freeze **nothing threw**. BT's own exception and cooldown
+  machinery never engaged; no crash log was produced; every exception-based diagnostic stayed silent.
+- **Lesson** — A hang is not a crash. Frame starvation produces no exception, so the instrument is a
+  live debugger attach and **repeated managed stack samples of the main thread** — which found the
+  budget-free background tick in one session — and the fix is a **time** budget, not a guard.
+- **Now** — `UPSTREAM_BUG_REPORT.md:134-138,152-154`; `Payload/BackgroundTickBudgetGuard.cs:8-30`;
+  CHANGELOG.md:229-233.
+
+### P4 · Treating a public bug tracker as a diagnosis
+
+- **What happened** — The 66 open Nexus reports contain **no stack traces**. They corroborate only by
+  scenario.
+- **Lesson** — A public report is a lead, not a diagnosis; prove it in *these* logs. The useful output
+  of reading them was a mapping — which reports match a locally-proven root cause, and which BT must
+  own.
+- **Now** — `UPSTREAM_BUG_REPORT.md:180-191`; the house rule in `CLAUDE.md`, "Never guess a root
+  cause".
+
+### P5 · Trusting the changelog or the spec over the code
+
+- **What happened** — Three live drifts. (a) CHANGELOG v1.3.2 documents the first-chance observer as
+  armed "only while a character is being created" and "capped per activation"; the shipped code arms
+  it session-wide at `Apply` with one global cap of 400. (b) `docs/SPEC-pregnancy-coop-sync.md:58`
+  names the file `Payload/PregnancySync/PregnancySync.cs`; the file is `PregnancySyncGuard.cs`. (c)
+  The SPEC says the wire suite is 16/16 (`:47`) and that `pregnancySync` defaults **off** (`:61`),
+  while the guard header says 24/24 and `Harness/GuardConfig.cs:94` ships `true` — and the guard's own
+  header still says "Default OFF until validated live" beside a
+  `GuardConfig.Bool("pregnancySync", true)` call.
+- **Lesson** — When the implementation improves on the plan, the plan's stale claims become future
+  landmines. Trust the code; when a diagnostic's scope is widened or a default is flipped, the
+  changelog entry, the spec **and** the file header are all things that silently go stale, so fix them
+  in the same change.
+- **Now** — CHANGELOG.md:20-24 against `Payload/CharacterCreationTrace.cs:19-27,38-49,133-150`;
+  `docs/SPEC-pregnancy-coop-sync.md:47,58,61` against
+  `Payload/PregnancySync/PregnancySyncGuard.cs:28-30,45` and `Harness/GuardConfig.cs:94`.
+
+### P6 · Believing a "log-only" header
+
+- **What happened** — `TracePatches`' own header promises "Never changes behavior — every hook is a
+  void prefix/postfix that appends a `[TRACE]` line". Three of its hooks call into behaviour-carrying
+  code: `BattleMode.DecideAndApply("mission-open")`, `BattleMode.DecideAndApply("start-battle")` and
+  `EncounterLoopGuard.NoteEncounterFinish()`.
+- **Lesson** — Turning tracing on is **not** behaviour-neutral in this mod: battle-mode re-decisions
+  happen at extra points and the encounter-loop guard sees extra finish notifications. Do not treat a
+  tracing-on reproduction as identical to a tracing-off one, and do not trust a header over the code.
+  Keep decision hooks out of debug-only code paths in the first place — see **E30**.
+- **Now** — `Payload/TracePatches.cs:15-16` against `:86-91,179-183,185-189`.
+
+### P7 · Reading a quiet log as proof that nothing happened
+
+- **What happened** — The first-chance capture skips any exception with no SandBox/StoryMode/TaleWorlds
+  frame, skips this mod's own namespace, and stops after 400 emissions. Elsewhere, whitelist filters,
+  change-only logging and bounded caps do the same thing by design.
+- **Lesson** — Know your instrument's blind spots before concluding "it did not happen". Pure-framework
+  NREs and anything after the cap are invisible; a quiet log is not proof nothing threw. Every cap —
+  frames, argument text, total emissions, throttle keys, upload size, intervals — is what makes it safe
+  to ship a tracer to a player at all, and each one must therefore be documented as a blind spot.
+- **Now** — `Payload/CharacterCreationTrace.cs:163-176,217-246`; the caps at
+  `Payload/TracePatches.cs:228-231,279`, `Payload/ControlTrace.cs:381`,
+  `Payload/RuntimeDiagnostics.cs:29,185`, `Payload/TraceThrottle.cs:31-32`,
+  `Payload/LogStreamer.cs:101,132`.
+
+### P8 · Not printing what you actually managed to instrument
+
+- **What happened** — With by-name reflection everywhere, a silent hook miss is indistinguishable from
+  "the bug did not happen".
+- **Lesson** — The **load line is the oracle**. Every component prints exactly what it resolved —
+  "tracer active on N method(s)", "type not found: X", "no patchable method X" — and a load-bearing fix
+  prints which of two competing hypotheses the run confirmed. Where targets were recovered from runtime
+  stack traces rather than IL, the patched **count** is the only drift detector you have, so log it and
+  treat zero as drift, never as absence of the problem. This is the single most transferable habit in
+  the codebase.
+- **Now** — `Payload/TracePatches.cs:46,69,74`; `Payload/ControlTrace.cs:45,56,79`;
+  `Payload/CoopBattleTrace.cs:46,63,84`; `Payload/CharacterCreationTrace.cs:47-48`;
+  `Payload/MovementOrderTypeInitGuard.cs:64-71,108-111`; `Payload/TimeEnforcementGuard.cs:22-25,133-137`.
+
+### P9 · Leaving the most central component unpinned
+
+- **What happened** — House convention is that every guard reports via `Diag.Report` and registers a
+  `SelfHealing.RegisterTest`. `BattleMode.cs` and `PayloadEntry.cs` — the two most central files — do
+  neither, while every other guard does. Today a renamed `BattleTargets` type is a silent `continue`.
+  The ten diagnostics files also register nothing, deliberately.
+- **Lesson** — The component everyone depends on is the easiest one to leave unpinned. Where the
+  convention is deliberately broken, say what replaces it: for the tracers, the **load line is** the
+  health report, and only the load-bearing fix (`MovementOrderTypeInitGuard`) prints an outcome that
+  distinguishes "fixed" from "too late".
+- **Now** — absence of `Diag.`/`SelfHealing.` in `Payload/BattleMode.cs` and `Payload/PayloadEntry.cs`,
+  against `Payload/ClanModeSoloFix.cs:54-55` and `Payload/ClientBootstrapFix.cs:85-86`; the silent
+  `continue` at `Payload/BattleMode.cs:231-234`.
+
+### P10 · Assuming tests would have caught it
+
+- **What happened** — The two worst bugs in this repo's history were caught by a **commit review**,
+  not by a test and not in play: replacing `ClanPartiesVM`'s candidate iterator would have crashed the
+  leader popup (**H6**), and the naive full-roster stash apply would have silently wiped a
+  player-crafted item (**S1**). A third — the `WeaponDesign` predicate — was caught on a second review
+  pass. In the stash case a test was actively **pinning** the bug by asserting that negative counts
+  round-trip.
+- **Lesson** — Data-destructive and UI-substituting paths need an adversarial read by someone who is
+  not the author, before they ship. And when a review finds a bug, check whether a test is certifying
+  it.
+- **Now** — CHANGELOG.md:101-103,204-209; `.git/commit-review-cache.json:248,254,285`;
+  `tests/StashPayloadTest/Program.cs:37-53`.
+
+### P11 · Shipping a trade-off without naming its cost
+
+- **What happened** — `CoopCommandSplit` gives each player four formations while a remote player is in
+  the battle, because the eight-formation budget has to cover two parties: troop preferences beyond
+  infantry / archers / cavalry / horse archers fold into those four.
+- **Lesson** — State the capability cost in the changelog and the README **at the moment you ship it**,
+  and pin the folding rule in a self-test so it cannot drift silently. An accepted limit that is
+  written down is a decision; one that is not is a bug report waiting to happen.
+- **Now** — `Payload/CoopCommandSplit.cs:151-168,430-436`; CHANGELOG.md:47-49.
+
+### P12 · Retrying a dead end because nobody wrote it down
+
+- **What happened** — Scoping the solo time neutralizer to the campaign map (a 2026-09-04 hypothesis
+  for the sideways/folded character) did not move the symptom at all; the sideways character is a
+  separate, likely GPU-side vanilla issue. It was reverted.
+- **Lesson** — A speculative narrowing that does not move the symptom must be reverted **and recorded**
+  as a dead end with its date, or the next session pays for it again. That is what §0 of this file is
+  for.
+- **Now** — `docs/ENGINE-NOTES.md`, the time-control dead end; §0 above.
+
+### P13 · Reading coalesced output as an exact timeline
+
+- **What happened** — Coalesced tracer output is not strictly ordered against plain `Log.Info` lines: a
+  run's tail count flushes on its next repeat or window, not instantly, and a repeat that never recurs
+  never gets a final count. `TraceThrottle` also clears its **entire** key dictionary when cardinality
+  exceeds 512, discarding in-flight counts.
+- **Lesson** — Accept the tradeoff explicitly — it is what stops the flood — and read `[repeat]`
+  rollups as approximate frequency, never as an interleaved timeline. Build throttle keys from **stable
+  identity** (exception type plus throwing frame), never from timestamps or values: an unstable key both
+  defeats coalescing and periodically wipes the counters.
+- **Now** — `Payload/TraceThrottle.cs:31-32,34-37,54-57,60-83`.
+
+### P14 · Log evidence with no build identity
+
+- **What happened** — A log or a crash report that cannot say which build and which launch produced it
+  is not evidence.
+- **Lesson** — Print a per-launch banner: the version read **back** from the assembly identity (never
+  hardcoded), the build time from the DLL's last-write time, and a session id from
+  `TickCount ^ (pid << 8)` as hex. It also catches "you deployed to the wrong folder" instantly. In
+  co-op, add a per-line role tag (H/C/S) so two machines' logs can be merged — with the honest caveat
+  that the tag starts as `?` and `S` doubles as "unreadable".
+- **Now** — `Harness/Diag.cs:15-61`, logged first thing at `Harness/SubModule.cs:19`; role tagging at
+  `Payload/PayloadEntry.cs:161-187` and `Harness/Log.cs:19,69`.
+
+### P15 · Chasing a crash where it was logged
+
+- **What happened** — Covered in full at **N2**; it belongs here as a habit, not just as a CLR fact.
+  The `MovementOrder` crash was chased at `Formation.ResetAux` inside `Mission.AfterStart`, where
+  `Mission.Current` is already live. Only collateral was ever captured; the origin never was.
+- **Lesson** — The manifested location is not the root-cause location — find **both**. Ask what could
+  make the logged context differ from the origin's (a cached type-init re-throw, a queued apply, a
+  deferred tick), and instrument the earlier moment directly rather than reading the stack harder.
+- **Now** — `Payload/MovementOrderInitProbe.cs:7-23`; `docs/DIAGNOSTICS.md`; `CLAUDE.md`, "How to
+  investigate".
+
+> **Good to know — what makes a fix retirable.**
+> Every guard reports at `Apply` through `Diag.Report(component, ok, detail)` and records its first
+> intervention through `SelfHealing.RecordFire`, so the health report distinguishes **active** from
+> **inactive** from **never fired**. A crash finalizer that has never fired is a retirement signal, not
+> dead weight; a behaviour patch that never re-checks the bug is the opposite — it will fight an
+> upstream fix forever, which is why `ClientBootstrapFix` asks "is the bug still present?" before
+> overriding (**B4**). Reporting "no BT present" as ok=true while an unresolved member is **critical**
+> is exactly the distinction a non-technical player's health line has to make, and reporting
+> "disabled by config" as ok=true keeps a deliberate off-switch from looking like a breakage.
+> `Harness/SelfHealing.cs:9-21,43-81`; `Harness/Diag.cs:71-104`;
+> `Payload/ClientBootstrapFix.cs:65,71,78,85`; `Payload/IllnessDeathGuard.cs:38-52`.
