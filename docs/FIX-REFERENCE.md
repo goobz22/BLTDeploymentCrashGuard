@@ -43,8 +43,16 @@ and is load-bearing for two non-tracer behaviours — see the entries for
 - [Battle mode and payload entry](#battle-mode-and-payload-entry)
 - [Diagnostics and tracers](#diagnostics-and-tracers)
 - [Gameplay and UI guards](#gameplay-and-ui-guards)
+- [Identity and bootstrap](#identity-and-bootstrap)
+- [Siege, gates and command](#siege-gates-and-command)
+- [Sync systems](#sync-systems)
+- [Time control](#time-control)
 - [Harness](#harness)
-- [Indexes](#indexes)
+- [Ops, build and install](#ops-build-and-install)
+- [Known open items](#known-open-items)
+- [Indexes](#indexes) — [co-op scope](#index-0-co-op-scope), [log tag → file](#index-1-log-tag--file),
+  [config key → file](#index-2-config-key--file),
+  [patched member → fix](#index-3-patched-member--fix)
 
 ---
 
