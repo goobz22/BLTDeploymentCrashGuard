@@ -10,7 +10,9 @@ namespace BLTDeploymentCrashGuard
     /// dependency on payload types.</summary>
     public static class Log
     {
-        private const long MaxLogBytes = 8 * 1024 * 1024; // roll over past 8 MB
+        private const long MaxLogBytes = 8 * 1024 * 1024; // roll a segment past 8 MB
+        private const int MaxSegments = 6;                // keep CrashGuard.log.1 .. .6 (~48 MB of history)
+        private const int RotateCheckEveryWrites = 256;   // amortise the FileInfo stat
 
         private static readonly object Sync = new object();
         private static string _path;
@@ -74,29 +76,43 @@ namespace BLTDeploymentCrashGuard
         }
 
         /// <summary>
-        /// Roll the log to CrashGuard.log.1 past the size cap. Re-checked every 512 writes
-        /// (not once per launch — the old once-per-session latch let a single tracing-on
-        /// session grow the file to 283 MB because the only check ran while it was small).
-        /// Called under Sync.
+        /// Roll the log past the size cap, keeping a ROLLING WINDOW of segments
+        /// (CrashGuard.log.1 = most recent full segment ... .MaxSegments = oldest) instead of
+        /// a single overwrite. Rationale (2026-09-04 incident): a per-tick tracer could fill
+        /// the 8 MB cap in minutes, and with only one backup the flip discarded the very
+        /// evidence being chased. Several segments plus tracer coalescing keep a session's
+        /// real events on disk. Re-checked every RotateCheckEveryWrites writes (not once per
+        /// launch — the old once-per-session latch once let the file reach 283 MB because the
+        /// only check ran while it was still small). Called under Sync.
         /// </summary>
         private static void RotateIfNeeded()
         {
-            if (_writesSinceRotateCheck++ % 512 != 0)
+            if (_writesSinceRotateCheck++ % RotateCheckEveryWrites != 0)
             {
                 return;
             }
             try
             {
                 string path = LogPath;
-                if (File.Exists(path) && new FileInfo(path).Length > MaxLogBytes)
+                if (!File.Exists(path) || new FileInfo(path).Length <= MaxLogBytes)
                 {
-                    string backup = path + ".1";
-                    if (File.Exists(backup))
-                    {
-                        File.Delete(backup);
-                    }
-                    File.Move(path, backup);
+                    return;
                 }
+                // Drop the oldest, then shift each segment down one slot: .5 -> .6, ... .1 -> .2.
+                string oldest = path + "." + MaxSegments;
+                if (File.Exists(oldest))
+                {
+                    File.Delete(oldest);
+                }
+                for (int i = MaxSegments - 1; i >= 1; i--)
+                {
+                    string src = path + "." + i;
+                    if (File.Exists(src))
+                    {
+                        File.Move(src, path + "." + (i + 1));
+                    }
+                }
+                File.Move(path, path + ".1");
             }
             catch
             {

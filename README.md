@@ -239,14 +239,19 @@ player, and the co-op sync features need it on both ends.
 26. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
     launches with caller stacks) and command control (who becomes player-controlled, order/formation
     ownership, a full control map at deployment finish). Verbose tracers are off by default
-    (`tracing`) and rotate at 8 MB.
+    (`tracing`). The log rolls a segment past 8 MB and keeps a rolling window of six segments
+    (`CrashGuard.log.1` … `.6`), so a busy session's evidence is not overwritten by the next
+    rollover. High-frequency tracer lines are coalesced — an identical line that repeats every
+    tick logs once, then `[repeat] … ×N in Ys (collapsed)` at most every few seconds.
     Every fix logs under its own tag, so you can grep for what happened: `[AI-GUARD]`
     party-AI, `[CONVO-CAM]` conversation camera, `[INCIDENT-GUARD]` map incidents,
     `[TICK-GUARD]` background-tick throttle, `[GATE]` gate prompts, `[SIEGE-CMD]` siege-defense
     command (formations taken back from the AI, refused hand-offs, stopped troop shuffles), `[COOP-CMD]` co-op
     own-army formation blocks (who commands I–IV / V–VIII, troops re-sorted), `[IDENTITY]` player
     identity / shared-save hero, `[STASH-SYNC]`, `[PREG]` / `[PREG-SYNC]` conception and
-    births, `[STEALTH]` hideout sneak-in, `[CLAN-PARTY]` create-party leader list and greyed-out reasons, `[BATTLE-MODE]`, `[HOTRELOAD]`. Each launch ends
+    births, `[STEALTH]` hideout sneak-in, `[CLAN-PARTY]` create-party leader list and greyed-out reasons,
+    `[CHARGEN]` character-creation / banner-editor lifecycle and any swallowed exception during it
+    (with `tracing`), `[BATTLE-MODE]`, `[HOTRELOAD]`. Each launch ends
     its startup with `MOD HEALTH:` (which fixes resolved) and, with `selfTest`, a
     `[SELFTEST]` PASS/FAIL per fix; `GUARD ACTIVITY:` every two minutes lists which guards
     actually fired — a guard that never fires is a bug that never happened.

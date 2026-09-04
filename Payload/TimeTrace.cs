@@ -24,7 +24,11 @@ namespace BLTDeploymentCrashGuard
     internal static class TimeTrace
     {
         [ThreadStatic]
+        private static CampaignTimeControlMode _pendingOldMode;
+        [ThreadStatic]
         private static CampaignTimeControlMode _pendingNewMode;
+        [ThreadStatic]
+        private static string _pendingStack;
         [ThreadStatic]
         private static bool _pendingLogged;
 
@@ -85,9 +89,14 @@ namespace BLTDeploymentCrashGuard
                 {
                     return; // no-op sets are noise
                 }
+                // Capture only — the full line (with stack) is emitted in the postfix once the
+                // actual outcome is known, and routed through TraceThrottle so a request that
+                // repeats every tick (e.g. BT's EnforcePlaySpeed while our guard blocks it)
+                // logs one full line + a periodic count instead of ~60 lines/second.
+                _pendingOldMode = __instance.TimeControlMode;
                 _pendingNewMode = value;
+                _pendingStack = Stack();
                 _pendingLogged = true;
-                Log.Info("[TIME] TimeControlMode " + __instance.TimeControlMode + " -> " + value + Stack());
             }
             catch
             {
@@ -103,10 +112,15 @@ namespace BLTDeploymentCrashGuard
                     return;
                 }
                 _pendingLogged = false;
-                if (__instance.TimeControlMode != _pendingNewMode)
+                bool suppressed = __instance.TimeControlMode != _pendingNewMode;
+                string message = "[TIME] TimeControlMode " + _pendingOldMode + " -> " + _pendingNewMode + _pendingStack;
+                if (suppressed)
                 {
-                    Log.Info("[TIME]   ^ change SUPPRESSED/ALTERED by another patch — actual mode now " + __instance.TimeControlMode);
+                    message += "\n[TIME]   ^ change SUPPRESSED/ALTERED by another patch — actual mode now " + __instance.TimeControlMode;
                 }
+                // Dedup key ignores the (identical) stack: a request that repeats collapses.
+                string key = "TIME " + _pendingOldMode + "->" + _pendingNewMode + (suppressed ? " SUPPRESSED->" + __instance.TimeControlMode : " applied");
+                TraceThrottle.Emit(key, message);
             }
             catch
             {

@@ -79,6 +79,7 @@ namespace BLTDeploymentCrashGuard
                     ControlTrace.Apply(harmony);
                     TimeTrace.Apply(harmony);
                     CoopBattleTrace.Apply(harmony);
+                    CharacterCreationTrace.Apply(harmony);
                     RoleTrace.Apply(harmony);
                     Log.Info("tracing ENABLED (guardconfig tracing=true)");
                 }

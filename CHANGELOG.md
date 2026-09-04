@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.3.2 — diagnostics: tracer flood fixed, rolling log history, character-creation capture (2026-09-04)
+
+- **Log flood at co-op setup fixed.** With `tracing=true`, while you sit on the co-op setup
+  menu hosting alone, BannerlordTogether's `EnforcePlaySpeed` re-requests `UnstoppablePlay`
+  every tick, our `TimeEnforcementGuard` blocks that write, and the mode never actually
+  changes — so BT retries forever and the `[TIME]` tracer logged the blocked attempt, with a
+  full stack, ~60x/second. That filled the 8 MB log in minutes and rotated the real setup
+  evidence off the end. The `[TIME]` tracer now routes through `TraceThrottle`: the first
+  occurrence of an identical transition logs in full (with its stack), repeats collapse to
+  one `[repeat] … ×N in Ys (collapsed)` line at most every 5 s.
+- **Better rotation methodology.** The logger keeps a ROLLING WINDOW of segments
+  (`CrashGuard.log.1` … `.6`, ~48 MB of history) instead of a single `.1` overwrite, so a
+  burst can no longer discard the evidence being chased. Size check amortised every 256
+  writes. (Harness change — takes effect on next game launch.)
+- **Character-creation / banner-editor capture (`[CHARGEN]`).** New diagnostic tracer for the
+  new-character flow at co-op setup (field report 2026-09-04: the banner-editor preview
+  rendered the character lying sideways). Logs the creation lifecycle (initialize / activate /
+  each stage / refresh / finalize) and, only while a character is being created, arms an
+  AppDomain first-chance exception observer so a SWALLOWED exception in the scene / agent-
+  visuals / pose path is named with its type, message and the game frames that threw it
+  (coalesced by type + throwing frame, capped per activation). Off unless `tracing=true`;
+  changes no game behaviour. Recreate the sideways model with tracing on and the log names
+  what throws.
+
 ## v1.3.1 — co-op: each player commands their own army (2026-09-03)
 
 - **"In co-op I should be able to command my own army while the host commands theirs"** —
