@@ -502,7 +502,9 @@ own instance. (5) The two richest chokepoints (`MissionState.OpenNew`,
 (`Payload/TracePatches.cs:89`, `:181`), which are applied only when `tracing=true`; with
 tracing off the decision points are apply / module-screen / game-start / mission-init only.
 (6) `EnumerateTargets` uses `DeclaredOnly`, so an inherited (non-overridden) implementation is
-not enumerated.
+not enumerated. (7) `Harmony.Unpatch(method, HarmonyPatchType.All, owner)` is per-owner and
+coarse: it removes every patch kind that owner has on the method, even though the stash records
+each kind separately (`:256-266`).
 
 **Self-test.** None. Unlike the repo convention (`Diag.Report` + `SelfHealing.RegisterTest`
 per guard), `Payload/BattleMode.cs` and `Payload/PayloadEntry.cs` register no self-test and no
@@ -893,8 +895,31 @@ assigned at the top of `Apply` and documented as "read by guards that (re)patch 
 Six of the files in this area are gated on `tracing`: `TracePatches`, `ControlTrace`,
 `CoopBattleTrace`, `CharacterCreationTrace`, `MovementOrderInitProbe`, `RoleTrace` — which
 also sets `RuntimeDiagnostics.Enabled`. `safeMode=true` disables everything including the
-load-time `MovementOrderTypeInitGuard`. None of these ten files registers a `SelfHealing`
-test, so `selfTest` exercises none of them.
+load-time `MovementOrderTypeInitGuard`.
+
+**Health for a tracer is its load line, not `MOD HEALTH` or `[SELFTEST]`.** No file in this
+area calls `Diag.Report` or `SelfHealing.RegisterTest` (verified by grep across all ten), so
+`selfTest: true` exercises none of them and they never appear in the `MOD HEALTH:` counts.
+Their health report is what they print at load: "tracer active on N method(s)", "type not
+found: X", "no patchable method X" (`Payload/TracePatches.cs:46`, `Payload/ControlTrace.cs:45`,
+`Payload/CoopBattleTrace.cs:46`, `Payload/RoleTrace.cs:61`,
+`Payload/CharacterCreationTrace.cs:47-48`, `Payload/MovementOrderInitProbe.cs:44`,
+`Payload/MovementOrderTypeInitGuard.cs:64-71`). Because every hook is resolved by name, a silent
+hook miss looks exactly like "the bug did not happen" — read those counts before trusting an
+absence of trace output.
+
+| File | Tag | Gate | Patches | Note |
+|---|---|---|---|---|
+| `TracePatches.cs` | `[TRACE]` | `tracing` | 9 mission/menu/encounter chokepoints, by name over every overload | not behaviour-neutral |
+| `ControlTrace.cs` | `[CONTROL]` | `tracing` | 11 control-handoff members + `Mission.OnDeploymentFinished` | dump is local-machine truth |
+| `CoopBattleTrace.cs` | `[COOP-BATTLE]` | `tracing` | 4 BannerlordTogether internals | inert without BT |
+| `RoleTrace.cs` | `[ROLE]` | `tracing` + `PayloadEntry.Tick` | `MBSaveLoad.LoadSaveGameData` | inert without BT, silently |
+| `CharacterCreationTrace.cs` | `[CHARGEN]` | `tracing` | 5 `CharacterCreationState` methods + `AppDomain.FirstChanceException` | session-wide capture |
+| `RuntimeDiagnostics.cs` | `[DIAG]` | `tracing` | nothing — pure reads | heartbeat + shared context/stack helpers |
+| `MovementOrderInitProbe.cs` | `[MO-PROBE]` | `tracing` | `MovementOrder..ctor(enum)` prefix + finalizer | diagnostic only |
+| `MovementOrderTypeInitGuard.cs` | `[MO-INIT]` | none (only `safeMode`) | `MovementOrder..ctor(enum)` transpiler + forced static init | the real crash fix; load-time |
+| `TraceThrottle.cs` | `[repeat]` | n/a (library) | nothing | coalescing emitter |
+| `LogStreamer.cs` | `[STREAM]` | `logStreamBin` / `logstream.txt` | nothing — driven from `Tick` | uploads the last 2 MB, publicly |
 
 ### Mission/menu/encounter chokepoint tracer
 
@@ -989,7 +1014,11 @@ clients line up.
 is absent (`FindCoopType` returns null → `[COOP-BATTLE] type not found`, `:62-64`).
 
 **Limitations.** Latched by a static `_applied` flag, so it applies once per payload
-generation (`:26`, `:43-47`). Argument meaning is positional and unvalidated — `arg0`/`arg1`
+generation (`:26`, `:43-47`). It resolves BT types during `PayloadEntry.Apply` **only** and,
+unlike the co-op *fixes*, is not retried in `OnBeforeInitialModuleScreen` (contrast
+`Payload/PayloadEntry.cs:117-121`) — if BT's assembly loads after the payload it stays inert for
+the session, and a payload hot-reload (fresh statics, fresh `Apply`) is the practical way to
+pick BT up late. Argument meaning is positional and unvalidated — `arg0`/`arg1`
 are assumed attacker/defenderGhost (`:98-99`) and `arg0..arg3`
 sessionId/authKey/leasedPartyIds/active (`:105-124`); a BT signature change silently mislabels
 fields rather than failing. `Topo()` reads only static `CoopSession` members and returns `?`
@@ -1022,8 +1051,12 @@ RequestedSessionRole, State, LocalGameplayPlayerCount, SharedSaveMode,
 AuthorityAutoLoadSaveName, IsOwnedAuthorityProcess}` (`:23-28`, `:145-164`). Returns
 immediately when `CoopSession` is not found (`:40-43`, `:74-76`).
 
-**Limitations.** Only `LoadSaveGameData` is bracketed — a role change from any other path
-shows up only as the ≥1 s tick diff (`:82-93`). The one-shot launch line
+**Limitations.** When `CoopSession` is not found it returns **silently** — no `[ROLE]` line of
+any kind, unlike `CoopBattleTrace` (`:62-64`) and `ControlTrace` (`:56`), which log "type not
+found". So an absent `[ROLE] role-transition tracer active` line means either "BT not loaded" or
+"BT renamed `CoopSession`", and the log cannot tell you which. Like `CoopBattleTrace` it binds
+BT once, at `Apply`, and is never retried. Only `LoadSaveGameData` is bracketed — a role change
+from any other path shows up only as the ≥1 s tick diff (`:82-93`). The one-shot launch line
 (`[ROLE] launch args coop-authority=…`) is emitted on the first tick, not at `Apply`
 (`:77-81`). `LaunchedAsDedicated` matches only the exact tokens `--coop-authority` and
 `--coop-dedicated-authority` (`:116-121`), so an `=value` or abbreviated form reads false. A
@@ -1066,8 +1099,10 @@ hard-coded string (`:30`); a namespace change silently yields `[CHARGEN] type no
 (`TaleWorlds.Library` excluded) is skipped as "framework-internal noise" (`:167-171`,
 `:219-246`) — pure-framework failures are invisible. `[ThreadStatic] _inHandler` stops the
 handler observing its own throws (`:35-36`, `:154-158`), so re-entrant throws on the same
-thread are dropped. The whole handler body is wrapped in an empty catch: "a tracer must never
-take the game down" (`:187-191`). Documentation divergence: `CHANGELOG.md:20-24` (v1.3.2)
+thread are dropped. Inner chains are walked to depth 8 (`:205`) and each exception shows at most
+14 frames (`:266`). The whole handler body is wrapped in an empty catch: "a tracer must never
+take the game down" (`:187-191`). Read all of that before concluding "nothing threw" from a
+quiet log. Documentation divergence: `CHANGELOG.md:20-24` (v1.3.2)
 describes arming the observer "only while a character is being created… capped per
 activation", whereas the shipped code arms it session-wide at `Apply` with one global cap.
 
@@ -1139,7 +1174,10 @@ explicitly never swallows (`:92`). If the constructor signature changes, the pro
 `[MO-PROBE] MovementOrder..ctor(MovementOrderEnum) not found — probe inactive` and does nothing
 (`:36-39`). Because it runs under `tracing`, i.e. after `MovementOrderTypeInitGuard.ApplyEarly`
 has already forced a successful init (`Payload/PayloadEntry.cs:42` vs `:89`), on a normal load
-the origin construction has already happened before the probe is installed.
+the origin construction has already happened before the probe is installed — the probe then sees
+only later, ordinary constructions. To use it as an origin probe you must move it ahead of the
+guard, or disable the guard's forced init; otherwise its value is confirming that later
+constructions have a live mission.
 
 **Self-test.** None registered; logs
 `[MO-PROBE] MovementOrder ctor origin probe active (logs first 12 constructions + any throw)`
@@ -1156,10 +1194,11 @@ caches a failed `MovementOrder` static-constructor run, permanently poisoning th
 process.
 
 **Mechanism.** `ApplyEarly(harmony)` runs as the very first statement of `PayloadEntry.Apply`,
-ahead of `PatchAll` and every other guard (`Payload/PayloadEntry.cs:38-42`). It forces the type
-to initialize safely — via `RunClassConstructor` plus a transpiler that rewrites the
-`Mission.Current` / `get_CurrentTime` pair inside `MovementOrder..ctor` — and reports what it
-did in the load log.
+ahead of `PatchAll` and every other guard (`Payload/PayloadEntry.cs:38-42`), unconditionally —
+there is no `tracing` gate; only `safeMode` stops it. Two parts: a **transpiler** that collapses
+`call Mission::get_Current; callvirt Mission::get_CurrentTime` inside `MovementOrder..ctor` into
+one `SafeCurrentTime()` call, and `RuntimeHelpers.RunClassConstructor` (`:82`) to pin the static
+init to that safe moment. It reports what it did in the load log.
 
 **Patched members.** `MovementOrder..ctor` (transpiler on the
 `get_Current`;`get_CurrentTime` site pair); `RuntimeHelpers.RunClassConstructor` on
@@ -1203,6 +1242,12 @@ between missions) so counts do not span unrelated states (`:86-93`).
 
 **Patched members.** None. Consumed by `Payload/TimeTrace.cs:123` and
 `Payload/CharacterCreationTrace.cs:186`.
+
+**Reading `[repeat]` lines.** A rollup is flushed on the *next* repeat after the 5 s window, not
+on a timer, so `[repeat] … ×N` is a frequency signal rather than an exact count. Keys must be
+built from stable identity (exception type + frame), never from a timestamp or a value: unstable
+keys both defeat coalescing and, past 512 live keys, trigger a full clear that discards every
+in-flight count.
 
 **Limitations.** Ordering with plain `Log.Info` lines is best-effort by design: a run's tail
 count flushes on its next repeat or window, not instantly — "which is exactly the tradeoff
@@ -1256,6 +1301,25 @@ plus an on-screen "log streaming active" (`:167-172`).
 ---
 
 ## Gameplay and UI guards
+
+Each of these registers a `Diag` component id, which is the name that appears in the
+`MOD HEALTH:` line and in `[SELFTEST]` results:
+
+| Fix | Component id | Tag | Config | Patched members |
+|---|---|---|---|---|
+| #2 dead hero (caller) | `dead-hero-return-fix` | `[DEADHERO]` | — | `IssueManager.MakeAlternativeTroopsReturn(TroopRoster)` prefix |
+| #2 dead hero (invariant) | `dead-hero-activate-invariant` | `[DEADHERO]` | — | `Hero.ChangeState(CharacterStates)` prefix |
+| #3 conversation camera | `conversation-camera-guard` | `[CONVO-CAM]` | — | `MissionConversationCameraView.MakeSpeakerLookToListener` + `UpdateAgentLooksForConversation` finalizers |
+| #4 clan screen | `clan-screen-guard` | `[CLAN-GUARD]` | — | `GauntletClanScreen.CreateDataSource` finalizer (+ reflective `ScreenManager.PopScreen()`) |
+| #10 atomic dowry | `marriage-barter-guard` | `[MARRIAGE-GUARD]` | — | `BarterManager.ApplyAndFinalizePlayerBarter(Hero,Hero,BarterData)` prefix |
+| #11 no sickness | `illness-death-guard` | `[NOSICK]` | `noSickness` | `AgingCampaignBehavior.IsItTimeOfDeath` + `DailyTickHero` prefixes |
+| #21 sneak-in | `stealth-hideout-advisor` | `[STEALTH]` | — | `HideoutAmbushMissionController.AfterStart` postfix + the three stealth→battle transitions |
+| #22 party creation | `clan-party-advisor` | `[CLAN-PARTY]` | `partyTroopsOnCreate` | `ClanPartiesVM.GetCanCreateNewParty` / `GetNewPartyLeaderCandidates` / `CreateNewClanParty` postfixes |
+
+Component ids are registered at `Payload/IllnessDeathGuard.cs:44`,
+`Payload/MarriageBarterGuard.cs:39`, `Payload/ConversationCameraCrashGuard.cs:26`,
+`Payload/DeadHeroReactivationFix.cs:54` and `:116`, `Payload/ClanScreenCrashGuard.cs:31`,
+`Payload/StealthHideoutAdvisor.cs:59`, `Payload/ClanPartyCreationAdvisor.cs:68`.
 
 ### Illness death guard
 
@@ -1483,16 +1547,21 @@ companion half guarantees command at the stealth-to-battle transition
 
 **Patched members.**
 `SandBox.Missions.MissionLogics.Hideout.HideoutAmbushMissionController.AfterStart` (postfix);
-`HideoutAmbushMissionController.ChangeHideoutMissionModeToBattle` (the transition the command
-guarantee re-resolves).
+and the three stealth→battle transitions the command guarantee hooks —
+`ChangeHideoutMissionModeToBattle`, `StartBossFightBattleModeInternal`,
+`StartBossFightDuelModeInternal` (`:49-57`). The guarantee asserts `Team.GeneralAgent` and
+`PlayerOrderController.Owner`.
 
 **Limitations.** If the controller type does not resolve (an older game build without the
 stealth hideout) `Apply` returns silently with no `Diag` report at all (`:37-41`). All
 reflection is by name because `SandBox` is not a compile-time reference (`:27`). The postfix
 body is wrapped in a bare catch that swallows everything (`:76-78`). The command guarantee
-fires only at the named transitions; a later ownership loss is not re-repaired. Missing
-transitions are skipped, the patched count is reported in the `Diag` detail, and
-`Diag ok = patched > 0` (`:58-59`). The whole postfix is inside a try/catch that logs and
+asserts ownership exactly once per transition (`:81-118` has no periodic re-check), so if BT's
+battle patches take ownership back later in the ambush it is **not** re-repaired — unlike
+`CoopCommandSplit`, which re-applies every half second. Missing transitions are skipped, the
+patched count is reported in the `Diag` detail, and `Diag ok = patched > 0` (`:58-59`) — so a
+partial resolve after a game update still reports healthy; read the "active on N method(s)"
+count in the log. The whole postfix is inside a try/catch that logs and
 returns (`:114-117`). It does not change the stealth phase itself — orders remain withheld
 until the ambush is sprung, by design (`:21`).
 
@@ -1919,7 +1988,11 @@ regular formations, index < `(int)FormationClass.NumberOfRegularFormations` (`:5
 resolve, owner-is-general promotion is limited to `Team.SetPlayerRole` and it says so
 (`:118-126`). If any core vanilla member is unresolved the whole guard goes inactive rather than
 crashing (`:104-109`). BT release hooks are best-effort: missing methods are logged individually
-and skipped (`:183-186`). A BT client stands down entirely (`InScope` returns false via
+and skipped (`:183-186`). Formation indices 8 (general) and 9 (bodyguard) are never touched. The
+take-over only issues a MOVE order when the captured `WorldPosition` is valid (`:429-432`).
+`OnMissionInit()` zeroes both counters, the one-shot flags and all three depth counters
+(`:161-165`; called from `Payload/PayloadEntry.cs:138`). Every patch body fails **open** into
+vanilla behaviour. A BT client stands down entirely (`InScope` returns false via
 `IsBtClient`, `:221`), logging once that the host's command assignment is authoritative and
 advising "host the session (shared-save host handoff)" (`:399-405`). `CHANGELOG.md` records the
 deliberate exceptions that keep working — F6 delegate command, vanilla's death hand-off, and
@@ -1938,6 +2011,20 @@ the empty player side in solo battles.
 table: refuse for formation indices 3, 0 and 7; do not refuse for `requestAi=false`, non-siege,
 deployment-not-finished, not-general, index 8, index 9, or any of the three depth counters at 1
 (`:536-548`).
+
+#### Legitimate hand-offs the guard must let through
+
+Each is tracked by its own `[ThreadStatic]` depth counter (declared `:61-66`); the prefix
+increments and the **finalizer** decrements, so an exception cannot leak the counter.
+
+| Counter | Incremented by | Stands down |
+|---|---|---|
+| `_explicitAiDepth` | `OrderController.SetOrder(OrderType.AIControlOn)` — the player's own F6 | hand-off refusal |
+| `_delegateDepth` | `Team.DelegateCommandToAI()` — vanilla's hand-off when the player falls | hand-off refusal **and** the owner-is-general promotion |
+| `_btReleaseDepth` | BT's three `Release*FormationsToAi` host methods | hand-off refusal **and** the owner-is-general promotion |
+
+Counters are thread-local — they only correlate calls on the same thread — and are zeroed in
+`OnMissionInit` (`:163-165`).
 
 ### `SetControlledByAI` prefix (AI hand-off refusal)
 
@@ -2165,6 +2252,1105 @@ totals "`<N> hand-off(s) refused, <M> troop shuffle(s) stopped`" (`:512-521`). C
 
 **Self-test.** n/a.
 
+### Siege gate prompt fix (gates at rest activate their points)
+
+**README item** 19 · **Source** `Payload/SiegeGatePromptFix.cs` · **Class**
+`SiegeGatePromptFix` (Diag component `siege-gate-prompt-fix`) · **Tag** `[GATE]` · **Config**
+`tracing` (for one explanatory line only) · **Scope** both — "Works in vanilla and co-op
+(missions are local; BT has no gate code)" (`:27`)
+
+**Bug.** Defending a castle with the gate open, there is no "F: Close" prompt (field report
+2026-08-30); a never-cycled closed gate has no prompt at all. The gate's standing points are
+permanently dead (`:9-27`). Root-caused in the installed build's IL: `CastleGate.ServerTick`
+activates the gate's standing points only when the door's animation parameter is exactly
+≥ 1.0; anything less deactivates every point — and vanilla itself parks a closed gate at a
+frozen 0.99 (`SetInitialStateOfGate`), while an opened door can settle a float-hair under 1.0.
+
+**Mechanism.** Postfix on `CastleGate.ServerTick`. Reads the private
+`CastleGate._doorSkeleton` (cached `FieldInfo`, `:42`) as `TaleWorlds.Engine.Skeleton`, gets
+`Skeleton.GetAnimationParameterAtChannel(0)`, and acts **only** inside the band [0.98, 1.0) —
+≥ 1f means vanilla activated correctly, < 0.98 is a genuine mid-swing door (`:87-91`). Inside
+the band it applies vanilla's own direction rule:
+`excludedTag = State == CastleGate.GateState.Closed ? "close" : "open"`; for every
+`StandingPoint`, `deactivate = point.GameEntity.HasTag(excludedTag)`, applied through
+`StandingPoint.SetIsDeactivatedSynched` only when it differs from `point.IsDeactivated`
+(`:94-107`). Counts re-activations, records a fire, and logs at most every 5 s naming the
+parameter, the state, and whether the restored prompt is "F Close" or "F Open" (`:108-119`).
+
+**Patched members.** `CastleGate.ServerTick` (postfix, resolved `:43`, patched `:50`). Read:
+`CastleGate._doorSkeleton` (private field), `Skeleton.GetAnimationParameterAtChannel(int)`,
+`CastleGate.State` / `CastleGate.GateState.Closed`, `CastleGate.StandingPoints`,
+`StandingPoint.IsDeactivated`, `GameEntity.HasTag(string)`. Written:
+`StandingPoint.SetIsDeactivatedSynched(bool)`.
+
+**Limitations.** Respects `MissionObject.IsDeactivated` — machine-level deactivation is
+deliberate (`:66-69`). Leaves a **destroyed** (battering-ram-broken) gate exactly as vanilla
+wants it, since broken gates cannot be closed, but with `tracing=true` it logs an explanatory
+line at most every 30 s so the absent prompt is not a mystery (`:70-81`). Returns silently if
+the skeleton is null (`:82-86`). `RestThreshold` is a hard-coded `0.98f` (`:32`).
+
+**Self-test.** `siege-gate-prompt-fix.contract` (`:127-139`). Pins `_doorSkeletonField`
+non-null, `CastleGate.ServerTick` and `StandingPoint.SetIsDeactivatedSynched`; and asserts the
+decision band through the pure `Decide(float)`: `Decide(1.0f)==false`, `Decide(0.99f)==true`,
+`Decide(0.5f)==false`, `Decide(0.981f)==true` (`:134`).
+
+### Civilian gate close fix (settlement visits)
+
+**README item** 19 · **Source** `Payload/CivilianGateCloseFix.cs` · **Class**
+`CivilianGateCloseFix` (Diag component `civilian-gate-fix`) · **Tag** `[GATE]` · **Config**
+none · **Scope** both — "settlement visits are local missions on every peer and BT has no gate
+code (assembly scan)" (`:25-26`)
+
+**Bug.** Walking around a settlement there is no F prompt to close (or re-open) the
+castle/town gate — vanilla treats town gates as scenery (`:9-18`).
+
+**Mechanism.** Postfix on `CastleGate.AfterMissionStart`, **civilian gates only**, guarded by
+reading the private `CastleGate._civilianMission` bool (`:40`, `:73-76`). It undoes all three
+vanilla locks: invokes the `MissionObject.IsDisabled` property **setter**
+(`AccessTools.PropertySetter`, `:41`) with false on the gate machine and on every
+`StandingPoint` (`:82-86`), then calls
+`CastleGate.SetUsableTeam(Mission.Current.PlayerTeam)` so
+`StandingPointWithTeamLimit.IsDisabledForAgent` can match (`:87`). Records a fire and logs the
+standing-point count (`:88-90`). Closing then runs through vanilla's own `CloseDoor`
+(animation, `SetGateNavMeshState`, colliders), so a closed civilian gate behaves exactly like a
+closed siege gate (`:23-25`).
+
+**Patched members.** `CastleGate.AfterMissionStart` (postfix, resolved `:42`, patched `:49`);
+`CastleGate.OnTick` and `CastleGate.ServerTick` (finalizers, `:50-56`; see the next entry).
+Read: `CastleGate._civilianMission` (private bool). Invoked by reflection:
+`MissionObject.IsDisabled` setter. Called: `CastleGate.SetUsableTeam(Team)`,
+`CastleGate.StandingPoints`.
+
+**Limitations.** Returns without acting when `Mission.Current.PlayerTeam` is null — "nobody
+local to use the gate — leave it as scenery" (`:77-81`). Battle and siege gates are untouched
+(`:75`). The nav-mesh ability flags vanilla cleared are deliberately left as vanilla left them
+for the open state, so pathing while open is unchanged (`:22-23`). It uses a
+reflection-invoked property setter because `IsDisabled` has no public setter.
+
+**Self-test.** `civilian-gate-fix.contract` (`:116-127`). Pins `_civilianField`,
+`_setIsDisabled`, `CastleGate.AfterMissionStart`, `CastleGate.CloseDoor`,
+`CastleGate.SetUsableTeam`; and asserts `TickFinalizer(null) == null` — the suppressor is inert
+on the no-exception path.
+
+### Gate tick finalizer (insurance on newly-ticking civilian gates)
+
+**README item** 19 · **Source** `Payload/CivilianGateCloseFix.cs` · **Class**
+`CivilianGateCloseFix` · **Tag** `[GATE]` · **Config** none · **Scope** both
+
+**Bug.** Civilian scenes never ticked gates before this fix; a siege-only assumption inside
+`CastleGate.OnTick` / `ServerTick` could now throw and crash a settlement visit (`:98-99`,
+`:27-28`).
+
+**Mechanism.** A finalizer registered on both `CastleGate.OnTick` and `CastleGate.ServerTick`
+(whichever resolve, `:50-57`). Returns null on a non-null `__exception`, swallowing it so the
+tick is skipped rather than crashing the visit; records a fire and logs
+`[GATE] SUPPRESSED gate tick error (siege-only assumption in a civilian scene?)` at most every
+5 s with wraparound-safe `TickCount` arithmetic (`:100-114`).
+
+**Patched members.** `CastleGate.OnTick`; `CastleGate.ServerTick`.
+
+**Limitations.** Not scoped to civilian gates — it suppresses tick exceptions on **all**
+`CastleGate` ticks. The header describes it as pre-emptive insurance for a failure mode with
+"none known" instances (`:27-28`).
+
+**Self-test.** `TickFinalizer(null) == null` (`:122`).
+
+### Co-op command split (each player commands their own army)
+
+**README item** 24 · **Source** `Payload/CoopCommandSplit.cs` · **Class**
+`CoopCommandSplit` (Diag component `coop-command-split`) · **Tag** `[COOP-CMD]` · **Config**
+`coopOwnArmyCommand` (default true, `:72`) · **Scope** both machines run it; solo is inert
+
+**Bug.** In co-op the client can command nothing: vanilla spawns **both** parties' troops into
+the same class formations, so every formation is mixed; BT's host-side approval
+(`IsClientFormationCommandApproved`) only approves a formation holding the client's troops
+alone, so the client's `AllowedFormationMask` stays empty and BT logs
+`[SPNATIVE ORDER-GUARD] blocked local …` (`:29-31`). Field request 2026-09-03: "in co-op I
+should be able to command my own army while the host commands theirs" (`:16-17`).
+
+**Mechanism.** Keep the two players' parties in **separate formation blocks** on both machines
+— host party and every AI party on the side in indices 0–3 (I–IV: infantry, archers, cavalry,
+horse archers), client party in 4–7 (V–VIII, same order) (`:34-38`). Enforced at three points:
+a postfix on **every** `Mission.SpawnTroop` overload returning `Agent` (`:79-87`, `:188-212`),
+a postfix on `Mission.OnDeploymentFinished` (`:95`, `:214-228`), and a 500 ms `Tick()` called
+from `PayloadEntry` (`:49`, `:122-147`; `Payload/PayloadEntry.cs:155`). Constants:
+`BlockSize = 4`, `EnforceIntervalMs = 500`, `ResolveRetryMs = 2000` (`:48-51`) because the Order of
+Battle screen and reinforcements re-sort by class. Placement logic in `Place()`: resolve the
+agent's owning `PartyBase` via `(agent.Origin as PartyAgentOrigin).Party`, compute the target
+index from `CharacterObject.DefaultFormationClass`, and assign
+`agent.Formation = agent.Team.GetFormation((FormationClass)TargetIndex(...))` (`:267-297`).
+With the blocks clean, BT's own rules do the rest (`:38-41`).
+
+**Patched members.** `Mission.SpawnTroop` — all overloads with
+`ReturnType == typeof(Agent)`, enumerated by `GetMethods` with
+`Public|NonPublic|Instance|DeclaredOnly` (postfix, `:79-87`); `Mission.OnDeploymentFinished()`
+(postfix, `:88`, `:95`). Read/written: `Team.GetFormation(FormationClass)`,
+`Team.FormationsIncludingEmpty`, `Formation.ApplyActionOnEachUnit(Action<Agent>)`,
+`Formation.CountOfUnits`, `Agent.Formation` (settable), `Agent.Origin`, `Agent.IsHuman`,
+`Agent.IsPlayerControlled`, `Agent.Team`, `Agent.Character`, `Agent.Main`,
+`PartyAgentOrigin.Party`, `CharacterObject.DefaultFormationClass`,
+`CharacterObject.HeroObject`, `Hero.MainHero`, `Hero.PartyBelongedTo`, `PartyBase.MainParty`,
+`MBObjectManager.Instance.GetObject<Hero>`/`<CharacterObject>`. BT members relied on but not
+patched: `IsClientFormationCommandApproved`, `AllowedFormationMask`,
+`SendFormationMembershipSnapshot`, `ApplyClientFormationMembership` →
+`ResolveFormationByClass`.
+
+**Limitations.** Known trade-off: only four formations per player while a remote player is in
+the battle — troop preferences beyond the basic four (`Skirmisher`, `HeavyInfantry`,
+`LightCavalry`, `HeavyCavalry`) fold into them (`BasicSlot`, `:151-168`;
+`CHANGELOG.md:47-48`). Player heroes are **never** moved: `agent == Agent.Main`,
+`hero == Hero.MainHero`, or hero/character `StringId` equal to the BT ghost-hero id (`:273`,
+`:299-323`); companions travel with their party. Inert unless **both** parties resolve — it
+needs a live BT session with a remote peer, a non-empty `CoopSession` `GhostHeroStringId`, and
+a resolvable ghost `Hero` whose `PartyBelongedTo.Party` is not `PartyBase.MainParty`
+(`:327-379`). `ResolveParties` retries at most every 2 s (`ResolveRetryMs`, `:51`,
+`:334-338`) and caches once resolved. Only agents on `Mission.PlayerTeam` are touched
+(`:269`). `IsOutOfBlock` ignores indices < 0 and ≥ 8, so non-regular formations are never
+re-sorted (`:177-184`).
+
+**Self-test.** `coop-command-split.contract` (`:416-444`). Pins
+`Mission.OnDeploymentFinished`, `Team.GetFormation(FormationClass)`, the `Agent.Formation`
+property, the `PartyAgentOrigin.Party` property, and a count > 0 of `Mission.SpawnTroop`
+overloads returning `Agent`. Asserts the full block mapping:
+`TargetIndex(false, Infantry/Ranged/Cavalry/HorseArcher) == 0/1/2/3`, `Skirmisher` and
+`HeavyInfantry` → 0, `LightCavalry` and `HeavyCavalry` → 2, and the client versions == 4/5/6/7;
+plus `IsOutOfBlock` true for (client,0), (client,3), (host,4), (host,7) and false for
+(client,4), (client,7), (host,0), (host,3), (client,8), (host,9), (host,-1) (`:430-439`).
+
+### Co-op command briefing (`Announce`)
+
+**README item** 24 · **Source** `Payload/CoopCommandSplit.cs` · **Class** `CoopCommandSplit` ·
+**Tag** `[COOP-CMD]` · **Config** `coopOwnArmyCommand` · **Scope** both
+
+**Bug.** Players cannot tell which formations are theirs after the split.
+
+**Mechanism.** Once per battle (`_announced`), writes a full `Log.Info` naming each hero and
+their block and explaining BT's approval rule, plus a short `Log.Screen` line: "Co-op:
+`<host>` commands I–IV, `<client>` commands V–VIII (own army each)" (`:381-391`). Hero names
+are read defensively through `HeroName()`, which returns `?` on any failure (`:393-403`).
+
+**Limitations.** Fires only after the first successful placement or enforcement; names come
+from `Hero.Name.ToString()`.
+
+**Self-test.** n/a.
+
+### Co-op split log coalescer (`LogRateLimited`)
+
+**README item** n/a · **Source** `Payload/CoopCommandSplit.cs` · **Class** `CoopCommandSplit` ·
+**Tag** `[COOP-CMD]` · **Config** `coopOwnArmyCommand` · **Scope** both
+
+**Mechanism.** A single shared 5 s `TickCount` gate with wraparound safety, used for tick
+errors, spawn placement errors, party-resolution errors, deployment enforcement errors and the
+"re-sorted N troop(s) into their owner's block (`<reason>`)" line (`:405-414`; used at `:145`,
+`:210`, `:226`, `:261`, `:376`).
+
+**Limitations.** One shared throttle for all message kinds — a burst of one kind can hide
+another.
+
+**Self-test.** n/a.
+
+---
+
+## Sync systems
+
+Both sync features ride BannerlordTogether's own network channel and share the same receive
+hook, the same frame shape and the same network-thread-to-main-thread queue discipline. They
+differ only in their 4-byte magic and their payload model. `pregnancySync` and `stashSync` gate
+them; `tracing` gates only the spouse-proximity tracer.
+
+**Wire suites.** `tests/BirthPayloadTest` and `tests/StashPayloadTest` are net472 console
+executables that link the **shipping** wire sources — `StashPayloadTest` links all four files
+(`tests/StashPayloadTest/StashPayloadTest.csproj:19-24`), because "a birth frame must not read
+as stash" is part of the contract. Both exit **1** on any failure
+(`tests/BirthPayloadTest/Program.cs:108`, `tests/StashPayloadTest/Program.cs:92`), so they can
+gate a build; run both after touching any file under `Payload/PregnancySync/` or
+`Payload/StashSync/`.
+
+### Pregnancy / birth sync (host-authoritative)
+
+**README item** 15 · **Source** `Payload/PregnancySync/PregnancySyncGuard.cs` · **Class**
+`PregnancySyncGuard` (Diag component `pregnancy-sync`) · **Tag** `[PREG-SYNC]` · **Config**
+`pregnancySync` · **Scope** both — the host sends, the client receives and reconstructs; fully
+inert solo
+
+**Bug.** BannerlordTogether disables the entire pregnancy system for the **client** — its
+`SuppressClientPregnancyBehaviorPatch` prefixes `PregnancyCampaignBehavior.RegisterEvents` with
+`return !CoopSession.IsClient` — and never replicates births: BT has no family or hero
+replication among its roughly ten hand-rolled sync behaviors
+(`docs/SPEC-pregnancy-coop-sync.md:5-11`). Player experience: a client's family never grows,
+and a child born on the host never appears in the client's Clan → Members, so clan roster,
+encyclopedia, inheritance and succession permanently disagree between the two machines.
+
+**Mechanism.** Host authority plus identity replication. **Host:** subscribe
+`CampaignEvents.OnGivenBirthEvent` (`:88`), serialize each newborn's non-derivable identity
+into `BirthPayloadData`, frame it with `BirthWireFraming`, and send by reflection to
+`CoopSession.Server.BroadcastRawReliableOrdered(byte[])` (`:430-457`). **Client:** a Harmony
+**prefix** on BT's `ShouldAcceptIncomingPacket` (`:225-239`, `:316-346`) — if the bytes are
+ours, enqueue the payload, set `ref __result = false` and return false so BT never dispatches
+it; the main-thread `Tick` (`:99-127`) drains the queue and calls
+`HeroCreator.DeliverOffSpring(mother, father, isFemale)` (`:372`), then `AlignToHost`
+(`:399-426`) to force the host's `StringId`, body properties and name. Clan, parents, culture
+and birthday are **not** sent — `DeliverOffSpring` reproduces them identically from the same
+parents on both sides (`BirthPayloadData.cs:33-38`). Sending is gated on
+`PeerDetection.ReadCoopStaticBool("IsHost") == true` **and** `AnyRemotePeerConnected() == true`
+(`:251-258`).
+
+**Patched members.** BT `Network.CoopNetworkBase.ShouldAcceptIncomingPacket` and
+`Network.CoopServer.ShouldAcceptIncomingPacket` (prefix), with the legacy-namespace
+`BannerlordTogether.CoopNetworkBase` / `.CoopServer` as fallbacks. Not patched:
+`CampaignEvents.OnGivenBirthEvent` (`AddNonSerializedListener`),
+`CoopSession.Server.BroadcastRawReliableOrdered(byte[])` (reflection invoke),
+`HeroCreator.DeliverOffSpring(Hero, Hero, bool)`, `MBObjectManager.Instance.UnregisterObject` /
+`RegisterPresumedObject`, `Hero.SetName(TextObject, TextObject)`,
+`Hero.StaticBodyProperties`, `Hero.StringId`.
+
+**Limitations.** Only the child's existence and identity are replicated; succession and
+inheritance edge cases are explicit non-goals (`SPEC:38-41`). Client-initiated conception timing
+is not supported — host authority only (`SPEC:40-42`). If either parent hero cannot be resolved
+on the client, the child is skipped with a log line (`:363-368`). If the broadcast reflection
+fails, the client silently misses that child until a resync (`:265-269`). The two-machine hop is
+the one part no solo test covers — "validated the first time it fires"
+(`CHANGELOG.md:182-185`); `pregnancySync` shipped off and became default-on in v1.2.5, at which
+point only the wire format and loopback were proven. `AlignToHost` failures are logged as
+"partial" and the child is kept anyway (`:422-425`). Replication is live-only — there is no
+backfill for a peer that was absent. `BirthPayloadData.StillbornCount` is written (`:288`) and
+round-trip-tested but the receiver never applies it: `ReconstructChildren` (`:348-394`) iterates
+only `payload.Children`, so a stillbirth tally recorded on the host is not reproduced on the
+client. A birth packet is rejected outright above **16** children.
+
+**Self-test.** `LoopbackSelfTest` (`:488-523`), registered even when the feature is disabled
+(`:49`). Pins: (a) a **real live hero** (`Hero.MainHero`) serializes into a birth payload and
+survives `Frame` → `IsOurPacket` → `TryUnframe` with every `ChildIdentity` field equal
+(`IdentityEquals`) and `MotherStringId` equal; (b) BT `PacketType PlayerHeroData = 13` must
+**not** be recognized as ours (`!IsOurPacket(new byte[]{13,0,0,0})`, `:508`); (c) a null
+`MainHero` (main menu) reports PASS with "pipeline untested this tick, not a failure" rather
+than a false red (`:498-500`).
+
+### Conception visibility postfix
+
+**README item** 15 · **Source** `Payload/PregnancySync/PregnancySyncGuard.cs` · **Class**
+`PregnancySyncGuard` · **Tag** `[PREG]` · **Config** none — deliberately installed regardless
+of `pregnancySync`, because it is diagnostic rather than sync (`:50-53`) · **Scope** both/solo
+
+**Bug.** Conception is invisible: the player could not tell whether "waiting at the castle with
+my wife" had actually produced a pregnancy roll, so bug reports about pregnancy were
+unanswerable from the log (operator ask 2026-08-30, `:50-52`). Verification against the
+installed build's IL showed vanilla already works — `PregnancyCampaignBehavior.RefreshSpouseVisit`
+fires when `CheckAreNearby` passes (same settlement, so waiting inside the castle counts, or
+same party; ages 18–45; chance falls with age and existing children) — and BT's suppression is
+literally `return !IsClient`, so the host's rolls run untouched. No behaviour change was needed.
+
+**Mechanism.** Harmony **postfix** on `MakePregnantAction.Apply` (`:142-146`). Logs
+`[PREG] conception: <hero> is now pregnant (clan <id>)` for every conception in the world, and
+additionally calls `Log.Screen("<hero> is pregnant")` when the hero's clan is
+`Hero.MainHero.Clan` (`:172-177`). The whole body is wrapped in a swallow-everything try/catch
+(`:179-181`) so an observer can never break a conception.
+
+**Patched members.** `MakePregnantAction.Apply(Hero)` (postfix).
+
+**Limitations.** Postfix only, so it observes conceptions that already happened; it does not
+make conception more likely. The on-screen note is limited to the player's own clan to avoid
+spam.
+
+**Self-test.** None of its own — covered indirectly by the pregnancy-sync `Apply`/`Diag`
+report.
+
+### Spouse-proximity tracer
+
+**README item** 15 · **Source** `Payload/PregnancySync/PregnancySyncGuard.cs` · **Class**
+`PregnancySyncGuard` · **Tag** `[PREG]` · **Config** `tracing` (`:147`) · **Scope** both/solo
+
+**Bug.** "Did waiting next to her count as being with my wife?" was answerable only by vibes —
+vanilla's daily conception roll fires only when
+`PregnancyCampaignBehavior.CheckAreNearby(hero, spouse)` passes, and that decision is invisible
+(`:129-137`).
+
+**Mechanism.** Harmony **postfix** on the private
+`PregnancyCampaignBehavior.CheckAreNearby`, resolved via `AccessTools.TypeByName`
+(`:149-155`). Reads `bool __result` and logs
+`[PREG] nearby-check <hero> & <spouse>: TOGETHER — daily conception roll happens | apart, no roll (hero@<place>, spouse@<place>)`.
+`Place()` reports the `CurrentSettlement` name, else `party <StringId>`, else `nowhere`
+(`:201-223`). Filtered to `Hero.MainHero.Clan` only — "the AI world would flood the log"
+(`:188-191`).
+
+**Patched members.** `PregnancyCampaignBehavior.CheckAreNearby` (private; postfix).
+
+**Limitations.** Installed only when `tracing` is true at `Apply` time; flipping `tracing`
+needs a payload hot-reload. Only player-clan heroes are logged, so AI-clan pregnancy behaviour
+stays invisible.
+
+**Self-test.** None — an installation failure is logged as
+`[PREG] conception visibility not installed: <msg>` (`:158-161`).
+
+### Per-campaign birth-listener rewiring
+
+**README item** 15 · **Source** `Payload/PregnancySync/PregnancySyncGuard.cs` · **Class**
+`PregnancySyncGuard` · **Tag** `[PREG-SYNC]` · **Config** `pregnancySync` · **Scope** the
+handler self-gates on `IsHost`, but the subscription is installed on every machine
+
+**Bug.** `CampaignEvents` resolves through `Campaign.Current`, which is null at module load and
+is per-campaign. Subscribing at `Apply` time would either throw or bind to a dead campaign, so
+the host would silently never broadcast a birth (`:59-62`, `:78-79`).
+
+**Mechanism.** `OnGameStart()` (`:80-96`), called from `PayloadEntry.OnGameStart`
+(`Payload/PayloadEntry.cs:131`). Idempotent: it returns immediately when disabled, when
+`Campaign.Current` is null, or when `ReferenceEquals(_subscribedCampaign, Campaign.Current)` —
+so a re-entry does not double-subscribe and loading a new campaign re-subscribes. It uses a
+stable static `Sentinel` object as the listener owner (`:75`, `:88`), as
+`AddNonSerializedListener` requires.
+
+**Patched members.** None patched:
+`CampaignEvents.OnGivenBirthEvent.AddNonSerializedListener(object owner, Action<Hero,List<Hero>,int> handler)`.
+
+**Limitations.** Re-subscribed per campaign, not per payload generation — the comment says so
+explicitly (`:61-62`). Failure is swallowed and logged, so a subscribe error degrades to "no
+birth sync" rather than a crash (`:92-95`).
+
+**Self-test.** Covered by `LoopbackSelfTest`'s wire half only; the subscription itself is
+proven by the `[PREG-SYNC] host birth listener subscribed for this campaign` line (`:90`).
+
+### Reconstruction re-entrancy guard and idempotent reconstruct
+
+**README item** 15 · **Source** `Payload/PregnancySync/PregnancySyncGuard.cs` · **Class**
+`PregnancySyncGuard` · **Tag** `[PREG-SYNC]` · **Config** `pregnancySync` · **Scope** client
+
+**Bug.** Reconstructing a child with `HeroCreator.DeliverOffSpring` fires the game's own birth
+pipeline — which would re-enter `OnGivenBirth` and re-broadcast the same birth (echo loop).
+Separately, a re-sent packet or a shared base save would create a duplicate child hero.
+
+**Mechanism.** A static `_reconstructing` flag is set around the `DeliverOffSpring` call in a
+try/finally (`:369-386`), and `OnGivenBirth` returns early when it is set (`:247-250`).
+Idempotence: `ReconstructChildren` skips any identity whose `StringId` already resolves via
+`FindHero` (`:359-362`), so the same packet can be applied any number of times. The catch also
+clears the flag defensively (`:390`).
+
+**Patched members.** None; `HeroCreator.DeliverOffSpring` is the guarded call site.
+
+**Limitations.** `_reconstructing` is a plain static bool, not `[ThreadStatic]` — correct only
+because reconstruction is confined to the main-thread `Tick` (`:38-39`, `:99-127`); it would be
+unsound if reconstruct were ever called off-thread.
+
+**Self-test.** Not directly pinned — `LoopbackSelfTest` deliberately creates no hero ("no bogus
+hero created and no network", `:492-493`).
+
+### `AlignToHost` — cross-machine object-id re-keying
+
+**README item** 15 · **Source** `Payload/PregnancySync/PregnancySyncGuard.cs` · **Class**
+`PregnancySyncGuard` · **Tag** `[PREG-SYNC]` · **Config** `pregnancySync` · **Scope** client
+
+**Bug.** `DeliverOffSpring` randomizes the child's `StringId`, gender, name and appearance. If
+the client's child kept its own locally-generated id, every later cross-machine reference —
+clan roster, encyclopedia, inheritance, any BT packet naming that hero — would resolve to a
+different object, a permanent divergence.
+
+**Mechanism.** `AlignToHost` (`:396-426`): (1) `BodyProperties.FromString(xml, out BodyProperties)`
+and assign `child.StaticBodyProperties = bodyProperties.StaticProperties`; (2)
+`new TextObject(firstName)` and `child.SetName(firstName, firstName)`; (3) **re-key the object
+id** — `MBObjectManager.Instance.UnregisterObject(child)`, set `child.StringId` to the host id,
+`MBObjectManager.Instance.RegisterPresumedObject(child)` (`:415-420`). It only re-keys when the
+ids actually differ. Gender is forced at creation time by passing `identity.IsFemale` into
+`DeliverOffSpring` (`:372`).
+
+**Patched members.** None patched. Called/written:
+`MBObjectManager.Instance.UnregisterObject(MBObjectBase)`,
+`MBObjectManager.Instance.RegisterPresumedObject(MBObjectBase)`, `Hero.StringId` (setter),
+`Hero.StaticBodyProperties` (setter), `Hero.SetName(TextObject, TextObject)`,
+`BodyProperties.FromString(string, out BodyProperties)`, `BodyProperties.StaticProperties`.
+
+**Limitations.** Partial failure is tolerated: any throw is caught and logged as
+"align-to-host partial for `<id>`" and the child stays with whatever alignment succeeded
+(`:422-425`) — a half-aligned hero is preferred over none. Only `StaticProperties`, not full
+`BodyProperties`, is transferred.
+
+### Birth wire model (`BirthPayloadData`)
+
+**README item** 15 · **Source** `Payload/PregnancySync/BirthPayloadData.cs` · **Class**
+`BirthPayloadData` · **Tag** none (pure model; callers log) · **Config** none · **Scope** both
+— the identical file runs on host and client
+
+**Bug.** A malformed or hostile packet parsed on the network thread could throw and take the
+game down; and a wire model that referenced TaleWorlds types could not be unit-tested headless,
+so format regressions would only surface in-game.
+
+**Mechanism.** A pure class with **no** TaleWorlds dependency (`:9-12`), so
+`tests/BirthPayloadTest` compiles the shipping source directly. Format (`:14-20`):
+`byte FormatVersion | string MotherStringId | int32 StillbornCount | int32 childCount |
+childCount × { string StringId, bool IsFemale, string FirstName, string BodyPropertiesXml,
+string FatherStringId }` — `BinaryWriter`/`BinaryReader`, length-prefixed UTF-8 strings,
+little-endian. `FromBytes` never throws: null on null or empty input (`:85-88`), null on a
+`FormatVersion` mismatch ("a newer/older peer — drop rather than misparse", `:96-99`), null
+when `childCount < 0` or `> 16` ("a birth is 1-2, allow slack, reject garbage", `:103-106`),
+and a blanket catch returning null (`:122-125`). `WriteString`/`ReadString` coalesce null to
+`""` so fields are never null (`:148-156`).
+
+**Limitations.** No CRC or authentication — trust is inherited from BT's channel. The version
+gate is exact equality, so there is no forward-compatibility path other than dropping. The
+`childCount` cap of 16 would reject a hypothetical mod with larger litters.
+
+**Self-test.** `tests/BirthPayloadTest/Program.cs` pins: single birth; twins plus stillborn;
+unicode and special characters ("Ölaf Ærling 我", "mère_héros", XML with quotes and brackets);
+empty fields → empty, not null; stillborn-only with zero children; null / empty / noise /
+truncated / wrong-version → null with no throw; and deterministic re-serialization (the same
+input produces identical bytes, guarding against dictionary-ordering nondeterminism creeping in
+later, `:73`).
+
+### Birth framing (`BirthWireFraming`)
+
+**README item** 15 · **Source** `Payload/PregnancySync/BirthWireFraming.cs` · **Class**
+`BirthWireFraming` · **Tag** none · **Config** none · **Scope** both
+
+**Bug.** There is no free packet channel: BT dispatches by first byte and its `PacketType` byte
+enum consumes every value 1..255. Riding the same channel naively would either collide with a
+real BT packet type or be misparsed by BT.
+
+**Mechanism.** Frame = `[0x00 marker][4-byte magic 'B','T','C','G'][BirthPayloadData bytes]`
+(`:13-24`). Byte 0 is the one free value and is doubly safe: BT's `OnNetworkReceive` already
+rejects zero-length packets, and the dispatch switch has no case for 0 and no default, so even
+an unintercepted leading-0 packet is a guaranteed no-op inside BT (`:9-14`). The 4-byte magic
+makes our packets unambiguous among any theoretical leading-0 traffic and makes misreading a
+real BT packet as ours impossible, since a real BT packet never starts with 0 (`:16-18`).
+`IsOurPacket` checks only 5 leading bytes, so it is cheap enough to run on every inbound packet
+(`:41-42`). `TryUnframe` returns null on anything not well-formed and never throws (`:59-70`).
+
+**Patched members.** None. Documented but not patched: BT `PacketSerializer.Dispatch`, BT
+`OnNetworkReceive`.
+
+**Limitations.** Marker plus magic is a convention, not a checksum — a corrupted BT payload that
+happened to start `0x00 'B' 'T' 'C' 'G'` would be handed to the parser, which then returns
+null. The header-length constant (5) is duplicated per feature but derived by behaviour in the
+tests.
+
+**Self-test.** `tests/BirthPayloadTest/Program.cs:77-103` pins: a framed round-trip equals the
+original; the frame is recognized; the frame leads with byte 0; **no** packet with first byte
+1..255 is misread as ours even when the rest spells our magic (`:86-97`); a leading 0 without
+the magic is not ours (`:99`); and unframe of null, too-short, or framed-but-corrupt-body all
+return null.
+
+### Stash sync (co-op shared settlement stash)
+
+**README item** 16 · **Source** `Payload/StashSync/StashSyncGuard.cs` · **Class**
+`StashSyncGuard` (Diag component `stash-sync`) · **Tag** `[STASH-SYNC]` · **Config**
+`stashSync` · **Scope** both — the host broadcasts and relays, the client sends its own updates
+
+**Bug.** BannerlordTogether has **no** stash code at all (assembly scan 2026-08-30: zero
+stash-named members) while it does sync the workshop warehouse
+(`WorkshopWarehouseRosterInventoryDonePatch`) — so a stash deposit exists only on the machine
+that made it. Player experience: same-clan co-op players do not actually share a stash, and a
+client's deposits silently diverge from the authoritative host state and are lost on resync or
+save-load (`:14-19`).
+
+**Mechanism.** Full-snapshot replication modeled on BT's own warehouse sync. **Send:** a
+Harmony **postfix** on `InventoryLogic.DoneLogic` — the same commit point BT patches for the
+warehouse — gated on `__result == true` and on the private field
+`InventoryLogic._inventoryMode` equalling `InventoryMode.Stash` (`:135-179`). It snapshots
+`Settlement.CurrentSettlement.Stash` into a `StashPayloadData` and sends framed bytes: host →
+`CoopSession.Server.BroadcastRawReliableOrdered`, client → `CoopSession.Client.SendRaw`, by
+reflection only (`:415-455`). **Receive:** a prefix on BT's `ShouldAcceptIncomingPacket`
+recognizing the `BTCS` frame, enqueue on the network thread, consume (`__result = false`,
+return false) (`:238-267`). **Apply** on the main-thread `Tick` (`:270-300`): resolve the
+settlement by `StringId` over `Settlement.All`, preserve wire-inexpressible stacks,
+`stash.Clear()`, re-add every payload entry resolved via
+`MBObjectManager.Instance.GetObject<ItemObject>`/`<ItemModifier>` with
+`stash.AddToCounts(new EquipmentElement(item, modifier), count)`, then re-add the preserved
+stacks (`:302-377`). The host then re-broadcasts an applied client update so every peer
+converges — applying never sends, so there is no echo loop (`:371-376`).
+
+**Patched members.** `InventoryLogic.DoneLogic` (postfix); BT
+`Network.CoopNetworkBase.ShouldAcceptIncomingPacket` and
+`Network.CoopServer.ShouldAcceptIncomingPacket` (prefix), with the legacy-namespace fallbacks.
+Read/called: `InventoryLogic._inventoryMode` (private field),
+`CoopSession.Server.BroadcastRawReliableOrdered(byte[])`, `CoopSession.Client.SendRaw(byte[])`,
+`Settlement.CurrentSettlement`, `Settlement.All`, `Settlement.Stash`, `ItemRoster.Count` /
+`GetElementCopyAtIndex` / `Clear` / `AddToCounts`,
+`MBObjectManager.Instance.GetObject<ItemObject>` / `<ItemModifier>`,
+`Campaign.InventoryManager` → `.InventoryLogic` (reflection read, open-screen check),
+`Helpers.InventoryScreenHelper+InventoryMode` (`Enum.Parse`).
+
+It is explicitly inert when neither `IsHost` nor `IsClient` — "no BT session — vanilla
+singleplayer needs no sync" (`:148-153`) — and when hosting alone with no remote peer
+(`:154-157`).
+
+**Limitations.** Machine-local items (`ItemObject.IsCraftedByPlayer`, or anything whose
+`StringId` does not round-trip through the local `MBObjectManager`) can never be expressed on
+the wire — they are excluded from snapshots **and** preserved across applies, so each machine
+keeps its own crafted stacks (`:38-44`, `:213-234`). Crafted replication would need
+`WeaponDesign` serialization, recorded in `UPSTREAM_BUG_REPORT.md:165-176`. Last-closed screen
+wins on a simultaneous edit (`:33-34`). An item the payload names but this machine cannot
+resolve is skipped with a loud log (`:352-355`). The first sync between two already-diverged
+stashes replaces one side wholesale — inherent to snapshot semantics. A send-reflection failure
+means "peers will diverge until the next stash edit" (`:167-169`).
+
+**Self-test.** `LoopbackSelfTest` (`:459-499`), registered even when disabled (`:65`). Pins:
+(a) a two-entry payload survives `Frame` → `IsOurPacket` → `TryUnframe` with
+`Entry.ValueEquals` field-for-field and `SettlementStringId` equal; (b) cross-feature
+discrimination in **both** directions — a birth frame must not read as stash and a stash frame
+must not read as birth (`:481-482`); (c) a real BT packet (first byte 13) must not match
+(`:483`); (d) a payload carrying `Count = -1` must be rejected by `TryUnframe` (`:473-478`).
+
+### `IsMachineLocal` — wire-inexpressible item classification
+
+**README item** 16 · **Source** `Payload/StashSync/StashSyncGuard.cs` · **Class**
+`StashSyncGuard` · **Tag** `[STASH-SYNC]` · **Config** `stashSync` · **Scope** both — every
+machine classifies its own roster
+
+**Bug.** Two data-loss bugs, both caught in commit review. (1) A naive snapshot-apply silently
+**wiped** a player-crafted item: the peer's snapshot structurally cannot mention it, so its
+absence looked like a withdrawal and `stash.Clear()` deleted it irrecoverably, with no log line
+(the "crafted sword" scenario, `:38-42`). (2) The first attempted fix tested
+`item.WeaponDesign != null`, which is true for **every** `<CraftedItem>` definition — 260 in
+`SandBoxCore/ModuleData/items/weapons.xml` plus 23 tournament weapons in Native v1.4.8 — so
+roughly 283 ordinary vanilla weapons (most swords, axes, mauls, spears, polearms) stopped
+syncing entirely: a vanilla sword stashed on the host never reached the client.
+
+**Mechanism.** `IsMachineLocal(ItemObject)` (`:220-234`) returns true only for
+`item.IsCraftedByPlayer` (true only for genuinely player-crafted items) **or** when
+`!ReferenceEquals(MBObjectManager.Instance.GetObject<ItemObject>(item.StringId), item)` — i.e.
+the id does not round-trip to the same object locally. Any throw returns true: "unreadable =
+unexpressible — err toward preserving it" (`:230-233`). `BuildPayload` skips such stacks and
+counts them, logging "`<n>` machine-local (crafted/unregistered) stack(s) left out of the
+snapshot" (`:193-209`). `ApplyPayload` preserves them across the `Clear` (`:335-345`,
+`:362-365`).
+
+**Patched members.** None. Read: `ItemObject.IsCraftedByPlayer`;
+`MBObjectManager.Instance.GetObject<ItemObject>(string)`. `ItemObject.WeaponDesign` is the
+**rejected** test, documented as a trap at `:213-218`.
+
+**Limitations.** Crafted items are never shared; they live on whichever machine crafted them.
+Classification is per-machine, so peers on different mod sets or versions can disagree — handled
+by the duplication guard below.
+
+**Self-test.** Not covered by the headless suite (it needs a real `ItemObject`); the ~283-weapon
+regression is pinned only by the source comment and the review record.
+
+### `payloadIds` duplication guard on preserved stacks
+
+**README item** 16 · **Source** `Payload/StashSync/StashSyncGuard.cs` · **Class**
+`StashSyncGuard` · **Tag** `[STASH-SYNC]` · **Config** `stashSync` · **Scope** receiver (both
+roles can be the receiver)
+
+**Bug.** Preservation assumes both machines classify an item the same way. If they do not — a
+peer on an older version that sent everything resolvable, a differing mod set, or the
+`catch { return true; }` fallback firing on only one side — the receiver would apply the peer's
+stack **and** re-add its own preserved copy, silently duplicating the item.
+
+**Mechanism.** Before preserving, build a `new HashSet<string>(StringComparer.Ordinal)` of every
+`ItemStringId` the payload mentions (`:330-334`) and preserve a local machine-local stack only
+when its id is **not** in that set (`:336-345`). The rule stated in the comment: "the payload's
+word wins for ids it mentions" (`:327-329`).
+
+**Limitations.** Ordinal comparison of `StringId`s only — a modifier difference is not
+considered, so a machine-local stack of the same item id with a different `ItemModifier` is
+dropped rather than preserved.
+
+**Self-test.** Not pinned by a test — comment-documented only.
+
+### `ResolveStashModeValue` — live enum resolution
+
+**README item** 16 · **Source** `Payload/StashSync/StashSyncGuard.cs` · **Class**
+`StashSyncGuard` · **Tag** `[STASH-SYNC]` · **Config** `stashSync` · **Scope** both/local
+
+**Bug.** The first version hard-coded `private const int StashMode = 3`. Nothing verified it: if
+the `InventoryMode` enum ordinal shifted in a game update, stash mode would be silently
+mis-detected — no stash would ever sync, or the wrong screen would — while
+`Diag.Report("stash-sync", ok, …)` still printed "active", because `ok` only reflects patch
+success.
+
+**Mechanism.** `ResolveStashModeValue()` (`:95-115`) resolves
+`Helpers.InventoryScreenHelper+InventoryMode` via `AccessTools.TypeByName`, checks `IsEnum`,
+does `Enum.Parse(mode, "Stash")` and `Convert.ToInt32`, and stores the result in the static
+`_stashMode`. 3 remains only the fallback (`:52-55`). A value change is announced:
+`[STASH-SYNC] InventoryMode.Stash resolved to <n> (fallback was <m>) — using the live value`
+(`:104-107`). A resolution failure logs "could not resolve InventoryMode.Stash (`<msg>`) — using
+fallback 3" rather than throwing (`:111-114`).
+
+**Limitations.** If the enum type or the member **name** changes — not just the ordinal — it
+falls back to 3 and only logs; it does not turn the guard red.
+
+**Self-test.** Not pinned; the loopback self-test covers framing only.
+
+### `IsLocalStashScreenOpen` — apply deferral with warn-once
+
+**README item** 16 · **Source** `Payload/StashSync/StashSyncGuard.cs` · **Class**
+`StashSyncGuard` · **Tag** `[STASH-SYNC]` · **Config** `stashSync` · **Scope** receiver / local
+
+**Bug.** (1) A peer's update applied while the local player has that stash screen open would
+clear the roster underneath a live screen — the screen works on the live `ItemRoster`. (2) The
+original check used best-effort reflection with a bare `catch {}` returning "not open", so if
+the member name were wrong the deferral would never engage and updates would clear the roster
+under a live screen with zero diagnostic.
+
+**Mechanism.** `Tick()` checks `IsLocalStashScreenOpen()` while still holding the queue lock and
+**returns without dequeuing**, so the update is applied after the screen closes (`:285-289`).
+`IsLocalStashScreenOpen` (`:382-411`) walks `Campaign.InventoryManager` → `.InventoryLogic` by
+reflection and compares its `_inventoryMode` to `_stashMode`. It distinguishes "no inventory
+session" (`manager == null`, genuinely not open) from "reflection broke" (`managerProp == null`,
+or a non-null manager with `logicProp == null`) and, in the broken case, sets an
+`_openCheckWarned` latch and logs once: "cannot detect an open inventory screen
+(Campaign.InventoryManager reflection broke — game update?) — peer updates apply immediately"
+(`:390-400`).
+
+**Patched members.** None. Read by reflection: `Campaign.InventoryManager`,
+`<InventoryManager>.InventoryLogic`, `InventoryLogic._inventoryMode`.
+
+**Limitations.** Fails **open** by design — when the reflection chain is broken it applies
+immediately rather than blocking sync forever; it only makes that audible. Deferral is unbounded:
+queued updates pile up while a stash screen stays open. Last-closed screen wins on a simultaneous
+edit (`:33-34`).
+
+**Self-test.** None — the warn-once line is the diagnostic.
+
+### Host relay of applied client updates
+
+**README item** 16 · **Source** `Payload/StashSync/StashSyncGuard.cs` · **Class**
+`StashSyncGuard` · **Tag** `[STASH-SYNC]` · **Config** `stashSync` · **Scope** host only
+
+**Bug.** With more than two peers, a client's stash edit would reach only the host — the other
+clients would never converge, because a client's `SendRaw` goes to the server, not to peers.
+
+**Mechanism.** At the end of `ApplyPayload`, if
+`PeerDetection.ReadCoopStaticBool("IsHost") == true` **and** `AnyRemotePeerConnected() == true`,
+the host re-frames and re-broadcasts the payload it just applied (`:371-376`). This is safe
+because applying never sends — the send path is only the `DoneLogic` postfix — so there is no
+echo loop; and the origin client simply re-applies its own identical state, which is idempotent
+under full-snapshot semantics (`:29-31`, `:371-373`).
+
+**Patched members.** None: `CoopSession.Server.BroadcastRawReliableOrdered(byte[])`.
+
+**Limitations.** The relay re-broadcasts the **original** payload, not the host's post-apply
+roster — so machine-local stacks the host preserved are not (and cannot be) announced. The
+origin client burns a redundant apply.
+
+**Self-test.** Not pinned by a test.
+
+### Stash wire model (`StashPayloadData`)
+
+**README item** 16 · **Source** `Payload/StashSync/StashPayloadData.cs` · **Class**
+`StashPayloadData` · **Tag** none · **Config** none · **Scope** both
+
+**Bug.** The original parser bounded `entryCount` but not per-entry `Count`. A corrupt or
+truncated packet carrying `Count = -1` flowed straight into `stash.AddToCounts(..., -1)` on a
+freshly cleared roster, corrupting the receiver's stash. Worse, the first test suite **asserted**
+that negative counts round-trip, so the test encoded the bug; the fixed tests are
+`tests/StashPayloadTest/Program.cs:37-53`.
+
+**Mechanism.** A pure class with no TaleWorlds dependency (`:9-12`). Format (`:18-23`):
+`byte FormatVersion | string SettlementStringId | int32 entryCount | entryCount ×
+{ string ItemStringId, string ModifierStringId ("" = none), int32 Count }`. It is a full
+**snapshot**, not a delta — idempotent to re-apply, immune to ordering, and it converges in one
+packet (`:15-17`). `FromBytes` never throws: null on null or short input (`:70-73`), null on a
+`FormatVersion` mismatch (`:83-86`), null when count < 0 or > 100000 (`:89-92`), null on any
+entry with an empty `ItemStringId` or `Count <= 0` — "a sane sender never emits these — corrupt
+packet" (`:101-104`) — plus a blanket catch (`:110-113`). `ToBytes` coalesces nulls to `""`
+(`:54-59`).
+
+**Limitations.** The blast radius of one bad entry is the **whole packet**: `return null` drops
+the entire stash update rather than the offending stack — the receiver logs "received a
+malformed stash packet — dropped" — accepted as fail-safe since the sender can no longer emit
+those. No modifier-level machine-local classification. A 100000-entry cap.
+
+**Self-test.** `tests/StashPayloadTest/Program.cs` pins: a typical three-stack stash; an
+**emptied** stash (must round-trip, not degrade to null, `:28`); unicode ids ("町_têst_9",
+"épée_d'or", "rouillé"); negative count rejected, zero count rejected, empty item id rejected
+(`:39-53`); a 500-stack hoarder stash (`:56-61`); and null / short / magic-only-no-body /
+truncated / unknown-format-version all returning null (`:82-89`).
+
+### Stash framing (`StashWireFraming`)
+
+**README item** 16 · **Source** `Payload/StashSync/StashWireFraming.cs` · **Class**
+`StashWireFraming` · **Tag** none · **Config** none · **Scope** both
+
+**Bug.** Two features now ride the same free byte-0 slot on BT's channel. With a single shared
+magic, a birth packet and a stash packet would be indistinguishable and each feature's receive
+hook would try to parse the other's bytes.
+
+**Mechanism.** Identical transport facts to `BirthWireFraming` — leading byte 0 is the one
+`PacketType` value BT never dispatches, so our packets are a no-op inside BT even unintercepted
+(`:7-10`) — but a **different** 4-byte magic: `'B','T','C','S'` = "BannerlordTogether
+Crash-guard Stash" (`:18-19`) versus birth's `BTCG` = "BannerlordTogether Child Guard"
+(`BirthWireFraming.cs:23`). Each feature's receive hook recognizes exactly its own magic and
+passes everything else through (`:10-12`). Frame = `[0x00][BTCS][StashPayloadData bytes]`
+(`:13`). `IsOurPacket` checks 5 leading bytes; `TryUnframe` returns null and never throws
+(`:37-64`).
+
+**Limitations.** `HeaderLength` (5) and the marker constant are duplicated per feature rather
+than shared — an intentional cost of keeping each wire file engine-free and independently
+linkable into its test.
+
+**Self-test.** `tests/StashPayloadTest/Program.cs:63-79` pins four-way discrimination — a stash
+frame recognized as stash, a birth frame not read as stash, a stash frame not read as birth, a
+birth frame still recognized by birth — plus the byte-0 marker gate against first bytes 1..255
+followed by our exact magic. `StashSyncGuard.LoopbackSelfTest` re-pins the same discrimination
+in-game (`:479-483`).
+
+### Network-thread → main-thread queue hop (both sync features)
+
+**README item** 15, 16 · **Source** `Payload/PregnancySync/PregnancySyncGuard.cs`,
+`Payload/StashSync/StashSyncGuard.cs` · **Class** `PregnancySyncGuard`, `StashSyncGuard` ·
+**Tag** `[PREG-SYNC]` / `[STASH-SYNC]` · **Config** `pregnancySync` / `stashSync` · **Scope**
+receiver (client for births; both roles for stash)
+
+**Bug.** BT's `ShouldAcceptIncomingPacket` runs on BT's LiteNetLib **network thread**.
+`HeroCreator`, `MBObjectManager` and `ItemRoster` mutation must never run off the game thread —
+doing so is an engine-corruption and crash path.
+
+**Mechanism.** The receive prefix does only thread-safe byte parsing, then enqueues under a lock
+into a static `Queue<T>` (`PregnancySyncGuard.cs:40-41`, `:326-333`; `StashSyncGuard.cs:57-58`,
+`:248-254`). `PayloadEntry.Tick` (`Payload/PayloadEntry.cs:151-152`) calls each guard's `Tick`,
+which dequeues under the same lock and does the engine work on the main thread
+(`PregnancySyncGuard.cs:99-127`, `StashSyncGuard.cs:270-300`). Each drained item is wrapped in
+its own try/catch so "a throw here … must never escape onto the game loop. Drop this birth and
+keep draining" (`PregnancySyncGuard.cs:118-126`; `StashSyncGuard.cs:291-298`).
+
+**Patched members.** BT `ShouldAcceptIncomingPacket` (the network-thread entry point).
+
+**Limitations.** The queue is unbounded — a flood of packets would grow it; the stash queue
+additionally stalls entirely while a local stash screen is open. Dequeue happens only while the
+game is ticking, so packets arriving on a menu screen wait.
+
+**Self-test.** The thread hop itself is not pinned by a test; the parse half is covered by both
+loopback self-tests.
+
+### Multi-name BT receive-hook resolution (`HookReceive`)
+
+**README item** 15, 16 · **Source** `Payload/PregnancySync/PregnancySyncGuard.cs:225-239`,
+`Payload/StashSync/StashSyncGuard.cs:117-131` · **Class** `PregnancySyncGuard`,
+`StashSyncGuard` · **Tag** `[PREG-SYNC]` / `[STASH-SYNC]` · **Config** `pregnancySync` /
+`stashSync` · **Scope** both
+
+**Bug.** BannerlordTogether moved its network classes to `BannerlordTogether.Network.*` — the
+2026-09-01 health line showed pregnancy-sync and stash-sync both "not resolved", i.e. both
+features had silently gone dead after a BT update (`CHANGELOG.md:129-132`).
+
+**Mechanism.** `HookReceive` iterates four candidate type names in priority order —
+`BannerlordTogether.Network.CoopNetworkBase`, `BannerlordTogether.Network.CoopServer`,
+`BannerlordTogether.CoopNetworkBase`, `BannerlordTogether.CoopServer` — resolving each with
+`AccessTools.TypeByName` and patching `ShouldAcceptIncomingPacket` wherever it is found,
+returning true if any patch landed. Both the base and the `CoopServer` **override** are patched
+deliberately (`PregnancySyncGuard.cs:21-22`).
+
+**Limitations.** A future rename of the **method** (not the namespace) still silently degrades —
+the only signal is `Diag.Report('pregnancy-sync', false, 'BT receive method not found')` or
+`receive=False` in the degraded line (`PregnancySyncGuard.cs:65`; `StashSyncGuard.cs:82-85`).
+Because both features patch the same method, the stash prefix must pass non-stash bytes through
+so the birth hook can also see them (`StashSyncGuard.cs:243`).
+
+**Self-test.** The health/`Diag` line is the detector; the loopback tests do not exercise the
+real BT method.
+
+---
+
+## Time control
+
+`timeAlwaysFlows` and `shareTimeControl` gate two of these fixes; `tracing` gates `TimeTrace`.
+`TimeEnforcementGuard`, `MapClickSpeedKeeper` and `JoinSyncPauseEscape` have no config key of
+their own. Note that `TimeFlowPatch` and `ShareTimeControl` read their key with their own
+one-shot regex, not through `GuardConfig`, and only the literal `false` disables them.
+
+### Main-party idle-hold suppressor (`timeAlwaysFlows`)
+
+**README item** 13 · **Source** `Payload/TimeFlowPatch.cs` · **Class** `TimeFlowPatch` ·
+**Tag** `[TIME-FLOW]` · **Config** `timeAlwaysFlows` · **Scope** both — solo, host and client;
+the patch is unconditional per process
+
+**Bug.** Campaign time silently stops when your main party arrives at a clicked destination or
+goes idle, even though the time-control mode (play / fast-forward) never changed — the speed
+buttons still look "playing" but the clock is frozen until you click somewhere new.
+
+**Mechanism.** Harmony **postfix** on every declared `MobileParty.ComputeIsWaiting` overload.
+`Apply()` enumerates `typeof(MobileParty).GetMethods(Public|NonPublic|Instance|DeclaredOnly)`
+and patches each non-abstract method named exactly `ComputeIsWaiting` (`:44-52`). The postfix
+(`:61-79`) forces `__result=false`, but only when `__result` was already true, the feature is
+enabled, `__instance != null` and `__instance.IsMainParty` — so `Campaign.TickMapTime`'s
+`IsMainPartyWaiting = MobileParty.MainParty.ComputeIsWaiting()` write can never latch true for
+the player. The whole postfix body is wrapped in `catch{}` (`:76-78`) so it can never throw into
+the campaign tick.
+
+**Patched members.** `MobileParty.ComputeIsWaiting` (all declared, non-abstract overloads).
+Read: `MobileParty.IsMainParty`.
+
+**Limitations.** Main party only — AI parties keep vanilla waiting behaviour (`:18-19`). Real
+pauses are untouched: Stop mode via the pause button, menus, encounters (`:17-18`). The
+wait-menu mode `UnstoppableFastForwardForPartyWaitTime` never consults `IsMainPartyWaiting`, so
+wait menus are unaffected (`:19-20`). Config is read once and cached in a `bool?` (`:24`,
+`:27-37`), so flipping `guardconfig.json` mid-session only takes effect after a payload reload.
+`ReadConfig` only recognizes the literal regex `"timeAlwaysFlows"\s*:\s*false` (`:90`); any
+other value, a missing file, or a read exception silently defaults to **enabled** (`:96-99`).
+The config path is derived from the assembly location + `"../.."` (`:85-86`). No `Diag.Report`.
+
+**Self-test.** None registered. The only observable evidence is the apply line
+`[TIME-FLOW] timeAlwaysFlows=<bool> (patched N method(s))` (`:53`) and the one-shot
+`_loggedActive` line on first suppression (`:70-74`).
+
+### `EnforcePlaySpeed` neutralizer
+
+**README item** 13 · **Source** `Payload/TimeEnforcementGuard.cs` · **Class**
+`TimeEnforcementGuard` · **Tag** `[TIME-GUARD]` · **Config** none — always on · **Scope** host /
+solo-host; active only while no remote player is connected, fully inert with a peer connected
+
+**Bug.** After loading a save mid-session while hosting alone, fast-forward stops working until
+you relaunch the game: BannerlordTogether's `CoopCampaignBehavior.EnforcePlaySpeed` runs every
+campaign tick and forces `UnstoppablePlay`, stomping whatever speed the player picked (evidence:
+`CrashGuard.log` 2026-08-19 00:07-00:08) (`:9-12`).
+
+**Mechanism.** A two-layer neutralizer, "run but neutralize". (1) **Prefix + finalizer** on
+every declared non-abstract `CoopCampaignBehavior.EnforcePlaySpeed`, found by name over
+`Public|NonPublic|Static|Instance|DeclaredOnly` on the type resolved via
+`PeerDetection.FindCoopType("CoopCampaignBehavior")` (`:56-80`). `EnforcePrefix` re-evaluates
+peer state at most every 2000 ms (`Environment.TickCount`, with an explicit wraparound guard
+`now < _lastCheckTick`) and, when confidently alone, sets the `[ThreadStatic]`
+`_inSoloEnforce = true` (`:147-178`); `EnforceFinalizer` clears it and returns `__exception`
+unchanged so exceptions still propagate (`:180-184`). (2) **Prefix**
+`BlockSoloEnforceWritePrefix` on Campaign's time setters — patched for each of
+`set_TimeControlMode`, `SetTimeControlModeLock` and `set_TimeControlModeLock` that
+`AccessTools.Method` finds on `AccessTools.TypeByName("TaleWorlds.CampaignSystem.Campaign")` —
+returning `!_inSoloEnforce`, i.e. skipping the original **only** for writes made on this thread
+inside the enforcer while solo (`:84-92`, `:186-189`). BT's method itself always runs, so its
+bookkeeping and sync side effects stay fresh; with a peer connected nothing is touched
+(`:16-21`, `:164-167`).
+
+This guard is also the only in-repo caller of `PeerDetection.NoteCoopActivity()` (`:234`), the
+packet-liveness stamp, and it consumes `PeerDetection.Snapshot()` (`:160`). It additionally
+installs a shared-pause tracer — log-only prefixes on BT `CoopSubModule.SetPaused` and
+`ApplyTimeState` — whose apply evidence is
+`[TIME-GUARD] shared-pause tracer active on N method(s)` (`:136`); `_pauseTraceApplied` latches
+after the first successful application (`:133-137`), and that tracer is **not** gated on
+`tracing`.
+
+**Patched members.** BT `CoopCampaignBehavior.EnforcePlaySpeed` (prefix + finalizer, all
+declared overloads); `Campaign.set_TimeControlMode` (prefix, skip-original);
+`Campaign.SetTimeControlModeLock` and `Campaign.set_TimeControlModeLock` (prefix,
+skip-original — whichever of the two lock members exists).
+
+**Limitations.** Fails **toward co-op**: it neutralizes only on a confident "no session" —
+`PeerDetection.AnyRemotePeerConnected() != false`, so an unknown (null) peer state counts as
+connected and enforcement is left fully intact (`:155-156`). Peer state is re-read only every
+2 s, so the switch back to full enforcement when a peer joins lags up to 2 s (`:152`). The
+setter prefixes are installed only if at least one `EnforcePlaySpeed` was patched (`count > 0`,
+`:81-83`). `_applied` latches, so a second `Apply` is a no-op — but `Apply` is deliberately
+retried from `PayloadEntry.OnBeforeInitialModuleScreen` and `OnGameStart` because the BT
+assembly may load after us (`Payload/PayloadEntry.cs:122`, `:128`; `:56-59`). The setter block
+is thread-scoped, so an unrelated write on another thread during the enforcer window is
+unaffected. No `Diag.Report`, no self-test. Scoping this neutralizer to the campaign map was
+tried on 2026-09-04 and **reverted** (`docs/ENGINE-NOTES.md:55-57`). The BT member names were
+taken from **runtime stack traces**, not from a decompile (`:23-24`), so a BT rename silently
+disables the tracer — the only reveal is the "could not trace" line (`:130`) or a missing
+"shared-pause tracer active" line. The packet-frame heuristic is name-based (a "Packet"
+substring) and depth-bounded to 12 frames, so a deeply-nested or renamed handler is missed, in
+which case the liveness stamp simply does not fire (a fail-safe direction).
+
+**Self-test.** None registered. Observable state transitions are logged: the apply line
+`[TIME-GUARD] EnforcePlaySpeed neutralizer active (N method(s)) — runs every tick, writes
+blocked while no remote player is connected` (`:94`), the peer-state edge line including
+`PeerDetection.Snapshot()` (`:160`), and a once-per-edge "neutralizing EnforcePlaySpeed
+time-writes" line gated by `_skipLogged` (`:169-173`).
+
+Note the interaction with the `[TIME]` tracer: with `tracing=true` while hosting alone at the
+co-op setup menu, BT re-requests `UnstoppablePlay` every tick, this guard blocks the write, the
+mode never changes, and BT retries forever. That is why the `[TIME]` tracer routes through
+`TraceThrottle` — the blocking behaviour itself is unchanged, only the logging is collapsed
+(`CHANGELOG.md:5-12`).
+
+### Shared time control (auto-grant to the client)
+
+**README item** 13 · **Source** `Payload/ShareTimeControl.cs` · **Class** `ShareTimeControl` ·
+**Tag** `[SHARE-TIME]` · **Config** `shareTimeControl` · **Scope** host / authority only; the
+client process no-ops
+
+**Bug.** The joining player cannot pause, un-pause, set normal speed or fast-forward — they are
+stuck at whatever speed the authority broadcasts, and BT prints "[BT] Client time controls are
+disabled by the host." (observed live 2026-08-19) (`:12-17`). BT ships
+`AllowClientTimeControl` off (`docs/UPSTREAM_CONTRIBUTION.md:64-67`).
+
+**Mechanism.** Not a Harmony patch — a polled reflection driver. `ShareTimeControl.Tick()` is
+called every frame from `PayloadEntry.Tick` (`Payload/PayloadEntry.cs:147`) and self-throttles
+to one attempt per 3000 ms via `Environment.TickCount` with a wraparound guard (`:62-67`).
+`Resolve()` (`:152-188`) finds `CoopSubModule` and `CoopSession` via
+`PeerDetection.FindCoopType`, then
+`AccessTools.Method(_coopSubModule, "ToggleClientTimeControlPermission", new[]{ typeof(bool).MakeByRefType(), typeof(string).MakeByRefType() })`
+and `AccessTools.Method(_coopSubModule, "IsClientTimeControlEnabledForCurrentMenu")`, plus
+`CoopSession.IsHost` resolved as a **property** first, falling back to a **field**
+(`:167-174`). Only the authority acts (`!IsHost()` → return, `:69-72`). If
+`IsClientTimeControlEnabledForCurrentMenu()` already returns true it latches and logs. Otherwise
+it invokes the toggle through an `object[2]` and **trusts the out params**, not the (possibly
+void) return: `args[0] is bool && (bool)args[0]` = enabled, `args[1] as string` = reason
+(`:121-136`). Because it is a **toggle**, if it comes back `(false, null reason)` — meaning the
+menu check lied and it toggled the wrong way — it invokes once more to force on (`:94-102`). On
+success: `_grantedLogged = true`, a log line and an on-screen notice (`:103-108`).
+
+**Patched members.** None patched. Invoked: BT
+`CoopSubModule.ToggleClientTimeControlPermission(out bool, out string)`,
+`CoopSubModule.IsClientTimeControlEnabledForCurrentMenu()`. Read: BT `CoopSession.IsHost`
+(static property or static field).
+
+**Limitations.** Once granted it stops forever (`_grantedLogged` gate, `:56-61`) — a later host
+toggle-off is deliberately respected, and this prevents off/on churn from a misread state check.
+The no-arg toggle overload auto-targets the single gameplay client, so this is correct for the
+two-player (host-or-dedicated) case only (`:17-20`). The client process no-ops entirely. Benign
+reasons containing "no longer connected" or "No connected" are silent; anything else logs a "not
+granted yet (`<reason>`) — will retry" line (`:109-113`). `_resolved` latches after **one**
+resolution attempt — if BT loaded after the first `Tick`, resolution is never retried
+(`:152-158`). Same one-shot regex config read as `TimeFlowPatch`: only the literal
+`"shareTimeControl"\s*:\s*false` disables; anything else defaults on (`:190-209`). No
+`Diag.Report`, no self-test.
+
+**Known asymmetry.** `Resolve()` sets `_resolved = true` before it knows whether
+BannerlordTogether resolved, and it is driven only from `PayloadEntry.Tick` — there is no
+lifecycle retry. If BT's assembly were not loaded on the first application tick, shared time
+control would stay off for the whole process. `TimeEnforcementGuard` (`:56-59`) and
+`JoinSyncPauseEscape` (`:69-73`) instead return without latching and are re-applied from
+`OnBeforeInitialModuleScreen` / `OnGameStart` (`Payload/PayloadEntry.cs:119`, `:122`, `:128`).
+Latch the *success*, not the *attempt*.
+
+**Self-test.** None registered. Health evidence is the
+`[SHARE-TIME] shared time control enabler active` line (`:180`) or, on drift,
+`[SHARE-TIME] required method(s) not found (toggle=… menuCheck=…) — shared time control INACTIVE (mod version changed?)`
+(`:177`).
+
+### Map-click speed keeper
+
+**README item** 13 · **Source** `Payload/MapClickSpeedKeeper.cs` · **Class**
+`MapClickSpeedKeeper` · **Tag** `[CLICK-SPEED]` · **Config** none · **Scope** both (installed
+unconditionally; the bug is co-op-specific because only BT enforces the Unstoppable variant)
+
+**Bug.** In co-op, every click-to-move on the campaign map drops the session out of
+fast-forward to normal speed and the co-op sync then yanks it back up — a visible fast-forward
+flip-flop (observed 2026-08-19 20:18-20:19; every `UnstoppableFastForward` → `StoppablePlay`
+transition came from `MapScreen.HandleLeftMouseButtonClick`). Vanilla's "map double click
+behavior = keep speed" option only preserves `StoppableFastForward`
+(`MapScreen.HandleClickTimeChange` checks `mode==4`) and does not recognize the **unstoppable**
+fast-forward variant the co-op mod enforces (`:9-21`).
+
+**Mechanism.** A **prefix + finalizer** on every declared non-abstract
+`SandBox.View.Map.MapScreen.HandleLeftMouseButtonClick` (type via `AccessTools.TypeByName`) set
+and clear a `[ThreadStatic]` `_inMapClick` flag (`:33-51`, `:68-77`). Then — only if at least
+one click method was patched — a **prefix** on
+`AccessTools.Method(typeof(Campaign), "set_TimeControlMode")` vetoes exactly one transition:
+`_inMapClick && value == CampaignTimeControlMode.StoppablePlay && __instance.TimeControlMode == CampaignTimeControlMode.UnstoppableFastForward`
+returns false, skipping the original (`:52-59`, `:79-100`). Everything else passes through
+vanilla; clicking while paused still unpauses, because the Stop → StoppablePlay transition is
+untouched (`:20-21`).
+
+**Patched members.** `MapScreen.HandleLeftMouseButtonClick` (prefix + finalizer, all declared
+instance overloads); `Campaign.set_TimeControlMode` (prefix, conditional skip-original). Read:
+`Campaign.TimeControlMode`, `CampaignTimeControlMode.StoppablePlay` / `.UnstoppableFastForward`.
+
+**Limitations.** Vetoes only the `UnstoppableFastForward` → `StoppablePlay` pair; a
+`StoppableFastForward` → `StoppablePlay` click-downgrade is left to vanilla's own option. The
+setter prefix is installed only when `count > 0` (`:52-53`). If `MapScreen` is not found the
+keeper logs "MapScreen not found — keeper idle" and returns without patching the setter
+(`:33-38`). The flag is `[ThreadStatic]`, so a time write raised asynchronously from another
+thread during a click is not covered. The first veto logs once (`_logged`, `:88-92`). No config
+key, no `Diag.Report`, no self-test.
+
+**Self-test.** None; apply evidence is
+`[CLICK-SPEED] map-click fast-forward keeper active (N click method(s))` (`:60`).
+
+### Campaign time-control tracer
+
+**README item** 26 · **Source** `Payload/TimeTrace.cs` · **Class** `TimeTrace` · **Tag**
+`[TIME]` · **Config** `tracing` · **Scope** both (diagnostic; no peer gating)
+
+**Bug.** Diagnostic, not a fix. The symptom being chased: clicking things on the map (a city,
+say) sometimes drops fast-forward when only the pause/play buttons should change speed — the
+code path forcing the change was unknown (`:11-14`).
+
+**Mechanism.** Four log-only hooks applied via a generic
+`PatchByName(harmony, typeName, methodName, prefixName, postfixName)` helper that resolves the
+type with `AccessTools.TypeByName` and patches every declared non-abstract method of that name
+(`:38-79`). `Campaign.set_TimeControlMode` gets a **prefix** that skips no-op sets
+(`__instance.TimeControlMode == value`) and merely captures the old mode, new mode and rendered
+stack into `[ThreadStatic]` fields (`:83-104`), plus a **postfix** that reads the actual mode
+afterwards, appends "`^ change SUPPRESSED/ALTERED by another patch — actual mode now <X>`" when
+it differs, and emits through `TraceThrottle.Emit` with a dedup key that deliberately ignores
+the (identical) stack:
+`"TIME " + old + "->" + new + (suppressed ? " SUPPRESSED->" + actual : " applied")`
+(`:106-128`). `SetTimeControlModeLock` and `set_TimeControlModeLock` (whichever exists) get a
+`LockPrefix` that prints all `__args` (`:130-152`).
+`MapTimeControlVM.ExecuteTimeControlChange` gets a `UiButtonPrefix` that marks a genuine UI
+button click, so button-driven changes are distinguishable from code-driven ones (`:154-164`).
+`Stack()` renders up to 14 frames from depth 2, skipping `HarmonyLib.*`,
+`BLTDeploymentCrashGuard.*` and `System.*` frames, and printing the bare method name for frames
+with a null `DeclaringType` — the `DMD<…>` dynamic-method frames that name the original patched
+caller (`:166-212`).
+
+**Patched members.** `Campaign.set_TimeControlMode` (prefix + postfix);
+`Campaign.SetTimeControlModeLock` (prefix); `Campaign.set_TimeControlModeLock` (prefix);
+`MapTimeControlVM.ExecuteTimeControlChange` (prefix).
+
+**Limitations.** Applied only when `tracing` is true. Purely observational: it changes no
+behaviour. The pending-capture fields are `[ThreadStatic]`, so a prefix on one thread and a
+postfix on another would lose the pairing. Only the `set_TimeControlMode` path is throttled; the
+lock and UI-button prefixes call `Log.Info` directly and can still flood if hammered. It reports
+suppression by comparing post-state, so a patch that re-sets the same value looks "applied".
+Coalescing means a run's tail count flushes on its next repeat or window, not instantly
+(`Payload/TraceThrottle.cs:34-37`).
+
+**Self-test.** None; apply evidence is `[TIME] time-control tracer active on N method(s)`
+(`:42`) — N is the count actually patched, so a drifted member shows up as a lower N plus a
+"could not patch `<type>.<method>`" line (`:70`).
+
+### Join-hold pause escape
+
+**README item** 17 · **Source** `Payload/JoinSyncPauseEscape.cs` · **Class**
+`JoinSyncPauseEscape` (Diag component `join-sync-pause-escape`) · **Tag** `[JOIN-ESCAPE]` ·
+**Config** none · **Scope** host (the authority pressing its own pause / normal-speed keys); no
+client behaviour
+
+**Bug.** "I can't unpause after someone joined" (field log 2026-08-22 23:43-23:49). A joining
+player's save transfer pauses the host for the whole download, load and hero creation; the
+host's pause key does nothing and shows no message at all; and a joiner stuck in a retry loop
+froze the host forever (`:8-21`).
+
+**Mechanism.** A **postfix** on `CoopSubModule.ToggleHostManualPause` taking `bool __result`
+(the press was handled) and, when present, a postfix on `CoopSubModule.ApplyHostNormalSpeed`
+that calls the same handler with `handled=true` (`:109-113`, `:230-238`). `HandleTimePress`
+computes `armed` from a 6000 ms window (`ArmWindowMs`, with a `TickCount` wraparound guard
+`now - _armedAtTick >= 0`), reads which join reasons currently hold the pause, and dispatches on
+the pure function `Decide(pressHandled, stillPaused, joinHoldActive, cancelArmed)`
+(`:240-278`). **Arm** → `Log.Screen` names who is holding time and states the window, plus a log
+line (`:249-253`). **Cancel** → `CancelJoinSync` invokes BT's own transfer-cancel router
+`A("host-cancelled", "The host cancelled the join sync to keep playing. Reconnect to join again.", true)`,
+then `CoopSubModule.SetPaused(false, "Host", true, "join-escape")` to clear the manual pause
+reason our own presses toggled on, then records a fire plus `Log.Screen` and `Log.Info`
+(`:313-335`). Paused state is read via `PeerDetection.ReadCoopStaticBool("IsPaused") == true`
+(`:247`). Reason state is read live per query — `_pauseCoordinatorField.GetValue(null)` each
+time — so a reassigned coordinator is survived (`:47`, `:286`).
+
+**Patched members.** BT `CoopSubModule.ToggleHostManualPause() -> bool` (postfix; the return
+type is **validated** as bool at apply time); BT `CoopSubModule.ApplyHostNormalSpeed` (postfix,
+optional). Invoked, not patched: BT `CoopSubModule.MapPauseReason(string)` (for `"SaveSync"` and
+`"HeroCreation"`); the pause coordinator's `IsActive(reason)` (found by signature, not name);
+the obfuscated save-transfer coordinator's static `A(string,string,bool)`;
+`CoopSubModule.SetPaused(bool,string,bool,string)`. Read: BT
+`CoopSubModule._pauseCoordinator` (NonPublic|Static field, read live); BT `CoopSession.IsPaused`.
+
+**Limitations.** Self-disabling by design: it acts only when a `SaveSync`/`HeroCreation` reason
+is actively holding the pause **and** the player presses a time key — if BT unblocks legacy
+joins upstream this never fires and shows as never-fired in the health report (`:34-36`). It
+never offers a cancel on uncertainty: `HeldJoinReasons` returns null when the coordinator is
+null or the query throws (`:280-311`). `Apply` is strictly validated and **refuses to install**
+if `ToggleHostManualPause` is missing or does not return bool, or if `MapPauseReason`,
+`SetPaused` or `_pauseCoordinator` are missing — logging the exact missing list and
+`Diag.Report(false)` (`:82-93`); a second gate covers the reason query, the cancel router and
+both boxed enum values (`:100-107`). `_applied` latches; `Apply` is retried from
+`PayloadEntry.OnBeforeInitialModuleScreen` because BT may load late
+(`Payload/PayloadEntry.cs:119`; `:69-73`). `FindTransferCancel` scans only the first assembly
+named exactly `BannerlordTogether` and returns null if the fingerprint misses (`:169-226`).
+Resolved targets are pinned against BT v0.5.0.1 (`:45`). Cancelling is destructive to the
+joiner's in-flight transfer — hence the two-press consent gate.
+
+**Self-test.** `join-sync-pause-escape.contract` (`:117`, id at `:361`). It pins three things:
+(1) all five reflection targets resolved — `_reasonActiveQuery`, `_cancelTransfer`,
+`_setPaused`, `_reasonSaveSync`, `_reasonHeroCreation` (`:341-342`); (2) the reason query is
+invocable as a pure read without throwing, against the live coordinator (`:344-353`); (3) the
+full `Decide` truth table — `Decide(false,true,true,true)==None` (press not handled, never act),
+`Decide(true,false,true,true)==None` (game unpaused fine), `Decide(true,true,false,true)==None`
+(no join hold), `Decide(true,true,true,false)==Arm` (the first swallowed press explains and
+arms), `Decide(true,true,true,true)==Cancel` (the second press cancels) (`:354-359`). The
+failure detail names which of targets / queryReads / logic failed plus "(BT update?)" (`:363`).
+`Diag.Report("join-sync-pause-escape", …)` runs on every apply path (`:91`, `:105`, `:116`,
+`:122`) and a fire is recorded on an actual cancel (`:326`).
+
 ---
 
 ## Harness
@@ -2222,17 +3408,21 @@ printed on every successful generation apply (`:380-381`). Watching and Roslyn c
 gated on `hotReload=true` **and** the presence of a `.hotreload-dev` marker file in the module
 root (`Harness/HotReload.cs:70-72`); the shadow-copy `LoadFrom` generation loader itself runs
 on the player path too, since that is the normal load-once path. See `HOTRELOAD.md` for the
-workflow. A failed payload load used to be silent — the player kept playing unguarded — so a
-loud on-screen `CRASH GUARD NOT ACTIVE` warning fires if the payload ever fails to load
-(`CHANGELOG.md:309-311`).
+workflow. `EnsureLoaded` (`:247-263`) is what raises the loud on-screen
+`CRASH GUARD NOT ACTIVE` warning if the payload ever fails to load — a failed payload load used
+to be silent and the player kept playing unguarded (`CHANGELOG.md:309-311`). LoadFrom-dedup
+detection compares assembly `Location` strings (`:315-324`) and a type-load failure writes a
+one-off `[HOTRELOAD][DIAG]` binding-diagnostics evidence pack including the harness-bound
+`0Harmony` identity (`:194-233`).
 
 **Limitations.** Any exception in the shadow-copy path falls back to a byte-load with a logged
 warning (`:327-329`). Shadow files accumulate on disk until `CleanStaleShadows` runs, which
 happens once, when `_current == null` — so a long dev session accumulates one shadow per reload
 attempt until the next launch. Unpatch failure of the previous generation is logged but
-tolerated, so both generations' patches can coexist after a partial failure. The reloader is
-not wired into `Tick()` or `OnMissionInit()`, so those two entry points never retry
-(`:90-126`). `_pendingReload` is `volatile` but `_debounceTick` is a plain `int` written from
+tolerated, so both generations' patches can coexist after a partial failure. `EnsureLoaded` is
+wired only at `OnGameStart` (`:119`) and `OnBeforeInitialModuleScreen` (`:130`), so `Tick()` and
+`OnMissionInit()` never retry (`:90-126`). The binding-diagnostics pack is written once per
+type-load failure only. `_pendingReload` is `volatile` but `_debounceTick` is a plain `int` written from
 the watcher thread and read from the main thread (`:37` vs `:45`, `:483`). Only `ex.Message` is
 logged for lifecycle and tick errors (no stack), unlike the full `ex` logged for start and
 generation-load failures.
@@ -2377,6 +3567,18 @@ which proves shared state survived (`:94-96`). `RunSelfTests` is gated by `selfT
 
 **Self-test.** This is the self-test runner; it pins nothing itself. Individual guards pin
 their reflected members and decision logic through it.
+
+#### How "self-disabling" is actually enforced
+
+1. **Fire tracking.** Every guard calls `SelfHealing.RecordFire(name)` each time it really
+   suppresses a crash or corrects state; `GUARD ACTIVITY:` lists the counts. A guard that never
+   fires across a session did nothing — evidence the upstream bug is gone and the guard can be
+   retired (`Harness/SelfHealing.cs:9-14`, `:43-81`).
+2. **Probes.** A *behaviour* patch — as opposed to a crash finalizer — would keep overriding
+   upstream after upstream fixes the bug, silently reintroducing the wrong behaviour. Such a
+   patch must test the bug signature first and stand down when it is gone; the named example is
+   `ClientBootstrapFix` probing whether BT's action-cache mirrors are already primed
+   (`Harness/SelfHealing.cs:15-21`). Register probes so the health report shows them.
 
 ### Self-documenting config with regex reader
 
