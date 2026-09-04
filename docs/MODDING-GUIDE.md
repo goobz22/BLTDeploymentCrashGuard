@@ -713,6 +713,16 @@ point calls them in sequence and a throw in one would otherwise skip every later
 (`Payload/IllnessDeathGuard.cs:36-63`; `Payload/MarriageBarterGuard.cs:33-51`;
 `Payload/ClanScreenCrashGuard.cs:24-43`; `Payload/PayloadEntry.cs:47-70`).
 
+**Re-decide at every chokepoint when the answer depends on external state.** A latch is right when the
+decision can only be made once; it is wrong when the world can change underneath it. Whether BT's battle
+patches should be lifted depends on whether a friend is connected *right now*, so the same
+`DecideAndApply(harmony, reason)` is called at apply, module-screen, game-start, mission-init,
+mission-open and start-battle (`Payload/BattleMode.cs:99-225`, from `Payload/PayloadEntry.cs:99,123,130,137`
+and `Payload/TracePatches.cs:89,181`). Two properties make that affordable: re-deciding is cheap and
+idempotent, and a `_lastVanilla` change latch plus a "did anything actually move" count restrict logging
+and on-screen messages to **real transitions** (`Payload/BattleMode.cs:77,168-170,216-218`) — otherwise
+six chokepoints produce six identical lines per mission.
+
 **Reset per-mission state in one place.** `OnMissionInit()` zeroes counters, one-shot flags and all three
 depth counters, and clears resolved parties, hero names and the ghost id
 (`Payload/SiegeCommandGuard.cs:157-166`; `Payload/CoopCommandSplit.cs:108-120`), driven from
@@ -788,6 +798,13 @@ multiply listeners (`Payload/PregnancySync/PregnancySyncGuard.cs:76,84-89`).
   `Payload/SiegeGatePromptFix.cs:143-146`; `Payload/CoopCommandSplit.cs:153-184`;
   `Payload/BackgroundTickBudgetGuard.cs:88-95`; `Payload/JoinSyncPauseEscape.cs:269-278`). Patch plumbing
   cannot be unit-tested in-process; the decision logic can (§5).
+- **One scope predicate, shared by every patch in the guard.** `InScope(out Mission mission)` answers
+  "is this the situation I exist for?" once — `Mission.Current != null`, `IsSiegeBattle`,
+  `!IsSallyOutBattle`, `PlayerTeam.Side == Defender`, not a BT client — with
+  `IsGuardedFormation(formation, mission)` as its per-formation companion
+  (`Payload/SiegeCommandGuard.cs:209-228`, used at :289 and :314). Four patches then share one
+  definition of scope: a scope bug is fixed in one place, and the whole condition is legible on one
+  screen instead of being re-derived, slightly differently, in each patch body.
 - **Rate-detect without allocating.** A fixed `int[TripCount]` ring buffer with a rolling index: each call
   overwrites the oldest slot and compares `now - oldest < WindowMs`. O(1), no lists, no timers, no GC
   pressure inside a game loop (`Payload/EncounterLoopGuard.cs:31,114-117`).
@@ -975,6 +992,14 @@ session. Two details make it safe:
 - **Reuse the peer's own sanctioned recovery routine.** Rather than inventing a teardown, invoke the exact
   method the peer's own watchdog/timeout calls, and cite that precedent in the header, so all of its
   cleanup happens the way the mod intends (`Payload/JoinSyncPauseEscape.cs:22-33,313-322`).
+- **Gate a destructive recovery on consent: explain, arm, then act on the second press.** When the peer
+  mod swallows the player's input and leaves the game held, the first press explains *who and what* is
+  holding it and arms a bounded 6 s window; a second press inside that window performs the destructive
+  recovery; any other outcome clears the arm — all of it routed through one pure `Decide(pressHandled,
+  stillPaused, joinHoldActive, cancelArmed)` that is self-tested row by row
+  (`Payload/JoinSyncPauseEscape.cs:29-33,240-278`). It turns a silently-swallowed keypress into
+  feedback and gives the player an exit from a permanent freeze, without ever destroying a peer's
+  in-flight join on one accidental press.
 - **Choose the same choke point the peer already patches.** `StashSync` postfixes
   `InventoryLogic.DoneLogic` — "the same commit point BT patches for the warehouse"
   (`Payload/StashSync/StashSyncGuard.cs:22-24,73-78`) — inheriting its correctness argument (it commits,
@@ -1748,6 +1773,16 @@ The other two shapes in use:
 **Compute the role once, cheaply, and put it on every log line.** A throttled tick (at most every 5 s)
 derives H/C/S from the same tri-state probes and pushes it into the harness logger, so three machines'
 logs can be read side by side (`Payload/PayloadEntry.cs:161-187`; §6.9).
+
+**Identify the *remote* player by several keys, not one.** Anything that rearranges troops has to know
+which agents are player bodies — the local one and the peer's — and the peer mod's id for a remote hero
+may name either a `Hero` or a `CharacterObject`. So `IsPlayerHeroAgent` accepts `agent == Agent.Main`,
+`hero == Hero.MainHero`, **or** either `hero.StringId` or `character.StringId` matching the peer's ghost
+id, and the ghost lookup itself tries `MBObjectManager` as a `Hero` first and then as a
+`CharacterObject.HeroObject` (`Payload/CoopCommandSplit.cs:299-323,350-361`). Missing the remote hero
+here would shuffle a player's own body into another formation — a much worse outcome than not
+recognising an NPC, so the identity test is deliberately generous while the *action* stays narrow (each
+player's troops move into their own formation block; player heroes are never moved).
 
 ### 8.2 Deciding whether a session is live
 
