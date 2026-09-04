@@ -672,3 +672,307 @@ runtime plus the way the game loads modules.
 > from a Bannerlord mod, or the call fails opaquely; and the upload belongs on a ThreadPool worker
 > with explicit timeouts, because a synchronous upload on the game thread stalls the game.
 > `Payload/LogStreamer.cs:151-159`.
+
+---
+
+## 3. Engine — mission lifecycle and deployment
+
+### E1 · Treating a null `Mission.InitialPlayerAgent` as a startup-only condition
+
+- **What happened** — `Mission._initialPlayerAgent` is assigned only when an agent is built with
+  `Controller == AgentControllerType.Player`, and it is **re-nulled whenever that agent is removed**.
+  Vanilla never hits the null only because the native spawn path always creates the player agent in
+  `OnSetupTeamsOfSide(PlayerSide)`.
+- **Lesson** — Guard the dereference, not the moment.
+- **Now** — `Payload/DeploymentCrashGuards.cs:29-32`; `UPSTREAM_BUG_REPORT.md:60-70`;
+  `Payload/PlayerIdentityGuard.cs:9-15`.
+
+### E2 · Mistaking a suppressed crash for a fixed feature
+
+- **What happened** — The `DeploymentMissionController.SetupTeams` NRE is a **vanilla** line crashing
+  on mod-induced state; the actual root cause is that BT never rosters or spawns the player side.
+  Guarding removed the CTD and left the battle unplayable: every player formation 0/0, with a
+  105-member unwounded party.
+- **Lesson** — Ship the guard **and** file the root cause upstream. "The crash is gone" is not "the
+  bug is fixed"; verify the gameplay outcome, not the absence of an exception.
+- **Now** — `Payload/DeploymentCrashGuards.cs:8-12`; `UPSTREAM_BUG_REPORT.md:85-93,104-108`;
+  CHANGELOG.md:355-357,291-293.
+
+### E3 · Correcting player control during the deployment phase
+
+- **What happened** — `Controller = None` on the player agent is **legitimate** while a
+  `DeploymentMissionController` exists. A corrective loop that "fixes" it fights the deployment
+  system. Separately, `Mission.Scene` can be null while `Mission.Current` is live.
+- **Lesson** — Before writing a corrective loop, enumerate the states where the "wrong" value is
+  correct, and gate on the behavior that owns them
+  (`GetMissionBehavior<DeploymentMissionController>()`). Do not treat a mission as usable before its
+  `Scene` exists.
+- **Now** — `Payload/PlayerIdentityGuard.cs:16-18,45-48,58-61`.
+
+### E4 · Touching deployment positioning at all
+
+- **What happened** — The crash-guard family had already learned that intervening in the deployment
+  path is where sieges break.
+- **Lesson** — Let vanilla's auto-deploy position the formations, then take **control** at
+  `OnDeploymentFinished` with a move order to the position vanilla already chose. Minimal surface, no
+  re-implementation of deployment.
+- **Now** — `Payload/SiegeCommandGuard.cs:51,427-432`; CHANGELOG.md:75-76.
+
+### E5 · An unguarded state dump becomes the crash it was meant to explain
+
+- **What happened** — During a mission or scene transition the engine accessors themselves throw:
+  `Mission.Mode`, `Mission.CurrentState`, `Mission.Scene`, team and formation getters.
+- **Lesson** — Wrap **every** engine read individually — per-property `try/catch` or a
+  `SafeGet<T>(Func<T>)` helper — and degrade to `?` / `threw:<Type>` rather than propagating.
+- **Now** — `Payload/RuntimeDiagnostics.cs:95-126`; `Payload/ControlTrace.cs:299-345`.
+
+### E6 · Mutating campaign identity inside a mission
+
+- **What happened** — `ChangePlayerCharacterAction` mid-mission leaves the mission's agents, teams and
+  controllers bound to a hero who is no longer the player — the exact breakage the in-mission
+  identity guard exists to repair.
+- **Lesson** — Defer identity changes until `Mission.Current` is null.
+- **Now** — `Payload/CoopHeroIdentityLock.cs:72-89,167`.
+
+### E7 · A corrector with no cap fights another system forever
+
+- **What happened** — A repair loop that keeps losing a fight tanks the frame rate and never stops.
+- **Lesson** — Cap the corrections (five attempts and a log trail here), reset the cap per mission by
+  reference compare, and wrap each independent repair in its own `try/catch` so one throwing property
+  — a foreign patch, a null team — cannot abandon the rest and leave the player half-corrected.
+- **Now** — `Payload/PlayerIdentityGuard.cs:27,49-57,91-135`.
+
+> **Good to know — the mission and module lifecycle surface.**
+> `MissionState.FinishMissionLoading` calls `Mission.Tick` → `OnMissionAfterStarting` →
+> `Mission.AfterStart`; `Mission._current` is set earlier by `Mission.Initialize` inside
+> `MissionState.OpenNew` (`docs/ENGINE-NOTES.md:37-44`). The module lifecycle is module screen →
+> game start → `OnMissionBehaviorInitialize` (per mission) → application tick
+> (`Harness/SubModule.cs:24-48`). `MBSubModuleBase` has five overrides, four `protected override` but
+> `OnMissionBehaviorInitialize(Mission)` is `public override`
+> (`Harness/SubModule.cs:16,24,33,42,51`). On-screen messaging is
+> `InformationManager.DisplayMessage(new InformationMessage(text, TaleWorlds.Library.Color))` and can
+> throw early in startup, so it belongs behind a swallowing helper (`Harness/Log.cs:3-4,122-131`).
+
+---
+
+## 4. Engine — formations, orders, and command authority
+
+### E8 · A one-time hand-off of formations to the player **decays**
+
+- **What happened** — `Formation.RemoveUnit` hands an emptied formation back to the AI, so a
+  formation wiped and then refilled by reinforcements is the AI's again mid-battle. In a siege,
+  vanilla's default for every formation is AI control **on**:
+  `BattleDeploymentHandler.SetDefaultFormationOrders` ends with
+  `SetOrder(IsSiegeBattle || IsSallyOutBattle ? AIControlOn : AIControlOff)`.
+- **Lesson** — Command ownership in Bannerlord is **re-derived continuously**. You must refuse the
+  hand-off with a standing prefix on `SetControlledByAI`, not assign ownership once.
+- **Now** — `Payload/SiegeCommandGuard.cs:26-33,280-307,389-451`; CHANGELOG.md:64-72;
+  `docs/ENGINE-NOTES.md:59-67`.
+
+### E9 · Being the settlement owner is not being the general
+
+- **What happened** — `MapEvent.IsPlayerSergeant` demotes the player merely for being inside an army
+  led by someone else — even when defending their **own** castle — and `Team.SetPlayerRole` then
+  hands every formation to the AI.
+- **Lesson** — Role is decided from **army membership**, not settlement ownership. Re-derive
+  ownership campaign-side (`MapEventSettlement.OwnerClan == Clan.PlayerClan`) and assert the general
+  role explicitly, only for the player's own settlement.
+- **Now** — `Payload/SiegeCommandGuard.cs:34-36,245-265,337-363`; CHANGELOG.md:65-67,72-73.
+
+### E10 · Patching only the first of two authorities over the same flag
+
+- **What happened** — The player's battle role is decided in **two** places: `Team.SetPlayerRole` and
+  `AssignPlayerRoleInTeamMissionController.AfterStart`. Patching only the first is silently overridden.
+- **Lesson** — Look for a second authority over the same flag. Here the second one requires
+  compiler-generated backing-field reflection and is therefore treated as an **optional, explicitly
+  announced** degradation rather than a hard requirement.
+- **Now** — `Payload/SiegeCommandGuard.cs:99-102,118-126,365-387`.
+
+### E11 · Using mission-side state for a decision made before the mission has it
+
+- **What happened** — `Team.SetPlayerRole` runs before the mission's `PlayerTeam` exists.
+- **Lesson** — Fall back to campaign-side truth for anything evaluated during mission setup:
+  `MobileParty.MainParty.MapEvent` (`IsSiegeAssault`, `PlayerSide`, `MapEventSettlement`) plus
+  `Settlement.OwnerClan` vs `Clan.PlayerClan`.
+- **Now** — `Payload/SiegeCommandGuard.cs:242-244`.
+
+### E12 · Blocking the wrong half of a near-duplicate API pair
+
+- **What happened** — `Formation.TransferUnits(Formation,int)` is the **tactic-only** API; the
+  player's order UI goes through `OrderController.TransferUnits`. Blocking the latter would have taken
+  re-organisation away from the player while leaving the AI free.
+- **Lesson** — Prove which caller uses which from IL before patching either.
+- **Now** — `Payload/SiegeCommandGuard.cs:48-50,94`.
+
+### E13 · Treating a sally-out as a siege defence
+
+- **What happened** — Sally-out battles are also `IsSiegeBattle`, and vanilla's AI-control-on default
+  covers both — but a sally-out is an attack, not a hold-your-ground defence.
+- **Lesson** — Exclude `IsSallyOutBattle` explicitly in the scope predicate.
+- **Now** — `Payload/SiegeCommandGuard.cs:22,212,394`.
+
+### E14 · Moving a player's own agent between formations
+
+- **What happened** — In co-op, re-assigning agents by class would displace a human player's body —
+  either machine's player, including BT's remote "ghost hero".
+- **Lesson** — Exclude `Agent.Main`, `Agent.IsPlayerControlled`, `Hero.MainHero` and the BT ghost-hero
+  id explicitly before any re-assignment. Companions are deliberately **not** excluded — they travel
+  with their party. A remote hero id may name a `Hero` **or** a `CharacterObject` whose `HeroObject`
+  is the hero, so check both and compare both `StringId`s.
+- **Now** — `Payload/CoopCommandSplit.cs:41-42,265-266,273,299-323,356-363`.
+
+### E15 · A membership guarantee that the game re-sorts underneath you
+
+- **What happened** — The Order of Battle screen and reinforcement arrivals re-sort troops by class,
+  undoing a formation split.
+- **Lesson** — Continuous enforcement, not a single application: a spawn postfix **plus**
+  `OnDeploymentFinished` **plus** a 500 ms tick.
+- **Now** — `Payload/CoopCommandSplit.cs:38-40,95,122-147`.
+
+> **Good to know — the mechanics of taking a formation without moving it.**
+> `Formation.CreateNewOrderWorldPosition(WorldPosition.WorldPositionEnforcedCache.GroundVec3)` →
+> `SetControlledByAI(false, false)` → `SetMovementOrder(MovementOrder.MovementOrderMove(spot))` when
+> `WorldPosition.IsValid`; `Team.FormationsIncludingEmpty` reaches formations that have no units yet
+> (`Payload/SiegeCommandGuard.cs:414-434`). An AI-controlled formation belongs to
+> `TacticDefendCastle`: `FormationAI.TickOccasionally` only runs behaviors while `IsAIControlled`, and
+> the tactic assigns wall/gate/keep positions, re-plans on a breach and re-balances troops via
+> `Formation.TransferUnits`/`Split` (`:26-33`).
+> Agent/party plumbing for re-assignment: `Agent.Origin as PartyAgentOrigin` → `.Party` gives the
+> owning `PartyBase`; `Agent.Formation` is a settable property; `CharacterObject.DefaultFormationClass`
+> is a troop's intended class; `Team.GetFormation(FormationClass)` and `Formation.FormationIndex` are
+> `FormationClass`-typed, so cast to `int` for arithmetic (`Payload/CoopCommandSplit.cs:277-297`).
+> `Mission.PlayerTeam.GeneralAgent` and `PlayerOrderController.Owner` are settable, so both command
+> links can be asserted and repaired at a transition — and `Agent.IsActive` is a **method**, not a
+> property; getting that wrong is a silent reflection failure that disables the repair
+> (`Payload/StealthHideoutAdvisor.cs:85-103`). `FormationClass` 0–7 are regular, 8 general, 9
+> bodyguard (`docs/ENGINE-NOTES.md:66`).
+
+---
+
+## 5. Engine — time control
+
+### E16 · Prefix-skipping a third-party method that keeps state
+
+- **What happened** — Time enforcement v1 skipped BT's `EnforcePlaySpeed` entirely (prefix returning
+  false). That let BT's internal time state machine go stale, which plausibly contributed to a joining
+  player meeting a **stuck shared pause** — host unpause clicks vetoed while a peer was connected,
+  despite shared time control being BT's own design (2026-08-19 00:32–00:35).
+- **Lesson** — Let the method run and block only the specific side-effect **writes** you object to,
+  scoped to that method's execution window via a `[ThreadStatic]` flag set in its prefix and cleared
+  in its finalizer. This is the general answer for any mod-vs-mod conflict.
+- **Now** — `Payload/TimeEnforcementGuard.cs:14-21,70-73,84-92,186-189`.
+
+### E17 · A guard that blocks a write the peer re-requests every tick
+
+- **What happened** — BT's `EnforcePlaySpeed` retried `UnstoppablePlay` every tick while the guard
+  blocked the write, so the mode never changed and BT never converged. With tracing on, the `[TIME]`
+  tracer logged each blocked attempt **with a full stack** at roughly 60 lines/second, filled the
+  8 MB log in minutes, and rotated the real co-op-setup evidence off the end.
+- **Lesson** — A guard that blocks a write creates a non-converging retry loop in the other mod. Any
+  tracer on that path must coalesce from day one (first line in full, repeats collapsed into a
+  windowed rollup), and the log needs a rolling window rather than a single `.1` overwrite. The
+  coalescing emitter belongs in the **hot-reloadable** payload so the fix can land without a restart.
+- **Now** — `Payload/TraceThrottle.cs:6-21`; `Payload/TimeTrace.cs:92-95,121-123`; CHANGELOG.md:5-16;
+  `docs/ENGINE-NOTES.md:51-53`; the convention is stated in `CLAUDE.md` "Conventions for guards/fixes".
+
+### E18 · Using a peer mod's method calls as proof of a network session
+
+- **What happened** — BT's `SetPaused` / `ApplyTimeState` also fire **once during a solo game load**
+  (log 2026-08-18 23:49: `OnGameLoaded → SetPaused → ApplyTimeState`). Stamping "co-op activity" on
+  every call would have faked a connected session and permanently disabled the solo-only time
+  neutralizer.
+- **Lesson** — Before treating a third-party call as evidence of a session, prove it is
+  network-originated — here by a bounded stack walk for a packet-handler frame.
+- **Now** — `Payload/TimeEnforcementGuard.cs:191-222,228-235`; `Payload/BattleMode.cs:392-416`.
+
+### E19 · A vanilla option that hard-codes one enum value
+
+- **What happened** — Vanilla's "map double click behavior = keep speed" checks `mode == 4`
+  (`StoppableFastForward`) and therefore does **not** recognise the **unstoppable** fast-forward
+  variant BT enforces. In co-op every click-to-move dropped to normal speed and the sync yanked it
+  back up — a visible fast-forward flip-flop.
+- **Lesson** — Check the value the mod actually sets, not the option's name. Then veto exactly one
+  `(old, new)` transition in the setter prefix — reading the old value from `__instance` and the new
+  from `value` — so every other consumer, including click-to-unpause (`Stop → StoppablePlay`), keeps
+  working.
+- **Now** — `Payload/MapClickSpeedKeeper.cs:11-18,79-100`.
+
+### E20 · Binding to one spelling of a member that exists as two
+
+- **What happened** — Campaign's time-control lock exists as either a method
+  (`SetTimeControlModeLock`) or a property setter (`set_TimeControlModeLock`) depending on the build.
+  Binding to one name alone silently loses the hook.
+- **Lesson** — Probe all plausible member spellings, patch whichever resolves, and log the **total
+  count** so a drop from N to N−1 is visible in the log alone.
+- **Now** — `Payload/TimeTrace.cs:19-20,39-40`; `Payload/TimeEnforcementGuard.cs:84`.
+
+### E21 · Forcing an engine predicate for **all** parties
+
+- **What happened** — `Campaign.TickMapTime`'s `IsMainPartyWaiting` halts campaign time **without**
+  changing the time-control mode — the widely-reported "the speed buttons say playing but the clock
+  is frozen". Forcing `MobileParty.ComputeIsWaiting` to false for every party would change AI party
+  behaviour across the whole campaign.
+- **Lesson** — Gate the postfix on `__instance.IsMainParty` (and on `__result` already being true) so
+  exactly one party is affected.
+- **Now** — `Payload/TimeFlowPatch.cs:13-20,65-69`.
+
+### E22 · Driving a **toggle** by reflection after a read that can lie
+
+- **What happened** — `ToggleClientTimeControlPermission` is a toggle and
+  `IsClientTimeControlEnabledForCurrentMenu` can lie, so calling the toggle after a wrong "already
+  off" read turns the permission **off** instead of on.
+- **Lesson** — Verify the resulting state, be prepared to flip back ("toggled the wrong way (was
+  already true and menu-check lied) — flip back"), and **stop after the first confirmed success** so
+  you never churn a setting the host may deliberately change later.
+- **Now** — `Payload/ShareTimeControl.cs:56-61,94-102`.
+
+### E23 · Trusting the return value of a reflected call whose result is in `out` parameters
+
+- **What happened** — The `MethodInfo` may be `void`; the real result lives in by-ref outs.
+- **Lesson** — Invoke with an `object[]` and read the by-ref results back out of the args array. It
+  also makes the call survive a return-type change between versions.
+- **Now** — `Payload/ShareTimeControl.cs:121-136` (comment at `:127`).
+
+### E24 · Clearing a stuck join hold without clearing the manual pause
+
+- **What happened** — Cancelling via BT's transfer-cancel router is not enough on its own: the
+  player's **own** pause presses may have toggled BT's manual pause reason on, so time still does not
+  resume and the fix appears to do nothing.
+- **Lesson** — After cancelling, explicitly clear the manual reason too —
+  `SetPaused(false, "Host", true, "join-escape")`.
+- **Now** — `Payload/JoinSyncPauseEscape.cs:323-325`.
+
+### E25 · Offering a destructive recovery on an unreadable state
+
+- **What happened** — A misread of the pause state would let the recovery destroy a healthy join.
+- **Lesson** — `HeldJoinReasons` returns null both when neither reason holds the pause **and** when
+  the state cannot be read — never offer a cancel on uncertainty. Then gate the destructive half on
+  consent: explain first, arm a bounded window, act only on a second press.
+- **Now** — `Payload/JoinSyncPauseEscape.cs:29-33,240-278,280-311` (contract stated at `:280-281`).
+
+### E26 · Caching a foreign singleton **instance** instead of its `FieldInfo`
+
+- **What happened** — Caching BT's pause coordinator instance breaks if BT reassigns the static field
+  mid-session.
+- **Lesson** — Cache the `FieldInfo` and read `GetValue(null)` live on every query.
+- **Now** — `Payload/JoinSyncPauseEscape.cs:47,286`.
+
+### E27 · Config off-switches that only match a literal `false`, read once
+
+- **What happened** — `timeAlwaysFlows` and `shareTimeControl` are matched with a regex that accepts
+  only the literal `false`; any other value, a missing file or a read exception silently leaves the
+  feature **on**. The value is cached in a `bool?` for the process, so editing the file mid-session
+  does nothing until the payload reloads.
+- **Lesson** — This is deliberate — a malformed config can never disable a fix — but it must be
+  written down, because "I turned it off and nothing changed" is otherwise indistinguishable from a bug.
+- **Now** — `Payload/TimeFlowPatch.cs:27-37,88-99`; `Payload/ShareTimeControl.cs:40-50,196-208`.
+
+### E28 · Reading an intentional feature as a restriction to be bypassed
+
+- **What happened** — Enabling shared client time control looks like a hack around a deliberate host
+  restriction. It is not: BannerlordTogether **ships** the feature and merely defaults it off.
+- **Lesson** — Invoke the host's own documented grant (`ToggleClientTimeControlPermission`) rather
+  than bypassing the `AllowClientTimeControl` check. Zero patch surface: a polled reflection driver,
+  not a Harmony patch, so there is nothing to interfere with another mod and nothing to break on an
+  upstream update beyond the two reflected members — each individually reported when missing.
+- **Now** — `Payload/ShareTimeControl.cs:12-21,52-119`, driven from `Payload/PayloadEntry.cs:147`.
