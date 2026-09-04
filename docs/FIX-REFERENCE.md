@@ -1557,6 +1557,616 @@ exposes `IsDisabled` / `DisabledReason` / `Title` as either a field or a propert
 
 ---
 
+## Identity and bootstrap
+
+`myHero` is the only `guardconfig.json` key read inside these six files
+(`GuardConfig.String("myHero", "")` at `Payload/CoopHeroIdentityLock.cs:129`). `safeMode`
+disables all six; `selfTest` runs the three registered contracts
+(`hero-identity-lock.contract`, `client-bootstrap-fix.wiring`, `clanmode-solo-fix.contract`).
+`tracing` gates none of them — all six are always on — but it enables
+`CharacterCreationTrace`, `ControlTrace`, `RoleTrace` and `RuntimeDiagnostics`, which are the
+tracers used to diagnose identity and bootstrap failures.
+
+### Player-identity guard (co-op spawn identity swap)
+
+**README item** 12 · **Source** `Payload/PlayerIdentityGuard.cs` · **Class**
+`PlayerIdentityGuard` · **Tag** `[IDENTITY]` · **Config** none · **Scope** both (client and
+host)
+
+**Bug.** In a co-op mission with two player heroes, BT's spawn sync sometimes builds the
+**other** player's hero as the local player agent — it becomes `Mission.MainAgent` /
+`InitialPlayerAgent`, team general, order-controller owner and formation owner — while the
+local hero spawns AI-controlled. Field report 2026-08-19 20:11: "I spawned as an AI and an AI
+spawned as me" (`Payload/PlayerIdentityGuard.cs:9-15`).
+
+**Mechanism.** Not a Harmony patch — a polling corrector run from `PayloadEntry.Tick`
+(`Payload/PayloadEntry.cs:146`), throttled to once per second (`:37-42`). If
+`Mission.MainAgent`'s `Character` is not `Hero.MainHero.CharacterObject` (`:69-72`) and an
+active human agent with that character exists in `mission.Agents` (`:74-82`), it hands the
+impostor back to AI (`controlled.Controller = AgentControllerType.AI`, `:93-96`), sets
+`myAgent.Controller = AgentControllerType.Player` (`:103`), then repairs ownership:
+`Team.GeneralAgent` (`:110-113`), `Team.PlayerOrderController.Owner` (`:118-122`) and every
+`Formation.PlayerOwner` in `Team.FormationsIncludingSpecialAndEmpty` that pointed at the
+impostor (`:127-133`). Each repair step is in its own try/catch so a partial repair still
+completes; the player is told via `Log.Screen` (`:138`).
+
+**Patched members.** None patched. Written: `Agent.Controller`
+(`AgentControllerType.AI`/`.Player`), `Team.GeneralAgent`, `OrderController.Owner` (via
+`Team.PlayerOrderController`), `Formation.PlayerOwner` (over
+`Team.FormationsIncludingSpecialAndEmpty`). Read: `Mission.Current`, `Mission.MainAgent`,
+`Mission.Agents`, `Mission.PlayerTeam`, `Mission.Scene`,
+`Mission.GetMissionBehavior<DeploymentMissionController>()`.
+
+**Limitations.** Capped at `MaxCorrectionsPerMission = 5` per mission so it can never fight
+another system in a loop (`:27`, `:54-57`). Skipped entirely while a
+`DeploymentMissionController` is on the mission — during deployment `Controller=None` on the
+player agent is legitimate (`:58-61`). Does nothing when the local hero has no active agent in
+the mission (spectating) or when the local hero already is the controlled agent (`:83-86`).
+Requires `Campaign.Current != null` and `mission.Scene != null` (`:45-48`). It registers **no**
+`SelfHealing` self-test, **no** `Diag.Report` component, and never calls
+`SelfHealing.RecordFire` — its only trace is the `[IDENTITY]` log line. `CHANGELOG.md:381`
+records it explicitly as a reactive safety net, not a root fix; the shared-save load case is
+superseded by `CoopHeroIdentityLock`.
+
+**Self-test.** None registered.
+
+### Co-op hero identity lock (shared-save host handoff)
+
+**README item** 20 · **Source** `Payload/CoopHeroIdentityLock.cs` · **Class**
+`CoopHeroIdentityLock` · **Tag** `[IDENTITY]` · **Config** `myHero` · **Scope** host or solo
+only (never client)
+
+**Bug.** A Bannerlord save stores exactly one player identity — whoever was `MainHero` when it
+was saved. When a co-op couple passes one shared save back and forth, the person **loading**
+it to host becomes the previous host's hero (field report 2026-08-30: "when Noah saves as host
+and I load our co-op, it loads me as his hero", `CHANGELOG.md:136-138`). BT's identity registry
+(slots, steam/password claims) is only consulted on the client join flow; nothing fixes the
+loader's identity — verified by assembly scan, `SharedSaveMode` is a bare session flag
+(`Payload/CoopHeroIdentityLock.cs:12-21`).
+
+**Mechanism.** A per-machine hero-identity map, `hero-identity.json`, written next to
+`guardconfig.json` (`:42-45`), keyed by `Campaign.UniqueGameId` → `Hero.StringId`. Armed per
+campaign by `PayloadEntry.OnGameStart` → `OnGameStart()` (`:61-66`,
+`Payload/PayloadEntry.cs:132`), then claimed from `PayloadEntry.Tick` → `Tick()` (`:68-97`,
+`Payload/PayloadEntry.cs:153`) once `Campaign.Current` and `Hero.MainHero` exist **and**
+`Mission.Current` is null — never swap identity inside a mission (`:78-81`). `Claim()`
+(`:99-174`): if a hero is recorded and alive but is not `MainHero`, the player is switched with
+vanilla's `ChangePlayerCharacterAction.Apply(target)` — the same mechanism death-succession
+uses (`:167`) — the map is re-saved, `SelfHealing.RecordFire("hero-identity-lock")` fires, and
+both a log line and `Log.Screen` name who the save was last played as (`:171-173`). Learning
+paths: a brand-new campaign records `MainHero` automatically (`:140-147`); an existing campaign
+is claimed once from `guardconfig` `myHero` by name (`:129-139`); `MaintainRecord()`
+(`:179-210`) follows death-succession to the heir.
+
+**Patched members.** None patched. Called: `ChangePlayerCharacterAction.Apply(Hero)` (`:167`).
+Read: `Campaign.Current.UniqueGameId` (`:101`), `Hero.MainHero`, `Hero.StringId`,
+`Hero.IsAlive`, `Hero.Name`, `Hero.Clan`, `Hero.FindFirst(Func<Hero,bool>)` (`:229`),
+`Hero.AllAliveHeroes` (`:235`),
+`Campaign.Current.Models.CampaignTimeModel.CampaignStartTime`, `CampaignTime.Now.ToDays`
+(`:218-219`), `Mission.Current` (gate only, `:78`).
+
+Returns early when `PeerDetection.IsClient() == true`, both in the claim path (`:84-88`) and in
+`MaintainRecord` (`:188-191`), because BT assigns the client's hero through its own claim flow.
+
+**Limitations.** Inactive when `Campaign.UniqueGameId` is null or empty (`:102-106`). An
+existing shared campaign needs a one-time explicit claim — a wrong guess would replicate the
+very bug it fixes, so it refuses to infer (`:26-33`); with no record, no `myHero` and not a new
+campaign it only logs guidance once per session (`:148-156`). "Brand new campaign" is
+heuristic: campaign time younger than one day (`:212-225`), returning false on any exception.
+`myHero` matching is by hero **name**, case-insensitive, preferring a hero in
+`Hero.MainHero.Clan` then any match (`:232-249`) — ambiguous names can mis-target, and an
+unmatched name only logs (`:136`). If the recorded hero is gone or dead it does **not** switch:
+it keeps the save's player and re-records (`:117-125`). A living recorded hero that differs
+from `MainHero` is never clobbered — treated as a foreign or cheat switch (`:176-178`).
+`MaintainRecord` only runs after a successful claim this campaign and at most every 60 s
+(`:182-187`). Storage is flat regex-parsed JSON with no escaping, so a hero id or campaign id
+containing a quote would break the file (`:266-290`). Persist failures are logged and swallowed
+(`:304-314`).
+
+**Self-test.** `hero-identity-lock.contract` (`:316-327`) pins (a) a
+`ParseMap(FormatMap(...))` round-trip over a two-entry probe map and (b) that
+`AccessTools.Method(typeof(ChangePlayerCharacterAction), "Apply")` still resolves — i.e. the
+vanilla succession action has not been renamed.
+
+### Client hero-creation guard (half-synced home settlement)
+
+**README item** 5 · **Source** `Payload/ClientHeroCreationGuard.cs` · **Class**
+`ClientHeroCreationGuard` · **Tag** `[HEROCREATE-GUARD]` · **Config** none · **Scope** client
+condition; the patch is installed unconditionally for every session
+(`Payload/PayloadEntry.cs:52`)
+
+**Bug.** Crash 2026-08-19 during client character creation, at the moment of picking a culture
+and advancing: NRE in `DefaultSettlementValueModel.FindFarthestDistanceBetweenSettlementsInClan`,
+reached via `FindMostSuitableHomeSettlement` ← `Clan.ResetPlayerHomeAndFactionMidSettlement` ←
+`CharacterCreationContent.ApplyCulture`. The method dereferences
+`clan.MapFaction.FactionMidSettlement` (passing it to `MapDistanceModel.GetDistance`), which is
+null on a client whose faction/settlement graph has not finished replicating. Native has no
+guard because in single-player the graph is always complete there
+(`Payload/ClientHeroCreationGuard.cs:12-19`).
+
+**Mechanism.** Harmony **finalizer** on the public
+`DefaultSettlementValueModel.FindMostSuitableHomeSettlement(Clan)`, installed via
+`harmony.Patch(method, null, null, null, new HarmonyMethod(...HomeSettlementFinalizer))`
+(`:32-38`). On any escaping exception it fires
+`SelfHealing.RecordFire("hero-creation-guard")`, substitutes a safe result of the **same shape
+the method itself returns in its own edge cases** — `clan.InitialHomeSettlement`, else
+`Settlement.All[0]` — assigns it to `ref __result`, logs the suppression with the fallback name
+and the original exception message, shows a `Log.Screen` note, and returns null so the
+exception is swallowed and culture application completes (`:47-76`).
+
+**Patched members.** `DefaultSettlementValueModel.FindMostSuitableHomeSettlement(Clan)`
+(finalizer). Read: `Clan.InitialHomeSettlement` (`:59`), `Settlement.All` / `.Count` / `[0]`
+(`:61-63`).
+
+**Limitations.** Suppresses the symptom rather than fixing the null
+`clan.MapFaction.FactionMidSettlement` — the returned home settlement can be an arbitrary first
+settlement. If the recovery path itself throws, `__result` is set to null (`:70-74`), which can
+still NRE downstream. The guard is silently inactive if the method is not found — it logs
+"guard inactive" and returns (`:34-37`). It registers no self-test and no `Diag.Report`
+component; its only health signal is the fire count.
+
+**Self-test.** None registered (fire tracking only, `:55`).
+
+### Client bootstrap fix (BT action-cache false negative)
+
+**README item** 9 · **Source** `Payload/ClientBootstrapFix.cs` · **Class**
+`ClientBootstrapFix` · **Tag** `[CLIENT-FIX]` · **Config** none · **Scope** client (host and
+solo sessions never run the audit — `UPSTREAM_BUG_REPORT.md:24`); the prefix is installed for
+any session in which the BT assembly is present
+
+**Bug.** Every BT client session permanently half-loads. Before applying its deferred Harmony
+patches, BT's `CoopSubModule.TryVerifyNativeActionCacheWhenCampaignMapReady` audits the
+engine's `ActionIndexCache`, but it compares the engine's **static** `ActionIndexCache` mirror
+fields — which sit at `Index -1`, unprimed, in a client session — against fresh native lookups.
+The mismatch makes it log "BootstrapAborted reason=action-cache-mismatch … restartRequired" and
+set `_harmonyPatchBootstrapAttempted = true`, which permanently blocks retry, so the whole
+session runs with sync patches unapplied. Player symptoms: invisible or missing partner armies,
+joins never registering on the host, speed desync, no client hero selection, a client seeing a
+host-style map shell (`Payload/ClientBootstrapFix.cs:8-21`; `UPSTREAM_BUG_REPORT.md:3-27`).
+BT's own log proves the native catalog is fully loaded (actions=5167, every action code valid,
+`diskLoad=False`) — only the static mirror is stale, so it is a false negative.
+
+**Mechanism.** Harmony **prefix** on `TryVerifyNativeActionCacheWhenCampaignMapReady`
+(`:74-82`). `VerifyPrefix` (`:147-191`): (1) if `NativeCatalogReady()` is false, return true and
+let BT's own wait logic run unchanged — the safety intent is preserved; (2) if
+`MirrorsAlreadyPrimed()` (the self-disable probe), log a stand-down line once and return true;
+(3) otherwise `PrimeActionIndexCacheMirrors()` re-creates every unprimed static
+`ActionIndexCache` mirror from the live catalog via `ActionIndexCache.Create(field.Name)` and
+writes it back by reflection (`:288-327`), fires `SelfHealing.RecordFire`, sets BT's static
+`_nativeActionCacheVerified = true` by reflection (`:81`, `:174-176`), sets `__result = true`
+and returns false to **skip** the original — verification forced to succeed so BT's deferred
+patches apply. Any exception in the prefix returns true (pass through). All engine access is
+by-name reflection so it is independent of which assembly defines `ActionIndexCache` /
+`MBAnimation` (`:32-33`, `:109-124`).
+
+**Patched members.** BT `CoopSubModule.TryVerifyNativeActionCacheWhenCampaignMapReady` (prefix,
+`bool __result`). Written by reflection: BT `CoopSubModule._nativeActionCacheVerified`; all
+static fields of type `ActionIndexCache` except `act_none`. Read/invoked:
+`ActionIndexCache.Create(string)`, `ActionIndexCache.Index`,
+`MBAnimation.GetNumActionCodes()`, `MBAnimation.GetNumAnimations()`,
+`MBAnimation.GetActionCodeWithName(string)`, `MBAnimation.IsAnyAnimationLoadingFromDisk()` —
+the last four as the readiness gate.
+
+**Limitations.** Only takes effect on a fresh process where the prefix beats BT's first (and
+only) verify; on a mid-game payload hot-reload it just installs the prefix, since BT will not
+verify again (`Payload/PayloadEntry.cs:72-74`). Retried from `OnBeforeInitialModuleScreen` in
+case the co-op assembly loaded late (`Payload/PayloadEntry.cs:117`); latched by `_applied`
+(`:36-38`, `:83`). If BT is absent it reports `Diag ok` with "no BT present" (`:61-66`) — not a
+failure. If the engine action-cache types cannot be resolved, or BT's verify method is not
+found, it refuses to activate and reports `Diag critical:true` (`:68-80`). Mirror priming is
+best-effort per field: readonly or inaccessible fields are skipped silently and the
+force-verify still carries the fix (`:315-319`). `act_none` is deliberately excluded from both
+the probe and the prime (`:227`, `:296-299`). It does not fix BT's cache persistence — the
+mismatch recurs every launch (`UPSTREAM_BUG_REPORT.md:16-22`).
+
+**Self-test.** `client-bootstrap-fix.wiring` (`:193-208`) pins that **every** reflection target
+resolved — `_createMethod`, `_indexProp`, `_getActionCodeWithName`, `_getNumActionCodes`,
+`_getNumAnimations`, `_isAnyAnimationLoadingFromDisk` and BT's `_verifiedField` — and that the
+`MirrorsAlreadyPrimed()` self-disable probe is callable without throwing. This proves the
+wiring is intact independently of the live game reaching the bootstrap path.
+
+### Bootstrap watch (silent `BootstrapAborted` detector)
+
+**README item** 9 · **Source** `Payload/BootstrapWatch.cs` · **Class** `BootstrapWatch` ·
+**Tag** `[BOOTSTRAP-WATCH]` · **Config** none · **Scope** both — it scans host, client and solo
+BT logs; in practice the abort is a client-session condition
+
+**Bug.** BT's own sync log can record "BootstrapAborted … restartRequired=True", meaning its
+deferred patches were never applied and the whole session runs with broken sync — observed
+2026-08-19 20:46 on a client with a stale `RuntimeDataCache` `.rdc` from a different version
+failing the action-cache audit; symptoms were missing partner armies, joins not registering on
+the host, and speed desync. BT does not surface this to the player at all, so the session
+silently plays on broken (`Payload/BootstrapWatch.cs:7-15`).
+
+**Mechanism.** Filesystem watcher, no Harmony patch. Two entry points: `CheckAtStartup()` from
+`PayloadEntry.Apply` (`:24-27`, `Payload/PayloadEntry.cs:96`) scanning logs written within the
+last 24 h, and `Tick()` from `PayloadEntry.Tick` (`:29-48`, `Payload/PayloadEntry.cs:150`) every
+120 s scanning logs written within the last 30 minutes, latched by `_warned`. `Scan()`
+(`:50-95`) walks the Desktop for `bt-sync-client.txt` / `bt-sync-host.txt` /
+`bt-sync-solo.txt`, finds the **last** `BootstrapAborted` occurrence (`FullFind` whole-file at
+startup, `TailFind` 256 KB tail mid-session), compares its offset against a persisted per-log
+handled-offset ledger so a given abort is acted on only once, then calls `ClearStaleCache()`,
+which **renames** (never deletes) every `Modules/BannerlordTogether/RuntimeDataCache/*.rdc` to
+`<name>.stale-yyyyMMddHHmmss` so BT's bootstrap rebuilds them fresh. The startup pass clears
+silently before this session's bootstrap; the mid-session pass logs and shows `Log.Screen`
+"co-op mod did NOT fully load — cache auto-cleared, RESTART THE GAME".
+
+**Patched members.** None. Reads Desktop `bt-sync-client.txt` / `bt-sync-host.txt` /
+`bt-sync-solo.txt`; renames `<Modules>/BannerlordTogether/RuntimeDataCache/*.rdc`; writes
+`<module root>/bootstrapwatch.state` (`logName|offset` lines).
+
+**Limitations.** Offsets from `FullFind` are approximate — the line-consumption counter assumes
+2-byte line endings (`consumed += line.Length + 2`, `:209`) — so the ledger compare is
+heuristic, not exact. Mid-session `TailFind` only reads the last 262144 bytes (`:228`).
+`_warned` latches after a non-startup warning so there is only one on-screen warning per
+session (`:31-34`, `:81`; note `_warned = !startup`, so the startup pass deliberately does not
+latch). Only fires for logs modified inside the age window. It cannot repair the current
+session — the remedy is a restart. Renaming can fail per file if locked; failures are logged and
+the cleared count under-reports (`:118-122`). Module paths are derived from `Assembly.Location`
+by walking up three levels for the `Modules` dir and two for the module root (`:105-107`,
+`:136-137`), so a non-standard install layout defeats it. All errors are swallowed silently at
+the `Scan`/`Tick` level (`:44-47`, `:92-94`). Registers no self-test and no `Diag` component.
+Upstream evidence shows the abort reproduces both with and without the `.rdc` present, so
+clearing the cache is not a guaranteed cure (`UPSTREAM_BUG_REPORT.md:16-22`) —
+`ClientBootstrapFix` is the real fix.
+
+**Self-test.** None registered.
+
+### Clan-mode solo fix (`Unknown` → `Separate`)
+
+**README item** 10 · **Source** `Payload/ClanModeSoloFix.cs` · **Class** `ClanModeSoloFix`
+(with `ClanModeSoloDecider`) · **Tag** `[CLANMODE-FIX]` · **Config** none directly · **Scope**
+solo host only at runtime; the patch is installed whenever BT is present and is inert the
+moment a peer connects or peer state is uncertain
+
+**Bug.** "[BT] Marriage is blocked until clan mode is synchronized" when playing alone.
+Decompile-proven: BT's `ClanModeSyncBehavior.CurrentMode` returns `Unknown` (internal enum
+`af.bI = 0`) whenever no **remote** identity snapshot has arrived — and hosting with no peer
+connected, one never will — so clan mode stays `Unknown` forever and every clan-mode-gated
+action, marriage foremost, is blocked for the whole solo session
+(`Payload/ClanModeSoloFix.cs:10-16`).
+
+**Mechanism.** A Harmony **transpiler** on the `ClanModeSyncBehavior.CurrentMode` property
+getter (`:43-51`) that injects a preamble ahead of BT's own body: call
+`ClanModeSoloDecider.ShouldForceSeparate()`; `Brfalse` to the original first instruction; else
+`Ldc_I4_1`; `Ret` — i.e. return `Separate` (`af.bi = 1`), the correct clan mode for a single
+player (`:64-82`). The `continueOriginal` label is attached to the first original instruction,
+so BT's computation runs untouched whenever the decider says no. `ShouldForceSeparate`
+(`:129-159`) caches its verdict for 2 s (the getter can be called every frame), reads
+`PeerDetection.ReadCoopStaticBool("IsHost") == true` and the tri-state
+`PeerDetection.AnyRemotePeerConnected()`, and delegates to
+`Decide(anyRemotePeer, isHost) => isHost && anyRemotePeer == false` (`:161-165`) — forcing only
+on a confident "hosting and provably alone"; `true`/`null` hands off, and any exception returns
+false, leaving BT untouched. It logs only on verdict change. `ReadLiveMode()` (`:84-103`) reads
+the live post-patch value through a reflection `Invoke` on the getter, so it goes through the
+detour rather than an inlined copy, and is consumed by `Payload/MarriageBarterGuard.cs:83`.
+
+**Patched members.** BT `ClanModeSyncBehavior.get_CurrentMode` (transpiler; resolved via
+`AccessTools.TypeByName` + `AccessTools.PropertyGetter`). Read: BT
+`ClanModeSyncBehavior.Instance` (static property, in `ReadLiveMode`). Depends on BT's internal
+enum `af`: `af.bI = 0` = `Unknown`, `af.bi = 1` = `Separate`.
+
+**Limitations.** Must apply at **module load**, before any campaign code JITs — callers JITted
+before the patch keep the inlined original (`:26-28`), so a mid-session hot-reload cannot
+un-inline existing callers. If BT is absent or the type/getter was renamed it reports `Diag`
+"ClanModeSyncBehavior.CurrentMode not found" and is retried from
+`PayloadEntry.OnBeforeInitialModuleScreen` (`Payload/PayloadEntry.cs:118`), latched by
+`_applied`. It depends on the raw enum value 1 meaning `Separate` — a BT enum reordering would
+silently return the wrong mode. The 2 s verdict cache means up to 2 s of stale verdict right
+after a peer connects or disconnects. Peer confidence is only as good as `PeerDetection`: a null
+`Server` with unreadable role flags returns null (unknown) and therefore never forces
+(`Payload/BattleMode.cs:529-538`). `CHANGELOG.md` describes the same fix as inert once a peer
+joins.
+
+**Self-test.** `clanmode-solo-fix.contract` (`:105-119`) re-resolves
+`BannerlordTogether.ClanModeSyncBehavior` and its `CurrentMode` getter, asserts `_applied`, and
+pins the decision contract with three cases: `Decide(null, isHost:true)` must be false (unknown
+peer state never forces), `Decide(false, isHost:false)` must be false (a client never forces),
+`Decide(false, isHost:true)` must be true (a confident host-alone forces).
+
+---
+
+## Siege, gates and command
+
+`siegeCommandAll` gates the siege command guard (`Payload/SiegeCommandGuard.cs:87`);
+`coopOwnArmyCommand` gates the co-op formation-block split
+(`Payload/CoopCommandSplit.cs:72`). Setting either to false disables that component and it
+reports healthy-but-disabled. `tracing` gates only the 30-second-throttled
+`[GATE] gate is DESTROYED` explanatory line (`Payload/SiegeGatePromptFix.cs:74`); every other
+line in these files logs unconditionally.
+
+### Siege command guard (umbrella)
+
+**README item** 23 · **Source** `Payload/SiegeCommandGuard.cs` · **Class**
+`SiegeCommandGuard` (Diag component `siege-command-guard`) · **Tag** `[SIEGE-CMD]` · **Config**
+`siegeCommandAll` (default true) · **Scope** solo and BT host; a BT client stands down entirely
+
+**Bug.** Defending your own castle in a siege, your placed formations run off to guard walls,
+gate and keep instead of holding where you set them down; when the castle is compromised they
+abandon the spot and get killed. Field report 2026-09-03 (solo host, defending own castle)
+(`Payload/SiegeCommandGuard.cs:16-18`). Root cause read from the installed build's IL: in a
+siege battle vanilla's default formation orders **end with AI control on** —
+`BattleDeploymentHandler.SetDefaultFormationOrders` calls
+`SetOrder(IsSiegeBattle || IsSallyOutBattle ? AIControlOn : AIControlOff)` — run by the player
+side's auto-deploy and by the Auto-deploy button. An AI-controlled formation then belongs to
+`TacticDefendCastle`, which assigns lanes and key positions (walls, gate, keep), re-plans on a
+breach ("retreat to keep", "defend key position") and re-balances troops via
+`Formation.TransferUnits` / `Formation.Split`.
+
+**Mechanism.** Seven Harmony patches applied in `Apply()` (`:110-127`): after deployment, in a
+siege **defense** where the player is general, every regular formation is taken back from the
+AI at its deployed spot, and the castle-defence tactic is denied both AI hand-offs and troop
+re-shuffles. Deployment itself is untouched — vanilla auto-deploy still positions formations
+first (`:51`). Reports through `Diag.Report(Component, …)` (`:107`, `:132`, `:138`) and
+registers `SelfHealing.RegisterTest(SelfTest)` (`:133`). Idempotent via `_applied` (`:81-84`).
+The individual patches are documented below.
+
+**Patched members.** `Formation.SetControlledByAI(bool,bool)` (prefix, resolved `:93`, patched
+`:110`); `Formation.TransferUnits(Formation,int)` (prefix, `:94`, `:111`);
+`Team.SetPlayerRole(bool,bool)` (prefix, `:95`, `:112`); `Team.DelegateCommandToAI()` (prefix +
+finalizer, `:96`, `:113-114`); `OrderController.SetOrder(OrderType)` (prefix + finalizer,
+`:97`, `:115-116`); `Mission.OnDeploymentFinished()` (postfix, `:98`, `:117`);
+`AssignPlayerRoleInTeamMissionController.AfterStart` (prefix, optional, `:99-100`, `:121`); BT
+`SpNativeBattleHostMissionBehavior.ReleaseHostMainFormationsToAi` /
+`ReleaseClientOwnedFormationsToAi` / `ReleaseFieldBattleSourceFormationsToAi` (prefix +
+finalizer, `:173-190`).
+
+**Limitations.** Scope is narrow by design: the mission must be `IsSiegeBattle` and **not**
+`IsSallyOutBattle` (`:212`); `PlayerTeam.Side` must be `BattleSideEnum.Defender` (`:217`); only
+regular formations, index < `(int)FormationClass.NumberOfRegularFormations` (`:59`, `:228`,
+`:274`); only after `Mission.IsDeploymentFinished` (`:293`, `:314`); only while
+`PlayerTeam.IsPlayerGeneral` (`:226`, `:409`). If the role-controller backing fields do not
+resolve, owner-is-general promotion is limited to `Team.SetPlayerRole` and it says so
+(`:118-126`). If any core vanilla member is unresolved the whole guard goes inactive rather than
+crashing (`:104-109`). BT release hooks are best-effort: missing methods are logged individually
+and skipped (`:183-186`). A BT client stands down entirely (`InScope` returns false via
+`IsBtClient`, `:221`), logging once that the host's command assignment is authoritative and
+advising "host the session (shared-save host handoff)" (`:399-405`). `CHANGELOG.md` records the
+deliberate exceptions that keep working — F6 delegate command, vanilla's death hand-off, and
+BT's player-down releases on the host — and notes this is a stopgap for command, not a fix for
+the empty player side in solo battles.
+
+**Self-test.** `siege-command-guard.contract` (`:523-553`). Pins the members
+`Formation.SetControlledByAI(bool,bool)`, `Formation.TransferUnits(Formation,int)`,
+`Team.SetPlayerRole(bool,bool)`, `Team.DelegateCommandToAI`,
+`OrderController.SetOrder(OrderType)`, `Mission.OnDeploymentFinished`,
+`MovementOrder.MovementOrderMove(WorldPosition)`,
+`Formation.CreateNewOrderWorldPosition(WorldPosition.WorldPositionEnforcedCache)`,
+`(int)OrderType.AIControlOn == 36`, and that
+`TaleWorlds.MountAndBlade.Missions.Handlers.BattleDeploymentHandler` and its
+`SetDefaultFormationOrders` still exist (`:525-535`). Plus a 12-row `ShouldRefuseHandoff` truth
+table: refuse for formation indices 3, 0 and 7; do not refuse for `requestAi=false`, non-siege,
+deployment-not-finished, not-general, index 8, index 9, or any of the three depth counters at 1
+(`:536-548`).
+
+### `SetControlledByAI` prefix (AI hand-off refusal)
+
+**README item** 23 · **Source** `Payload/SiegeCommandGuard.cs` · **Class**
+`SiegeCommandGuard` · **Tag** `[SIEGE-CMD]` · **Config** `siegeCommandAll` · **Scope** solo and
+BT host
+
+**Bug.** Something inside the mission — the castle-defence tactic, an emptied-and-refilled
+formation via `Formation.RemoveUnit`, or `Team.SetPlayerRole` — silently hands a formation you
+commanded back to the AI mid-battle.
+
+**Mechanism.** Prefix on `Formation.SetControlledByAI(bool,bool)` taking
+`ref bool isControlledByAI`. Returns immediately if the call is a hand-off **to** the player
+(`!isControlledByAI`, `:284-287`). Otherwise it checks `InScope` + `IsGuardedFormation`, then
+delegates to the pure `ShouldRefuseHandoff(...)` and, on refusal, **mutates the argument** to
+false so vanilla still runs but with the opposite input (`:298`). Increments
+`_blockedHandoffs`, records a fire, and emits a coalesced log line (`:299-301`). The whole body
+is in a try/catch that fails open (`:302-306`).
+
+**Patched members.** `Formation.SetControlledByAI(bool,bool)`.
+
+**Limitations.** Deliberately passes through three legitimate hand-offs, detected by
+`[ThreadStatic]` depth counters: the player's own F6 delegate
+(`OrderController.SetOrder(OrderType.AIControlOn)`), vanilla's death hand-off
+(`Team.DelegateCommandToAI`), and a BT host player-down release (`:44-47`, `:275`). Only
+regular formation indices `0..NumberOfRegularFormations-1`.
+
+**Self-test.** The `ShouldRefuseHandoff` decision table (`:536-548`).
+
+### `TransferUnits` prefix (tactic troop-shuffle block)
+
+**README item** 23 · **Source** `Payload/SiegeCommandGuard.cs` · **Class**
+`SiegeCommandGuard` · **Tag** `[SIEGE-CMD]` · **Config** `siegeCommandAll` · **Scope** solo and
+BT host
+
+**Bug.** `TacticDefendCastle` re-balances troops between formations
+(`Formation.TransferUnits` / `Formation.Split`), so the squad you placed is drained or bloated
+behind your back.
+
+**Mechanism.** Prefix on `Formation.TransferUnits(Formation target, int unitCount)` returning
+bool. Active only after `Mission.IsDeploymentFinished` (`:314`). Computes
+`sourceGuarded` / `targetGuarded` = `IsGuardedFormation && !IsAIControlled` (`:318-319`) and
+returns false — fully suppressing the transfer — when either side is a formation the player
+commands (`:324-328`). Counts `_blockedTransfers` and logs which direction was stopped.
+
+**Patched members.** `Formation.TransferUnits(Formation,int)`.
+
+**Limitations.** It targets the **tactic-only** API on purpose: the order UI goes through
+`OrderController.TransferUnits`, which is untouched, so the player can still re-organize
+(`:48-49`). Errors fail open by returning true (`:331-334`).
+
+**Self-test.** Method existence pinned at `:527`.
+
+### `SetPlayerRole` prefix (owner-is-general promotion)
+
+**README item** 23 · **Source** `Payload/SiegeCommandGuard.cs` · **Class**
+`SiegeCommandGuard` · **Tag** `[SIEGE-CMD]` · **Config** `siegeCommandAll` · **Scope** solo and
+BT host (`IsBtClient` short-circuits, `:349`)
+
+**Bug.** `Team.SetPlayerRole` hands **every** formation to the AI when the player is not the
+general, and `MapEvent.IsPlayerSergeant` demotes the player to sergeant whenever they sit inside
+an army led by someone else — even inside their own castle (`:34-36`).
+
+**Mechanism.** Prefix on `Team.SetPlayerRole(ref bool isPlayerGeneral, ref bool isPlayerSergeant)`.
+No-op when vanilla already wants `general && !sergeant` (`:341-344`). Skips while
+`_delegateDepth` or `_btReleaseDepth` is non-zero — those paths are allowed to demote
+(`:345-348`). Otherwise it requires `Team.Side == Defender`, not a BT client, and
+`PlayerDefendsOwnSettlementInSiege()`; then rewrites the ref args to `general=true` /
+`sergeant=false` and logs what vanilla had wanted (`:349-357`).
+
+**Patched members.** `Team.SetPlayerRole(bool,bool)`.
+
+**Limitations.** Uses campaign-side truth (`MobileParty.MainParty.MapEvent.IsSiegeAssault`,
+`PlayerSide == Defender`, `MapEventSettlement.OwnerClan == Clan.PlayerClan`) because it must
+decide before the mission's `PlayerTeam` exists (`:242-265`). It promotes only when the defended
+settlement belongs to the **player's clan** — defending someone else's castle keeps vanilla
+roles.
+
+**Self-test.** `Team.SetPlayerRole(bool,bool)` pinned at `:528`.
+
+### Role-controller `AfterStart` prefix (second role source)
+
+**README item** 23 · **Source** `Payload/SiegeCommandGuard.cs` · **Class**
+`SiegeCommandGuard` · **Tag** `[SIEGE-CMD]` · **Config** `siegeCommandAll` · **Scope** solo and
+BT host (`IsBtClient` short-circuits, `:369`)
+
+**Bug.** `AssignPlayerRoleInTeamMissionController` independently decides `IsPlayerGeneral` /
+`IsPlayerSergeant`, so fixing `Team.SetPlayerRole` alone can be overridden.
+
+**Mechanism.** Prefix on `AssignPlayerRoleInTeamMissionController.AfterStart` that writes the
+compiler-generated auto-property backing fields `<IsPlayerGeneral>k__BackingField = true` and
+`<IsPlayerSergeant>k__BackingField = false` via cached `FieldInfo`, when the player defends
+their own settlement (`:365-387`). Fields are resolved at `Apply` (`:101-102`).
+
+**Patched members.** `AssignPlayerRoleInTeamMissionController.AfterStart`;
+`<IsPlayerGeneral>k__BackingField`; `<IsPlayerSergeant>k__BackingField`.
+
+**Limitations.** An **optional** patch — if the type or either backing field does not resolve,
+the patch is skipped and the log says "role controller members not resolved — owner-is-general
+promotion limited to Team.SetPlayerRole" (`:123-126`), with `Diag` detail carrying "role
+controller unresolved" (`:132`). Backing-field names are compiler-generated and would break if
+the property stops being an auto-property.
+
+**Self-test.** Not pinned — only the vanilla core members are.
+
+### `OnDeploymentFinished` postfix (take-over at the deployed spot)
+
+**README item** 23 · **Source** `Payload/SiegeCommandGuard.cs` · **Class**
+`SiegeCommandGuard` · **Tag** `[SIEGE-CMD]` · **Config** `siegeCommandAll` · **Scope** solo and
+BT host; a BT client only gets the informational note
+
+**Bug.** Vanilla's siege default for every formation is AI control on, so the moment deployment
+ends the castle-defence AI owns your troops.
+
+**Mechanism.** Postfix on `Mission.OnDeploymentFinished`. Iterates
+`Team.FormationsIncludingEmpty`, skips indices ≥ the regular-formation count, counts
+already-player formations as `held`, and for each AI-controlled one: captures its **current**
+position with
+`Formation.CreateNewOrderWorldPosition(WorldPosition.WorldPositionEnforcedCache.GroundVec3)`,
+calls `Formation.SetControlledByAI(false,false)`, and, if the `WorldPosition` `IsValid`, issues
+`Formation.SetMovementOrder(MovementOrder.MovementOrderMove(spot))` so the formation holds
+exactly where auto-deploy put it (`:414-434`). Logs the taken/held split and shows a one-time
+`Log.Screen` note (`:439-445`).
+
+**Patched members.** `Mission.OnDeploymentFinished()`;
+`Formation.CreateNewOrderWorldPosition(WorldPosition.WorldPositionEnforcedCache)`;
+`Formation.SetControlledByAI(bool,bool)`; `Formation.SetMovementOrder(MovementOrder)`;
+`MovementOrder.MovementOrderMove(WorldPosition)`; `Team.FormationsIncludingEmpty`.
+
+**Limitations.** Bails with an explicit log when the player is not the team's general ("another
+lord's army — vanilla command applies", `:409-412`). On a BT client it logs the co-op note once
+(`_clientNoteLogged`) and returns (`:399-406`). The screen note is shown once per mission
+(`_screenNoteShown`).
+
+**Self-test.** `Mission.OnDeploymentFinished`, `MovementOrder.MovementOrderMove(WorldPosition)`
+and `Formation.CreateNewOrderWorldPosition(WorldPosition.WorldPositionEnforcedCache)` pinned at
+`:531-533`.
+
+### `SetOrder` prefix/finalizer (F6 explicit-delegate depth counter)
+
+**README item** 23 · **Source** `Payload/SiegeCommandGuard.cs` · **Class**
+`SiegeCommandGuard` · **Tag** `[SIEGE-CMD]` · **Config** `siegeCommandAll` · **Scope** solo and
+BT host
+
+**Bug.** A blanket refusal of AI hand-offs would also break the player's own F6 "delegate
+command to AI" order.
+
+**Mechanism.** Prefix on `OrderController.SetOrder(OrderType)` increments the `[ThreadStatic]`
+`_explicitAiDepth` when `orderType == OrderType.AIControlOn` (`:453-459`); a **finalizer** — not
+a postfix, so it still runs if the order throws — decrements it, guarded against going negative,
+and returns `__exception` unchanged (`:461-468`). `SetControlledByAIPrefix` passes the hand-off
+through while the depth is > 0.
+
+**Patched members.** `OrderController.SetOrder(OrderType)`; `OrderType.AIControlOn`.
+
+**Limitations.** `[ThreadStatic]` — it only correlates calls on the same thread. Reset to 0 in
+`OnMissionInit` (`:163`).
+
+**Self-test.** `(int)OrderType.AIControlOn == 36` pinned at `:534`; depth semantics covered by
+the row `!ShouldRefuseHandoff(true,true,true,true,3,1,0,0)` at `:546`.
+
+### `DelegateCommandToAI` prefix/finalizer (death hand-off depth counter)
+
+**README item** 23 · **Source** `Payload/SiegeCommandGuard.cs` · **Class**
+`SiegeCommandGuard` · **Tag** `[SIEGE-CMD]` · **Config** `siegeCommandAll` · **Scope** solo and
+BT host
+
+**Bug.** When the player falls, vanilla legitimately hands command to the AI via
+`Team.DelegateCommandToAI` — the guard must not fight that.
+
+**Mechanism.** The prefix increments the `[ThreadStatic]` `_delegateDepth`, the finalizer
+decrements it (`:470-482`). While it is > 0, both `SetControlledByAIPrefix` and
+`SetPlayerRolePrefix` stand down (`:275`, `:345-348`).
+
+**Patched members.** `Team.DelegateCommandToAI()`.
+
+**Limitations.** `[ThreadStatic]`; reset in `OnMissionInit` (`:164`).
+
+**Self-test.** `Team.DelegateCommandToAI` pinned at `:529`; row
+`!ShouldRefuseHandoff(true,true,true,true,3,0,1,0)` at `:547`.
+
+### BT player-down release hooks (`PatchBtReleases` / `RetryBt`)
+
+**README item** 23 · **Source** `Payload/SiegeCommandGuard.cs` · **Class**
+`SiegeCommandGuard` · **Tag** `[SIEGE-CMD]` · **Config** `siegeCommandAll` · **Scope** BT host
+only; a harmless no-op in solo
+
+**Bug.** On a BT host, when a player goes down BannerlordTogether deliberately releases
+formations to the AI; the guard would otherwise block BT's own recovery path.
+
+**Mechanism.** `AccessTools.TypeByName("BannerlordTogether.SpNativeBattle.SpNativeBattleHostMissionBehavior")`,
+then patch each of `ReleaseHostMainFormationsToAi`, `ReleaseClientOwnedFormationsToAi`,
+`ReleaseFieldBattleSourceFormationsToAi` with a prefix that increments the `[ThreadStatic]`
+`_btReleaseDepth` and a finalizer that decrements it (`:168-203`, `:484-496`). Returns a
+**count** of successfully hooked methods, reported in the activation line (`:129-131`).
+`RetryBt(harmony)` re-runs the scan once if BT's assembly loaded after the payload
+(`_btRetried`, only when `_applied && _btPatched == 0`) (`:142-155`); called from
+`Payload/PayloadEntry.cs:121`.
+
+**Patched members.** BT `SpNativeBattleHostMissionBehavior.ReleaseHostMainFormationsToAi`,
+`.ReleaseClientOwnedFormationsToAi`, `.ReleaseFieldBattleSourceFormationsToAi`.
+
+**Limitations.** If the BT type is absent (no BT installed) it silently returns 0 (`:174-177`).
+A renamed BT method logs `[SIEGE-CMD] BT release method not found (BT update?): <name>` and the
+others are still hooked (`:183-186`). Only one retry, ever.
+
+**Self-test.** Not pinned — BT members are third-party; the `_btPatched` count is logged
+instead.
+
+### Coalescing block tracer (`LogBlocked`)
+
+**README item** n/a · **Source** `Payload/SiegeCommandGuard.cs` · **Class**
+`SiegeCommandGuard` · **Tag** `[SIEGE-CMD]` · **Config** `siegeCommandAll` · **Scope** solo and
+BT host
+
+**Bug.** Hand-off refusals and transfer blocks can fire many times a second and would flood
+`CrashGuard.log`.
+
+**Mechanism.** An `Environment.TickCount`-based five-second coalescer with wraparound safety
+(the `now >= _lastBlockLogTick` clause), emitting the latest reason plus the running per-battle
+totals "`<N> hand-off(s) refused, <M> troop shuffle(s) stopped`" (`:512-521`). Counters reset in
+`OnMissionInit` (`:161-162`).
+
+**Limitations.** Suppressed events are counted, not individually logged.
+
+**Self-test.** n/a.
+
+---
+
 ## Harness
 
 The harness is the always-loaded outer module (`Harness/`); the payload is the hot-reloadable
