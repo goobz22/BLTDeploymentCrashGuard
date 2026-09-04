@@ -364,3 +364,311 @@ evidence; each row cost a session.
 > (`Payload/SiegeCommandGuard.cs:101-102,118-126,373-380`). And a one-field struct whose constructor
 > short-circuits on a null `Type` keeps `AccessTools.Method` off an unresolved type without a null
 > check at every call site (`Payload/ClanScreenCrashGuard.cs:83-91`).
+
+---
+
+## 2. .NET Framework and the CLR
+
+Bannerlord 1.4.8 modules target **net472**. Everything in this section is a consequence of that
+runtime plus the way the game loads modules.
+
+### N1 · Harmony-patching a method can poison an unrelated `beforefieldinit` type — permanently
+
+- **What happened** — This mod caused the crash it was diagnosing. Adding `Formation`/`OrderController`
+  patches in **v1.3.0** made the CLR *prepare* the `beforefieldinit` struct `MovementOrder` during
+  JIT/patching. Its `.cctor` builds six template orders via `MovementOrder..ctor(MovementOrderEnum)`,
+  whose one null-capable line is `Mission.Current.CurrentTime`. With no mission alive that NREs, the
+  type initializer fails, **.NET caches the failure for the process**, and every battle for the rest
+  of the session dies at `Formation.ResetAux` with a `TypeInitializationException`.
+- **Lesson** — Merely patching a method makes the CLR prepare every type that method references, and
+  a `beforefieldinit` type's static ctor may run at **any** point before first static-field access.
+  When you patch broadly, audit the `beforefieldinit` types you are pulling in — and apply the
+  load-time safety patch **first**, before `PatchAll` and before every other guard.
+- **Now** — `Payload/MovementOrderTypeInitGuard.cs:14-25,26-34`; applied first at
+  `Payload/PayloadEntry.cs:36-46`; full IL proof in `docs/ENGINE-NOTES.md:9-35`.
+
+### N2 · A logged type-init throw can be a **cached re-throw** from a different moment
+
+- **What happened** — The `MovementOrder` crash was chased where it was *logged*
+  (`Formation.ResetAux` inside `Mission.AfterStart`, where `Mission.Current` is already live). .NET
+  runs a type initializer once, caches the failure, and re-throws the **original** exception with the
+  original stack on every later access. Only collateral was ever captured; the origin never was.
+- **Lesson** — To find the origin, patch the **instance constructor the static ctor calls** — its
+  first-ever call happens inside the static ctor. This inverts the usual "read the stack" instinct,
+  and it explains how `Mission.Current` can be live in the logged throw of a null-at-init crash.
+- **Now** — `Payload/MovementOrderInitProbe.cs:7-23`; `Payload/MovementOrderTypeInitGuard.cs:21-24`;
+  `docs/DIAGNOSTICS.md:80-85`; mission load order proven at `docs/ENGINE-NOTES.md:37-44`.
+
+> **Good to know — pinning a static initializer to a moment you choose.**
+> `RuntimeHelpers.RunClassConstructor(typeof(T).TypeHandle)` defeats `beforefieldinit`'s
+> unpredictable timing, and the `catch (TypeInitializationException)` around it doubles as a one-line
+> oracle that distinguishes "fixed" from "too late": *"ALREADY poisoned before this guard could patch
+> it … the fix must move into the harness SubModule."* Such a fix needs a fresh game launch, never a
+> payload hot-reload. `Payload/MovementOrderTypeInitGuard.cs:36-39,59-71,67-71,80-83`;
+> `CLAUDE.md` "While the game is running".
+> The transpiler that makes the line safe collapses a two-instruction call pair into one helper call
+> by rewriting the **first** instruction in place (opcode→`Call`, operand→helper) and `Nop`-ing the
+> second, so labels and exception blocks attached to that instruction survive and the net stack
+> effect is unchanged; it counts patched sites and logs zero (`:85-113`).
+
+### N3 · `Assembly.LoadFrom` dedups by **simple name** only
+
+- **What happened** — v1.2.3 stamped a unique `AssemblyVersion` per build to defeat the dedup. It
+  never mattered: LoadFrom collapsed the new generation onto the already-loaded assembly, returned
+  stale code with stale statics, and the reload log said success. Field-proven 2026-09-01 17:37 with
+  the log line `LoadFrom deduped to already-loaded 1.2.7.42191`.
+- **Lesson** — Vary the assembly **name**, not the version. "A unique name per build is the only
+  identity LoadFrom cannot collapse."
+- **Now** — `Payload/BLTDeploymentCrashGuard.Payload.csproj:11-18`; `HOTRELOAD.md:10`;
+  CHANGELOG.md:119-124. Detected at runtime by comparing the returned assembly's `Location` against
+  `Path.GetFullPath` of the requested path, `OrdinalIgnoreCase` (`Harness/HotReload.cs:315-324`).
+
+### N4 · `LoadFrom` also caches **path → assembly**
+
+- **What happened** — Re-using a per-**generation** shadow path (`.genN`) after a failed attempt
+  returned the first attempt's assembly without reading the new file, so a correctly renamed build
+  still looked like a dedup. Field-proven 2026-09-01 17:43.
+- **Lesson** — Make the load path unique per **attempt** (pid + generation + `UtcNow.Ticks`), not per
+  generation.
+- **Now** — `Harness/HotReload.cs:307-312`.
+
+### N5 · `LoadFrom` locks the loaded file for the process lifetime, and probes from that file's folder
+
+- **What happened** — Loading the canonical DLL directly meant copying a fresh build over it failed
+  with a sharing violation, so no reload ever fired.
+- **Lesson** — Load a **shadow copy** — and put it in the **same directory** as the canonical DLL,
+  because LoadFrom dependency probing follows the loaded file's own folder. The two constraints
+  together dictate the whole shadow-copy design.
+- **Now** — `Harness/HotReload.cs:298-302`.
+
+### N6 · `Assembly.Load(byte[])` probes the app base, and `AssemblyResolve` never fires when probing succeeds
+
+- **What happened** — Byte-loading the payload resolved its references via default-context probing,
+  which **found the game's own 0Harmony 2.4.2.0 in the app base** and bound it silently. The
+  2026-08-30 `AssemblyResolve` pin could not possibly help, because the resolver only runs when
+  probing **fails**. Field-hit 2026-08-30 16:00.
+- **Lesson** — When the wrong assembly is reachable by normal probing, no resolver can save you.
+  Change the load **context** (LoadFrom, from the module directory). A byte-loaded assembly has no
+  load path at all, so its probing falls back to the app base by construction.
+- **Now** — `Harness/HotReload.cs:279-287`; CHANGELOG.md:213-220; `HOTRELOAD.md:10`.
+
+### N7 · A Bannerlord process holds **two** copies of 0Harmony
+
+- **What happened** — The game bin ships 2.4.2.0 in the app base; `Bannerlord.Harmony` module-loads
+  2.3.6.0. Which one you bind depends on the load context. Returning whichever
+  `AppDomain.GetAssemblies()` listed first for `0Harmony` split the Harmony type identity, so the
+  payload's `Apply(Harmony)` no longer implemented `IPayload.Apply(Harmony)`; generation 2 was
+  rejected mid-session and tracing could not be enabled without a restart. Field-hit 2026-08-29 22:44.
+- **Lesson** — For an assembly whose **types cross a plugin interface boundary**, pin it to the exact
+  instance the host is bound to (`typeof(HarmonyLib.Harmony).Assembly`) — never "first match wins".
+- **Now** — `Harness/HotReload.cs:144-165`; `:146-148,283-287`.
+
+### N8 · `TypeLoadException: Method 'Apply' … does not have an implementation` means a **type identity split**
+
+- **What happened** — The message names a method and says nothing about assemblies, so it is
+  routinely misdiagnosed as a build or interface mismatch. It is neither: the two sides bound to
+  different copies of the same assembly.
+- **Lesson** — Recognise the message. Then look at which assembly copy each side bound to, and dump
+  an evidence pack rather than guessing.
+- **Now** — `Harness/HotReload.cs:59-62,149-150,285-286`; CHANGELOG.md:216-221,272-278.
+
+> **Good to know — the evidence pack for a type-load failure.**
+> On failure, log: the exception, the host's identity and location, the boundary assembly's identity
+> and location, **every loaded copy** of the names that could have split (annotated with
+> `ReferenceEquals`), and the failing assembly's own `GetReferencedAssemblies` entries. Read
+> `Assembly.Location` through a helper that returns `"(byte-loaded, no path)"` for an empty Location
+> — it is empty for byte-loaded assemblies and can throw. This converts "the mod silently did
+> nothing" into a log that answers *who supplied the duplicate*, with no decompiler and no debugger.
+> `Harness/HotReload.cs:194-233`, called at `:348`.
+> The resolver itself is a recipe worth copying: return null for the plugin's own dynamically-named
+> family, hard-pin the assemblies whose **types cross the interface**, and only then fall back to
+> first-loaded-by-simple-name — logging an `AMBIGUOUS` line when several copies exist, which is how
+> you discover a duplicate you did not know about (`Harness/HotReload.cs:63,134-192`).
+
+### N9 · Bannerlord loads module DLLs via `LoadFrom`, which is invisible to default probing
+
+- **What happened** — Your mod, 0Harmony and BT are all in the LoadFrom context. A byte-loaded
+  assembly's references are resolved by **default**-context probing, which cannot see them.
+  Byte-loading the payload (generation 1) let the harness reference bind to a *different copy* of the
+  harness assembly, so `PayloadEntry` implemented **that** copy's `IPayload`; the whole payload
+  silently failed to load and a full session was played with zero guards. Field-hit 2026-08-21 15:14.
+- **Lesson** — This single fact explains most "my dynamically loaded assembly cannot see the mod I am
+  running inside" failures in Bannerlord. It is the root of four separate dated incidents in this repo.
+- **Now** — `Harness/HotReload.cs:56-63,276-280`.
+
+### N10 · Generation 1 always worked, which hid the bug for three releases
+
+- **What happened** — Gen1 happened to load via LoadFrom-context probing and saw the module-loaded
+  0Harmony 2.3.6.0; only gen2+ went through the byte-load path.
+- **Lesson** — A path that works by accident on the first iteration hides the defect until iteration
+  N. When only later generations fail, suspect the **load context**, not the code.
+- **Now** — CHANGELOG.md:220-221.
+
+### N11 · `[assembly: InternalsVisibleTo]` is matched by **exact** assembly name
+
+- **What happened** — The per-build name stamping needed to defeat LoadFrom dedup silently revoked
+  friend-assembly access; the attribute can never cover a name that varies per build.
+- **Lesson** — A name-varying reload scheme forces the shared surface (`Log`, `Diag`, `GuardConfig`,
+  `SelfHealing`) to be **public**. The attribute survives only for the fixed-name (Roslyn) case.
+- **Now** — `Harness/AssemblyInfo.cs:1-9` with `Payload/BLTDeploymentCrashGuard.Payload.csproj:19-24`;
+  CHANGELOG.md:126-128.
+
+### N12 · Statics are fresh in every hot-reload generation
+
+- **What happened** — Every payload static resets on reload. `BattleMode`'s patch **Stash** is a
+  static `Dictionary`, so a reload while in vanilla battle mode leaves lifted foreign patches
+  unrestorable by the new generation. Guards holding deferred state in statics
+  (`_pendingLeader`/`_pendingParty`/`_pendingSinceTick`, `_rollBlockLogged`, `_enabled`, `_autoOpen`)
+  silently drop that state — a pending troop-screen open just disappears, with no timeout note.
+- **Lesson** — Freshness is what makes a reload clean, so distinguish **per-generation caches** from
+  **cross-generation state**. The latter belongs in the harness's shared-state bag, never in a payload
+  static. Also: guards that re-patch on the fly must read the **current** generation's Harmony
+  instance, never a captured one.
+- **Now** — `Payload/PayloadEntry.cs:8-11,14-21` vs `Payload/BattleMode.cs:75`;
+  `Payload/ClanPartyCreationAdvisor.cs:53-57`; `Payload/IllnessDeathGuard.cs:31-32`;
+  CHANGELOG.md:322-325; the bag itself at `Harness/SharedState.cs:6-48`, `Harness/Contracts.cs:25-37`,
+  passed into each generation at `Harness/HotReload.cs:36,367`.
+
+### N13 · A hot-reload leaves the previous generation's `AppDomain` event handlers attached
+
+- **What happened** — Each reload piled another `FirstChanceException` handler on, so every exception
+  logged N times — a compounding corruption of your own evidence.
+- **Lesson** — Guard cross-generation subscriptions with an `AppDomain.SetData`/`GetData` slot. An
+  assembly static is fresh per generation, which is exactly what makes it useless here.
+- **Now** — `Payload/CharacterCreationTrace.cs:31,127-150`.
+
+### N14 · An exception handler that throws re-enters itself
+
+- **What happened** — `AppDomain.CurrentDomain.FirstChanceException` fires again for the exception
+  your handler just raised.
+- **Lesson** — Three rails, all required: a `[ThreadStatic]` re-entrancy flag reset in a `finally`, a
+  catch-all around the entire handler body, and a hard emission cap.
+- **Now** — `Payload/CharacterCreationTrace.cs:19-27,35-36,144,152-196`.
+
+### N15 · `Assembly.GetTypes()` throws on a partially-loadable assembly
+
+- **What happened** — In a modded AppDomain an assembly with one unresolvable dependency throws
+  `ReflectionTypeLoadException` on `GetTypes()`. A naive peer-mod type lookup dies the first time BT
+  has a missing dependency, and a whole assembly becomes unreadable.
+- **Lesson** — Catch it and use `loadEx.Types` — which **null-pads** the entries it could not load.
+  Skip the nulls and keep scanning.
+- **Now** — `Payload/BattleMode.cs:465-480`; `Payload/JoinSyncPauseEscape.cs:174-189` (comment at `:188`).
+
+### N16 · `Environment.TickCount` is a signed 32-bit millisecond counter that wraps
+
+- **What happened** — It wraps roughly every 24.9 days (49.7 days of uptime counted end to end). An
+  unguarded `now - last < Window` latches a circuit breaker, a rate limiter or a log throttle
+  **forever** after the wrap; the mirror-image `now - last > N` fires forever.
+- **Lesson** — Pair every delta comparison with a direction check — `now >= last` for "within window",
+  `now < last` for "expired / force flush" — so a wrap degrades to allow-and-log rather than to a
+  permanent freeze. Every throttle in this repo carries the clause.
+- **Now** — `Payload/EncounterLoopGuard.cs:96,109,117`; `Payload/PartyAiCrashGuard.cs:155`;
+  `Payload/BackgroundTickBudgetGuard.cs:130`; `Payload/BattleMode.cs:415`;
+  `Payload/PayloadEntry.cs:166,194`; `Payload/TraceThrottle.cs:63-65`; `Payload/RoleTrace.cs:83`;
+  `Payload/RuntimeDiagnostics.cs:44`; `Payload/LogStreamer.cs:101`;
+  `Payload/TimeEnforcementGuard.cs:151-153`; `Payload/ShareTimeControl.cs:62-67`;
+  `Payload/JoinSyncPauseEscape.cs:244-245`; `Payload/SiegeCommandGuard.cs:515`;
+  `Payload/SiegeGatePromptFix.cs:75,112`; `Payload/CivilianGateCloseFix.cs:108`;
+  `Payload/CoopCommandSplit.cs:136,334,408`; `Payload/ClanModeSoloFix.cs:135-140`;
+  `Payload/PlayerIdentityGuard.cs:37-42`; `Payload/CoopHeroIdentityLock.cs:181-187`;
+  `Payload/BootstrapWatch.cs:37-42`.
+
+### N17 · Old assemblies cannot be unloaded on .NET Framework
+
+- **What happened** — Every hot-reload leaks roughly 1–3 MB.
+- **Lesson** — Budget for it — "restart every few dozen reloads" — and do not treat rising memory
+  during a long dev session as a product bug.
+- **Now** — `HOTRELOAD.md:63`.
+
+### N18 · Cross-thread flag pairs treated inconsistently
+
+- **What happened** — `_pendingReload` is `volatile`, but `_debounceTick` — written from the
+  `FileSystemWatcher` thread and read from the main thread — is a plain `int`. Similarly
+  `SelfHealing.RegisterTest`/`ResetTests` mutate a plain `List<Func<TestResult>>` **without** the
+  `Sync` lock that `RecordFire`/`FireSummary` take.
+- **Lesson** — Both are fine in practice (worst case a mis-timed debounce window; registration only
+  happens on the main thread during `Apply`) but the asymmetry is easy to misread as a guarantee.
+  Write down which invariant makes an unsynchronised access safe, or take the lock.
+- **Now** — `Harness/HotReload.cs:37,45,482-483`; `Harness/SelfHealing.cs:28-30,83-92,97-106`.
+
+### N19 · A typed getter that cannot distinguish "missing" from "wrong type"
+
+- **What happened** — `SharedState.Get<T>` returns `default(T)` both when the key is absent and when
+  the stored value is not a `T`. Across a reload the stored value may come from a different
+  generation's type identity — exactly the case you need to detect.
+- **Lesson** — Use `Has()`/`GetObject()` where "stored but wrong type" must be distinguishable.
+- **Now** — `Harness/SharedState.cs:11-31`.
+
+### N20 · Two different mechanisms both produce "survives a reload"
+
+- **What happened** — The `Contracts` comment lists "guard fire counts" among the things the
+  `ISharedState` bag holds. They are actually in a harness static dictionary (`SelfHealing.Fires`)
+  and survive because the **harness** is never reloaded.
+- **Lesson** — Do not assume a value is in the bag because it persists. Say which mechanism carries it.
+- **Now** — `Harness/Contracts.cs:25-30` vs `Harness/SelfHealing.cs:28,94-96`.
+
+### N21 · Hosting Roslyn in-process on net472 inside Bannerlord
+
+- **What happened** — Roslyn bind-conflicts with ButterLib's older `System.Collections.Immutable` /
+  `System.Reflection.Metadata`, and `Emit` can throw. ButterLib is present in most modded installs.
+- **Lesson** — Keep the prebuilt-DLL path primary, compile Roslyn in only behind an opt-in build
+  symbol with a runtime `CompiledIn` probe, and always fall back to the prebuilt DLL on any compile
+  failure. Mode (A) build-and-drop is "bulletproof, zero extra deps"; mode (B) is "fragile on net472".
+- **Lesson (second-order)** — The Roslyn path emits **bytes** and loads them with
+  `Assembly.Load(byte[])` — precisely the load path whose default-context probing was proven to split
+  the 0Harmony identity (N6). Expect ROSLYN mode to reproduce the "`Apply` does not have an
+  implementation" failure.
+- **Now** — `Harness/HotReload.cs:21-25,71,415-432`; `Harness/PayloadCompiler.cs:3-11,21-23,25-105`;
+  `HOTRELOAD.md:24,36,46-48`; the risk noted at `Harness/HotReload.cs:279-287,331-340`.
+
+### N22 · `AssemblyVersion` wildcards and `FileVersion` inheritance
+
+- **What happened** — A `$(Version).*` wildcard silently does nothing unless
+  `<Deterministic>false</Deterministic>` is set; and a wildcard is **illegal** in
+  `AssemblyFileVersion`, yet `FileVersion` is inherited from `AssemblyVersion` if you omit it —
+  producing a build error rather than a default. Two SDK-era gotchas in four lines, one failing
+  silently and one at build time.
+- **Lesson** — Set `<Deterministic>false</Deterministic>` alongside the wildcard, and pin
+  `<FileVersion>$(Version).0</FileVersion>` literally.
+- **Now** — `Payload/BLTDeploymentCrashGuard.Payload.csproj:28-36`.
+
+### N23 · `csc` names the assembly after its **output file**
+
+- **What happened** — You cannot stamp a varying internal name while keeping the file name fixed in
+  one step; the stamp *is* the compile-time output name.
+- **Lesson** — Stamp `AssemblyName` (which changes the output file name), then copy to the fixed name
+  and delete the stamped file in an `AfterTargets="Build"` target. This is the general MSBuild
+  pattern for "internal identity must vary, file name must not".
+- **Now** — `Payload/BLTDeploymentCrashGuard.Payload.csproj:19-24,92-97`.
+
+### N24 · A test project that links shipping sources inherits the shipping build properties
+
+- **What happened** — The pure wire-model test projects inherited the payload's per-build **wildcard**
+  `AssemblyVersion` via `Directory.Build.props` — meaningless for files that carry no game version,
+  and hostile to deterministic builds.
+- **Lesson** — Opt out explicitly: `<Deterministic>true</Deterministic>` plus a fixed
+  `<AssemblyVersion>`.
+- **Now** — `tests/StashPayloadTest/StashPayloadTest.csproj`.
+
+### N25 · Copying engine or Harmony DLLs into the module bin
+
+- **What happened** — A copied TaleWorlds or Harmony DLL makes the process load two incompatible
+  copies of the same types; a copied sibling assembly duplicates its statics. The symptoms (type
+  mismatches, patches that do not take) look nothing like the cause.
+- **Lesson** — `<Private>false</Private>` on every engine/Harmony reference **and** on the internal
+  `ProjectReference`.
+- **Now** — `Harness/BLTDeploymentCrashGuard.csproj:32,36,40,44,48`;
+  `Payload/BLTDeploymentCrashGuard.Payload.csproj:45-51,56,60,64,68,72,76,80,84,88`.
+
+### N26 · Inherited NuGet feeds
+
+- **What happened** — Machine- and user-level NuGet configs are additive, so an inherited private or
+  dead feed changes or breaks a contributor's restore in ways that look like a code problem.
+- **Lesson** — Pin the feeds with `<clear />` in a repo-root `NuGet.config`.
+- **Now** — `NuGet.config:3-6`.
+
+> **Good to know — .NET Framework networking from inside the game process.**
+> TLS 1.2 must be explicitly OR-ed into `ServicePointManager.SecurityProtocol` before an HTTPS POST
+> from a Bannerlord mod, or the call fails opaquely; and the upload belongs on a ThreadPool worker
+> with explicit timeouts, because a synchronous upload on the game thread stalls the game.
+> `Payload/LogStreamer.cs:151-159`.
