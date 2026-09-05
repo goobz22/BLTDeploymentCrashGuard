@@ -1880,16 +1880,21 @@ another system in a loop (`:27`, `:54-57`). Skipped entirely while a
 `DeploymentMissionController` is on the mission — during deployment `Controller=None` on the
 player agent is legitimate (`:58-61`). Does nothing when the local hero has no active agent in
 the mission (spectating) or when the local hero already is the controlled agent (`:83-86`).
-Requires `Campaign.Current != null` and `mission.Scene != null` (`:45-48`). It registers **no**
-`SelfHealing` self-test and **no** `Diag.Report` component, so it never appears in `MOD HEALTH:`
-or `[SELFTEST]`. It does now call `SelfHealing.RecordFire("player-identity-guard")` on every
-correction (`:89`), so a session's corrections show up in `GUARD ACTIVITY:` as
+Requires `Campaign.Current != null` and `mission.Scene != null`. Since 2026-09-04 `Apply` reports
+health `player-identity-guard` — pinning by name the eight `Mission` / `Agent` / `Team` /
+`OrderController` / `Formation` / `Hero` members the correction writes or reads
+(`MissingMembers`) — and registers `player-identity-guard.contract`, which also pins the
+`NeedsCorrection(inDeployment, controlledIsMine, myAgentPresent, myAgentIsControlled, corrections)`
+decision table that `Tick` now goes through. It calls `SelfHealing.RecordFire` on every
+correction, so a session's corrections show up in `GUARD ACTIVITY:` as
 `player-identity-guard=<count>` — the point being retirement: a permanently-zero count is
 evidence BannerlordTogether fixed the swap and this net can be removed. `CHANGELOG.md` § *Known open items*
 records it explicitly as a reactive safety net, not a root fix; the shared-save load case is
 superseded by `CoopHeroIdentityLock`.
 
-**Self-test.** None registered. Fire id `player-identity-guard` (`:89`).
+**Self-test.** `player-identity-guard.contract` — the eight engine members by name plus the
+correction decision table. **Health** `player-identity-guard` (degraded only when a member is
+missing). Fire id `player-identity-guard`, one per correction.
 
 ### Co-op hero identity lock (shared-save host handoff)
 
@@ -2090,15 +2095,18 @@ session — the remedy is a restart. Renaming can fail per file if locked; failu
 the cleared count under-reports (`:117-123`). Module paths are derived from `Assembly.Location`
 by walking up three levels for the `Modules` dir and two for the module root (`:106-107`,
 `:137-138`), so a non-standard install layout defeats it. All errors are swallowed silently at
-the `Scan`/`Tick` level (`:45-47`, `:93-95`). Registers no self-test and no `Diag` component, so
-it is absent from `MOD HEALTH:` and `[SELFTEST]`; it does record a fire on every handled abort
-(`SelfHealing.RecordFire("bootstrap-watch")`, `:80`), so `GUARD ACTIVITY:` carries
+the `Scan`/`Tick` level. Since 2026-09-04 `Apply` reports health `bootstrap-watch` — always
+healthy, a scanner has no engine member to resolve — and registers `bootstrap-watch.contract`,
+which writes a synthetic BT log to a temp file and checks that both scanners locate
+`BootstrapAborted` (`FullFind` at the hit line's start, `TailFind` at the exact byte) and report
+-1 for an absent needle; it records a fire on every handled abort, so `GUARD ACTIVITY:` carries
 `bootstrap-watch=<count>` — retirable once BT regenerates its cache itself.
 Upstream evidence shows the abort reproduces both with and without the `.rdc` present, so
 clearing the cache is not a guaranteed cure (`UPSTREAM_BUG_REPORT.md:16-22`) —
 `ClientBootstrapFix` is the real fix.
 
-**Self-test.** None registered. Fire id `bootstrap-watch` (`:80`).
+**Self-test.** `bootstrap-watch.contract` — the synthetic-log parser check above. **Health**
+`bootstrap-watch` (always healthy). Fire id `bootstrap-watch`, one per handled abort.
 
 ### Clan-mode solo fix (`Unknown` → `Separate`)
 
@@ -3296,13 +3304,16 @@ pauses are untouched: Stop mode via the pause button, menus, encounters (`:17-18
 wait-menu mode `UnstoppableFastForwardForPartyWaitTime` never consults `IsMainPartyWaiting`, so
 wait menus are unaffected (`:19-20`). Config is read once and cached in a `bool?` (`:24`,
 `:27-37`), so flipping `guardconfig.json` mid-session only takes effect after a payload reload.
-`ReadConfig` only recognizes the literal regex `"timeAlwaysFlows"\s*:\s*false` (`:90`); any
-other value, a missing file, or a read exception silently defaults to **enabled** (`:96-99`).
-The config path is derived from the assembly location + `"../.."` (`:85-86`). No `Diag.Report`.
+The flag is read through `GuardConfig.Bool("timeAlwaysFlows", true)` since 2026-09-04 (the
+private regex reader is gone); a missing key or an unreadable file defaults to **enabled**.
+Health `time-flow` reports healthy with the detail *disabled by config* when off, and degraded
+when `MobileParty.ComputeIsWaiting` is missing (the patch used to log and vanish).
 
-**Self-test.** None registered. The only observable evidence is the apply line
-`[TIME-FLOW] timeAlwaysFlows=<bool> (patched N method(s))` (`:53`) and the one-shot
-`_loggedActive` line on first suppression (`:70-74`).
+**Self-test.** `time-flow.contract` — pins `MobileParty.ComputeIsWaiting` and the
+`ShouldSuppressHold(computedWaiting, enabled, isMainParty)` decision table the postfix goes
+through. Fire id `time-flow`, counted once per overridden idle arrival, not per tick. Apply
+evidence remains `[TIME-FLOW] timeAlwaysFlows=<bool> (patched N method(s))` and the one-shot line
+on first suppression.
 
 ### `EnforcePlaySpeed` neutralizer
 
@@ -3414,23 +3425,25 @@ The no-arg toggle overload auto-targets the single gameplay client, so this is c
 two-player (host-or-dedicated) case only (`:17-20`). The client process no-ops entirely. Benign
 reasons containing "no longer connected" or "No connected" are silent; anything else logs a "not
 granted yet (`<reason>`) — will retry" line (`:109-113`). `_resolved` latches after **one**
-resolution attempt — if BT loaded after the first `Tick`, resolution is never retried
-(`:152-158`). Same one-shot regex config read as `TimeFlowPatch`: only the literal
-`"shareTimeControl"\s*:\s*false` disables; anything else defaults on (`:190-209`). No
-`Diag.Report`, no self-test.
+resolution attempt — *fixed 2026-09-04*: `Resolve` now latches only once BannerlordTogether's
+assembly is loaded (a miss before that means "not yet", not a rename), so a late-loading BT is
+retried every 3 s from `Tick`, and `Apply` resolves immediately when BT is already up. The flag
+is read through `GuardConfig.Bool("shareTimeControl", true)`; a missing key defaults on. Health
+`share-time-control`: healthy with *disabled by config* or *inert — BannerlordTogether not
+loaded*, degraded when `CoopSubModule` or either of its two members is missing.
 
-**Known asymmetry.** `Resolve()` sets `_resolved = true` before it knows whether
-BannerlordTogether resolved, and it is driven only from `PayloadEntry.Tick` — there is no
-lifecycle retry. If BT's assembly were not loaded on the first application tick, shared time
-control would stay off for the whole process. `TimeEnforcementGuard` (`:56-59`) and
-`JoinSyncPauseEscape` (`:69-73`) instead return without latching and are re-applied from
-`OnBeforeInitialModuleScreen` / `OnGameStart` (`Payload/PayloadEntry.cs:121`, `:124`, `:130`).
-Latch the *success*, not the *attempt*.
+**Known asymmetry — closed 2026-09-04.** `Resolve()` used to set `_resolved = true` before it
+knew whether BannerlordTogether resolved, with no lifecycle retry, so a BT assembly not loaded on
+the first application tick left shared time control off for the whole process. The rule it
+violated still stands for new code: latch the *success*, not the *attempt*.
 
-**Self-test.** None registered. Health evidence is the
-`[SHARE-TIME] shared time control enabler active` line (`:180`) or, on drift,
-`[SHARE-TIME] required method(s) not found (toggle=… menuCheck=…) — shared time control INACTIVE (mod version changed?)`
-(`:177`).
+**Self-test.** `share-time-control.contract` — pins
+`CoopSubModule.ToggleClientTimeControlPermission(out bool, out string)` and
+`IsClientTimeControlEnabledForCurrentMenu` when BT is loaded, plus the
+`NeedsGrant(enabled, alreadyGranted, isHost, alreadyOn)` decision table `Tick` goes through.
+Fire id `share-time-control`, once per grant. Health evidence remains the
+`[SHARE-TIME] shared time control enabler active` line or, on drift,
+`[SHARE-TIME] required method(s) not found (toggle=… menuCheck=…) — shared time control INACTIVE (mod version changed?)`.
 
 ### Map-click speed keeper
 
@@ -3466,11 +3479,17 @@ instance overloads); `Campaign.set_TimeControlMode` (prefix, conditional skip-or
 setter prefix is installed only when `count > 0` (`:52-53`). If `MapScreen` is not found the
 keeper logs "MapScreen not found — keeper idle" and returns without patching the setter
 (`:33-38`). The flag is `[ThreadStatic]`, so a time write raised asynchronously from another
-thread during a click is not covered. The first veto logs once (`_logged`, `:88-92`). No config
-key, no `Diag.Report`, no self-test.
+thread during a click is not covered. The first veto logs once (`_logged`); every veto records a
+fire. No config key. Health `map-click-speed` since 2026-09-04: degraded when `MapScreen`,
+`HandleLeftMouseButtonClick` or `Campaign.set_TimeControlMode` is missing — the keeper used to
+log "keeper idle" and vanish from the health line.
 
-**Self-test.** None; apply evidence is
-`[CLICK-SPEED] map-click fast-forward keeper active (N click method(s))` (`:60`).
+**Self-test.** `map-click-speed.contract` — pins the three members and the
+`ShouldKeepFastForward(inMapClick, requested, current)` decision table the setter prefix goes
+through: only the UnstoppableFastForward → StoppablePlay downgrade made inside a click is
+vetoed; unpausing on click, an explicit pause and vanilla's own keep-FF case pass through. Fire
+id `map-click-speed`, one per kept click. Apply evidence remains
+`[CLICK-SPEED] map-click fast-forward keeper active (N click method(s))`.
 
 ### Campaign time-control tracer
 
@@ -4249,10 +4268,14 @@ themselves: mode (A) is "Build-and-drop (default, bulletproof, zero extra deps)"
 `BattleMode` · **Tag** `[BATTLE-MODE]` · **Config** `battleMode` · **Scope** solo
 (`battleMode=coop` lifts nothing and is unaffected)
 
-**Known gap (Phase B).** "`BattleMode`'s foreign-patch stash does not yet survive a reload …
-reloading while in `battleMode=solo` (vanilla, BT battle patches lifted) can leave them lifted.
-Reloading in `battleMode=coop` is unaffected (nothing is lifted). Restart if battle mode
-misbehaves after a reload."
+**Known gap (Phase B) — closed 2026-09-04.** The stash used to be a payload static and did not
+survive a reload, so reloading in `battleMode=solo` stranded BT's lifted battle patches until
+restart. It is now bag-backed: `Payload/BattleMode.cs` § `StashKey` (`battle-mode.stash`) keeps
+`Dictionary<MethodBase, List<object[]>>` in the harness `ISharedState`, each record produced by
+`StashedPatch.ToRecord` and read back by `FromRecord` — BCL/Harmony types only, because the
+payload's own classes have a fresh identity every generation. The apply line reports
+`inherited N stashed foreign patch(es)` after a reload, and `battle-mode.contract` fails when the
+stash is not the bag's instance. `battleMode=coop` was never affected (nothing is lifted).
 
 ### IL-probe root-cause method (`MovementOrder` type initializer)
 
@@ -4399,10 +4422,9 @@ Tracked in `CHANGELOG.md` § *Known open items* as unfixed:
    The shared-battle lease formation for that case is explicitly not yet fixed.
 3. `PlayerIdentityGuard` and some crash guards are reactive safety nets, not root fixes.
 
-Two more are carried in the source and docs rather than the changelog: `BattleMode`'s
-foreign-patch stash does not survive a hot-reload (`HOTRELOAD.md` § *Trade-offs and known
-gaps*), and incident effects are still not synced between peers
-(`UPSTREAM_BUG_REPORT.md:126-128`).
+One more is carried in the source and docs rather than the changelog: incident effects are still
+not synced between peers (`UPSTREAM_BUG_REPORT.md:126-128`). The hot-reload stash gap that used to
+sit beside it was closed 2026-09-04 (`HOTRELOAD.md` § *Trade-offs and known gaps*).
 
 ---
 

@@ -216,15 +216,16 @@ payload generation from `Apply`. Read it before trusting anything a tracer did o
 reflection everywhere, a silent hook miss is indistinguishable from "the bug did not happen", so a
 tracer that prints no count is a tracer you cannot reason from — fix the count first.
 
-Two tracers can print **no load line at all**, so their absence is ambiguous rather than a count of
-zero:
+Since 2026-09-04 every tracer prints a load line, the empty case included, and the empty line says
+which of the two possible reasons applies:
 
-- `RoleTrace.Apply` returns before logging anything when `PeerDetection.FindCoopType("CoopSession")`
-  is null (`Payload/RoleTrace.cs:39-42`) — a missing `[ROLE] … active` line means *either* BT is not
-  loaded *or* BT renamed `CoopSession`, and the log cannot tell you which.
-- `CoopBattleTrace` prints its `active on N method(s)` line only inside `if (n > 0)`
-  (`Payload/CoopBattleTrace.cs:43-46`); with nothing hooked you get only per-type
-  `[COOP-BATTLE] type not found: X` lines (`:63`), never an `N = 0` count. Do not wait for one.
+- `[ROLE] role-transition tracer idle — CoopSession not found (BannerlordTogether not loaded)` or
+  `(… renamed it?)` — `RoleTrace.Apply` used to return before logging anything when the type was
+  missing, so a missing `[ROLE] … active` line could not distinguish "BT absent" from "BT renamed
+  `CoopSession`".
+- `[COOP-BATTLE] battle-formation tracer active on 0 method(s) — nothing hooked (…)` —
+  `CoopBattleTrace` used to print its count only when N > 0, leaving just per-type
+  `[COOP-BATTLE] type not found: X` lines. An `N = 0` line is now something you can wait for.
 
 ### What `MOD HEALTH:` does not cover
 
