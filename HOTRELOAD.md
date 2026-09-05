@@ -91,7 +91,9 @@ clean):
   background-tick guard's block window, worst-ms and throttled-call counters. **Do not reload in the
   middle of reproducing a rate-based bug — you erase the state you are measuring.**
 - One-shot log latches: the illness/old-age guard's "blocking the daily death roll" line prints
-  again; the siege take-over's once-per-mission screen note can appear a second time in one battle,
+  again; shared time control will try to grant again (`_grantedLogged`), the `[CLICK-SPEED]` /
+  `[TIME-FLOW]` once-only lines reappear and the join-escape arm window restarts; the siege
+  take-over's once-per-mission screen note can appear a second time in one battle,
   and its refused-hand-off / stopped-shuffle counters restart at zero (they are per generation, not
   per battle). `CoopCommandSplit` re-resolves both players' parties and re-announces the I–IV / V–VIII
   split, and the BT release hooks are re-scanned with their one retry.
