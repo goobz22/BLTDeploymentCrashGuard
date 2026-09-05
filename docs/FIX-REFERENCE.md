@@ -4637,3 +4637,75 @@ on-screen text is prefixed `[Deploy Guard]` by `Harness/Log.cs:126`.
 | `hot-reload FAILED — kept previous generation (see CrashGuard.log)` | `Harness/HotReload.cs:392` |
 | `hot-reload: compile error (see CrashGuard.log) — kept previous generation` | `Harness/PayloadCompiler.cs:96` |
 | `self-tests: <N> FAILED (see CrashGuard.log)` | `Harness/SelfHealing.cs:139` |
+
+### Index 5: MOD HEALTH / SELFTEST component id → file / README item
+
+Three separate registries, one row each here:
+
+- **Health component** — the id passed to `Diag.Report(component, ok, detail, critical)`. It is
+  what `MOD HEALTH: N active, M NOT resolved -> …` counts and names.
+- **Self-test** — the `Name` of the `SelfHealing.TestResult` a component's registered test
+  returns; printed as `[SELFTEST] PASS|FAIL <name>` when `selfTest: true`. The convention is
+  `<component>.contract`; three components deviate (`.wiring`, `.loopback` ×2).
+- **Fire id** — the string passed to `SelfHealing.RecordFire(...)`, listed by `GUARD ACTIVITY:`
+  as `id=count`. A fire id is usually the component id but is **not** required to be: the
+  deployment guards report one health component and record two separate fire ids, and two
+  mechanisms record fires while registering no health component at all (second table).
+
+26 health components, 26 registered self-tests, 27 distinct fire ids. Verified by grep for
+`Diag.Report(`, `SelfHealing.RegisterTest(` / `TestResult.Of(` and `SelfHealing.RecordFire(`
+across `Payload/` and `Harness/`.
+
+| Health component | Source file | README item | Self-test | Fire id |
+|---|---|---|---|---|
+| `battle-mode` | `Payload/BattleMode.cs` | 15 | `battle-mode.contract` | `battle-mode` |
+| `bg-tick-budget-guard` | `Payload/BackgroundTickBudgetGuard.cs` | 19 | `bg-tick-budget-guard.contract` | `bg-tick-budget-guard` |
+| `civilian-gate-fix` | `Payload/CivilianGateCloseFix.cs` | 20 | `civilian-gate-fix.contract` | `civilian-gate-fix` |
+| `clan-party-advisor` | `Payload/ClanPartyCreationAdvisor.cs` | 23 | `clan-party-advisor.contract` | `clan-party-advisor` |
+| `clan-screen-guard` | `Payload/ClanScreenCrashGuard.cs` | 4 | `clan-screen-guard.contract` | `clan-screen-guard` |
+| `clanmode-solo-fix` | `Payload/ClanModeSoloFix.cs` | 11 | `clanmode-solo-fix.contract` | — (never fires; it is a value-substituting transpiler) |
+| `client-bootstrap-fix` | `Payload/ClientBootstrapFix.cs` | 10 | `client-bootstrap-fix.wiring` | `client-bootstrap-fix` |
+| `conversation-camera-guard` | `Payload/ConversationCameraCrashGuard.cs` | 3 | `conversation-camera-guard.contract` | `conversation-camera-guard` |
+| `coop-command-split` | `Payload/CoopCommandSplit.cs` | 25 | `coop-command-split.contract` | `coop-command-split` |
+| `dead-hero-activate-invariant` | `Payload/DeadHeroReactivationFix.cs` | 2 | `dead-hero-activate-invariant.contract` | `dead-hero-activate-invariant` |
+| `dead-hero-return-fix` | `Payload/DeadHeroReactivationFix.cs` | 2 | `dead-hero-return-fix.contract` | `dead-hero-return-fix` |
+| `deployment-guards` | `Payload/DeploymentCrashGuards.cs` | 1 | `deployment-guards.contract` | `setup-teams-guard`, `finish-deployment-guard` |
+| `encounter-loop-guard` | `Payload/EncounterLoopGuard.cs` | 7 | `encounter-loop-guard.contract` | `encounter-loop-guard` |
+| `hero-creation-guard` | `Payload/ClientHeroCreationGuard.cs` | 5 | `hero-creation-guard.contract` | `hero-creation-guard` |
+| `hero-identity-lock` | `Payload/CoopHeroIdentityLock.cs` | 21 | `hero-identity-lock.contract` | `hero-identity-lock` |
+| `illness-death-guard` | `Payload/IllnessDeathGuard.cs` | 12 | `illness-death-guard.contract` | `illness-death-guard` |
+| `join-sync-pause-escape` | `Payload/JoinSyncPauseEscape.cs` | 18 | `join-sync-pause-escape.contract` | `join-sync-pause-escape` |
+| `map-incident-guard` | `Payload/MapIncidentCrashGuard.cs` | 8 | `map-incident-guard.contract` | `map-incident-guard` |
+| `marriage-barter-guard` | `Payload/MarriageBarterGuard.cs` | 11 | `marriage-barter-guard.contract` | `marriage-barter-guard` |
+| `movementorder-typeinit` | `Payload/MovementOrderTypeInitGuard.cs` | 9 | `movementorder-typeinit.contract` | — (a load-time fix: it either initializes the type or does not) |
+| `party-ai-guard` | `Payload/PartyAiCrashGuard.cs` | 6 | `party-ai-guard.contract` | `party-ai-guard` (all three layers) |
+| `pregnancy-sync` | `Payload/PregnancySync/PregnancySyncGuard.cs` | 16 | `pregnancy-sync.loopback` | `pregnancy-sync` |
+| `siege-command-guard` | `Payload/SiegeCommandGuard.cs` | 24 | `siege-command-guard.contract` | `siege-command-guard` |
+| `siege-gate-prompt-fix` | `Payload/SiegeGatePromptFix.cs` | 20 | `siege-gate-prompt-fix.contract` | `siege-gate-prompt-fix` |
+| `stash-sync` | `Payload/StashSync/StashSyncGuard.cs` | 17 | `stash-sync.loopback` | `stash-sync` |
+| `stealth-hideout-advisor` | `Payload/StealthHideoutAdvisor.cs` | 22 | `stealth-hideout-advisor.contract` | `stealth-hideout-advisor` |
+
+Fire ids with **no** health component and no self-test — they appear only in `GUARD ACTIVITY:`:
+
+| Fire id | Source file | README item | Why it has no health entry |
+|---|---|---|---|
+| `bootstrap-watch` | `Payload/BootstrapWatch.cs:80` | 10 | A log scanner, not a patch: there is no member to re-resolve, so "resolved" is not a meaningful state. The count is the retirement signal — it drops to zero once BannerlordTogether stops aborting. |
+| `player-identity-guard` | `Payload/PlayerIdentityGuard.cs:89` | 13 | A polling corrector on live mission state rather than a resolved-by-name patch. A permanently-zero count is the evidence that BT fixed the spawn identity swap and this net can be retired. |
+| `setup-teams-guard` | `Payload/DeploymentCrashGuards.cs:106` | 1 | Reported under the shared `deployment-guards` component; separate fire ids keep the two finalizers' counts distinguishable. |
+| `finish-deployment-guard` | `Payload/DeploymentCrashGuards.cs:127` | 1 | As above. |
+
+New in v1.3.2: `battle-mode`, `encounter-loop-guard`, `deployment-guards`, `party-ai-guard`,
+`hero-creation-guard` and `movementorder-typeinit` as health components with matching
+`.contract` self-tests, plus the `player-identity-guard` and `bootstrap-watch` fire ids. Before
+that, six of the mod's crash-critical mechanisms were absent from both `MOD HEALTH:` and
+`[SELFTEST]`, so a game or BT rename could disable them with no visible signal.
+
+Mechanisms that register **none** of the three, by design: every tracer
+(`TracePatches`, `ControlTrace`, `TimeTrace`, `CoopBattleTrace`, `CharacterCreationTrace`,
+`RoleTrace`, `RuntimeDiagnostics`, `MovementOrderInitProbe`, `TraceThrottle`, `LogStreamer`),
+the four wire-model/framing files under `PregnancySync/` and `StashSync/`, the time fixes
+(`TimeFlowPatch`, `TimeEnforcementGuard`, `ShareTimeControl`, `MapClickSpeedKeeper`, `TimeVeto`),
+`PeerDetection`, and the harness itself (`Diag`, `SelfHealing`, `Log`, `GuardConfig`,
+`HotReload`, `PayloadCompiler`, `SharedState`, `SubModule`) — the harness *runs* the registries
+rather than registering in them. For a tracer, the apply-time count line is the health signal;
+each entry above says which.
