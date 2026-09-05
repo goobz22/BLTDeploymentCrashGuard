@@ -4,7 +4,8 @@
 
 Nothing in v1.3.2 has been released yet — `origin` is still at v1.3.1 — so this single release
 carries the diagnostics work, the `MovementOrder` root-cause fix and the 2026-09-04 audit fixes
-below. Update from any earlier version: item 1 alone changes whether solo battles work at all.
+below. Update from any earlier version: the first entry under *Battles* alone changes whether a solo
+battle works at all with the default configuration.
 
 ### Battles
 
