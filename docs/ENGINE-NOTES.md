@@ -1073,7 +1073,20 @@ malformed/uninitialised object (`Payload/ClanPartyCreationAdvisor.cs:10,:302-312
   this setter is high-frequency noise for a tracer
   (`Payload/ControlTrace.cs:32,:91-104`; `Payload/PlayerIdentityGuard.cs:95,:103`).
 - **"Am I actually playing my own hero?"** is `Mission.MainAgent.Character` compared to
-  `Hero.MainHero.CharacterObject` (`Payload/PlayerIdentityGuard.cs:62-72`).
+  `Hero.MainHero.CharacterObject` (`Payload/PlayerIdentityGuard.cs` § `Tick`).
+- **Who becomes the player agent is decided by `Game.PlayerTroop`, and `Hero.MainHero` is derived
+  from the same field (2026-09-04, IL).** `Mission.SpawnTroop` grants `Controller = Player` in
+  exactly one place: `if (isPlayerSide && troopOrigin.Troop == Game.Current.PlayerTroop)
+  agentBuildData.Controller(AgentControllerType.Player)` (`IlDump TaleWorlds.MountAndBlade.Mission::SpawnTroop`,
+  IL_019C-01B3). `Hero.get_MainHero` is `CharacterObject.PlayerCharacter.HeroObject`, and
+  `CharacterObject.get_PlayerCharacter` is `Game.Current.PlayerTroop as CharacterObject` — so the
+  two can never disagree, and only `Game.set_PlayerTroop` moves both; its callers in
+  `TaleWorlds.CampaignSystem` are `Campaign.InitializeGamePlayReferences`,
+  `Campaign.OnNewCampaignStart` and `ChangePlayerCharacterAction.Apply`. Consequence for the co-op
+  identity swap: vanilla never makes another hero's agent the player, so any `Agent.Controller =
+  Player` write on a hero other than `MainHero` inside a campaign mission is a foreign caller —
+  which is what `PlayerIdentityGuard`'s prefix on that setter now logs with the live stack
+  (`Payload/PlayerIdentityGuard.cs` § `ControllerPrefix`).
 - `Agent` exposes `Character` (with a `Name` that may be null), `Index`, `Team`, `IsMainAgent`,
   `IsHuman`, `Main` (static), `IsPlayerControlled` and `Origin` — enough to describe an agent without
   a decompiler (`Payload/ControlTrace.cs:281-297`; `Payload/CoopCommandSplit.cs:273,:277-278`).
