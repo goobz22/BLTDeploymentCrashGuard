@@ -139,7 +139,8 @@ With hot-reload on, flipping `tracing` and dropping a rebuilt payload turns trac
 
 ### Log tags (grep targets)
 
-Startup/health: `MOD HEALTH`, `[SELFTEST]`, `[HOTRELOAD]`, `[BATTLE-MODE]`.
+Startup/health: `MOD HEALTH`, `[SELFTEST]`, `GUARD ACTIVITY`, `[HOTRELOAD]`, `[BATTLE-MODE]`,
+`[DEPLOY-GUARD]`.
 Fixes each own a tag — `[SIEGE-CMD]`, `[COOP-CMD]`, `[IDENTITY]`, `[TIME-GUARD]`, `[GATE]`, etc.
 Diagnostics added in the 2026-09-04 investigation:
 
@@ -377,21 +378,37 @@ the chokepoint never ran.
   discards the evidence being chased.
 - **Throttling** (`TraceThrottle`): identical repeated tracer lines are coalesced — first
   occurrence logs in full, repeats collapse to `[repeat] key ×N in Ys (identical, collapsed)` at
-  most every 5 s (`Payload/TraceThrottle.cs:31,82`). This is why a per-tick fight (e.g. BT re-requesting a time mode our guard blocks) no longer
-  floods the log. When adding a high-frequency tracer, route it through `TraceThrottle.Emit(key, msg)`.
+  most every 5 s (`Payload/TraceThrottle.cs:30,82`). This is why a per-tick fight (e.g. BT
+  re-requesting a time mode our guard blocks) no longer floods the log. When adding a high-frequency
+  tracer, route it through `TraceThrottle.Emit(key, msg)`. The key is part of the evidence: the
+  `[TIME]` key names the vetoing prefix (§2 tag table), so a collapsed burst still says who won.
 
 ---
 
 ## 4. Crash reports on disk
 
-- TaleWorlds logs: `C:/ProgramData/Mount and Blade II Bannerlord/logs/rgl_log_*.txt` (and
-  `rgl_log_errors_*`, `watchdog_*`). `watchdog_*` carries the GPU/build tags; an
-  `Unhandled Exception Code 0xE0434352` in `rgl_log_*` is a managed exception that killed the process.
-- HTML crash reports: `%USERPROFILE%/Documents/crashreport*.html` — the Documents **root**, which is
-  the only place `collect-diagnostics.cmd:41-42` looks (newest `*.html` whose name contains "crash").
-  Reports have been observed there, not in the `Documents/Mount and Blade II Bannerlord/` subfolder
-  that `README.md:722-724` names; check both before concluding no report exists. ButterLib does
-  **not** catch every fatal — the mod's own first-chance capture is the backstop.
+All three of these are in the `collect-diagnostics.cmd` bundle now (§0 step 1). Read them there
+first; the paths below are for the cases where you are on the machine itself, or need the one file
+the bundle deliberately leaves out.
+
+- **TaleWorlds logs**: `C:/ProgramData/Mount and Blade II Bannerlord/logs/` — `rgl_log_*.txt`,
+  `rgl_log_errors_*`, `watchdog_log_*`, `launcher_log_*`. `watchdog_*` carries the GPU/build tags;
+  an `Unhandled Exception Code 0xE0434352` in `rgl_log_*` is a managed exception that killed the
+  process. Collected: 3 newest `rgl_log_*`, 3 newest `rgl_log_errors_*`, 2 newest `watchdog_log_*`,
+  newest `launcher_log_*` (`collect-diagnostics.cmd:61-64`).
+- **TaleWorlds crash folders**: `C:/ProgramData/Mount and Blade II Bannerlord/crashes/<folder>/`.
+  The collector takes the **newest folder's `*.txt` only** (`collect-diagnostics.cmd:67-71`) — the
+  dump beside them is far too large to upload. If the text files are not enough, ask for that one
+  file by name; it is the only piece of the crash folder you have to request by hand.
+- **HTML crash reports**: `%USERPROFILE%/Documents/crashreport*.html` — the Documents **root**,
+  which is where the collector looks: newest `*.html` whose name contains "crash"
+  (`collect-diagnostics.cmd:75-77`). Reports have been observed there rather than in the
+  `Documents/Mount and Blade II Bannerlord/` subfolder ButterLib is usually said to use; check both
+  before concluding no report exists. ButterLib does **not** catch every fatal — the mod's own
+  first-chance capture is the backstop.
+
+The collector's own closing banner (`collect-diagnostics.cmd:100-103`) prints what it bundled. Treat
+the script as the authority on that list, not any prose copy of it — including this one.
 
 ---
 
