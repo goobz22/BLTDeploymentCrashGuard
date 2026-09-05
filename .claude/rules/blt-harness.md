@@ -1,5 +1,5 @@
 ---
-paths: ["Harness/**", "Directory.Build.props", "SubModule.xml", "dist/**", "install.cmd"]
+paths: ["Harness/**", "Directory.Build.props", "SubModule.xml", "dist/**", "install.cmd", "share-log.cmd", "collect-diagnostics.cmd"]
 ---
 
 # Harness, versioning and deployment — invariants
@@ -53,8 +53,11 @@ else, including `SubModule.xml` — a build overwrites it. Bump `<Version>` for 
   (`HotReload.cs:26-28,69-70`).
 - Every generation loads via `Assembly.LoadFrom` on a per-attempt shadow copy placed in the same
   directory as the canonical DLL (`HotReload.cs:276-314`). LoadFrom-context binding is required so the
-  payload binds the harness's already-loaded `0Harmony`; a byte load probes the app base and splits
-  assembly identity (`HotReload.cs:56-62`).
+  payload binds the harness's already-loaded `0Harmony 2.3.6.0`; a byte load probes the app base,
+  binds the game's own `0Harmony 2.4.2.0` and splits assembly identity — `AssemblyResolve` never
+  fires, because probing succeeds (`HotReload.cs:281-287`). The sibling split, where the binder
+  loads a *second copy of the harness*, is what the `ResolveFromLoadedAssemblies` redirect prevents
+  (`HotReload.cs:56-63`).
 - Each payload build compiles under a **unique assembly name**
   (`BLTDeploymentCrashGuard.Payload.b<stamp>`, published to the fixed file name by the
   `PublishFixedPayloadName` target) because the LoadFrom context dedups simple-named assemblies by
@@ -66,12 +69,19 @@ else, including `SubModule.xml` — a build overwrites it. Bump `<Version>` for 
   rethrows for exactly this reason (`Payload/PayloadEntry.cs:108-112`).
 - `Diag.ResetHealth()` and `SelfHealing.ResetTests()` run before each generation applies so reloads do
   not duplicate entries; fire counts persist (`HotReload.cs:363-364`, `Harness/SelfHealing.cs:94-105`).
-- Known trade-offs and the `BattleMode` stash gap: `HOTRELOAD.md:61-68`.
+- Known trade-offs and the `BattleMode` stash gap: `HOTRELOAD.md:160-176` (§ *Trade-offs and known
+  gaps*); the stash gap itself is `HOTRELOAD.md:171-176`.
 
 ## Deploy = the release
 
 `install.cmd` downloads from `<repo>/dist/` on branch `main` (`install.cmd:9,58-60`), so **pushing to
-GitHub is releasing**. Never push mid-investigation (`CLAUDE.md:83-85`).
+GitHub is releasing**. Never push mid-investigation (`CLAUDE.md` § *Working discipline*).
+
+`install.cmd`, `share-log.cmd` and `collect-diagnostics.cmd` are served live from the repo root of
+`main` — release artifacts, not tooling, and each carries its own copy-pasted Steam-library search
+list (`install.cmd:15-25`, `share-log.cmd:14-24`, `collect-diagnostics.cmd:14-19`). The copies have
+already drifted: `install.cmd` and `share-log.cmd` probe 11 paths, `collect-diagnostics.cmd` only 6
+(it is missing `D:\Steam`, `E:\Steam`, `F:\Steam` and both `G:` entries). Edit all three together.
 
 Build both, then place the **three** files in **both** destinations:
 
@@ -87,11 +97,13 @@ cd ../Payload && dotnet build -c Release
 | `SubModule.xml` | module root | `dist/` |
 
 Then `md5sum` all three across build output, game module and `dist/` — they must match
-(`CLAUDE.md:39-46`). Game bin:
+(`CLAUDE.md` § *Version + release*). Nothing cross-checks the harness/payload pair, so a
+half-updated `dist/` ships a mismatch silently. Game bin:
 `C:/Program Files (x86)/Steam/steamapps/common/Mount & Blade II Bannerlord/bin/Win64_Shipping_Client`.
 
 **While the game is running the harness DLL is locked.** Deploy the payload only — it hot-reloads via
-shadow copy and logs `[HOTRELOAD] gen2 applied` (`HOTRELOAD.md:24-34`). Harness changes and load-time
-fixes such as `MovementOrderTypeInitGuard` need a **fresh launch**, not a reload
-(`CLAUDE.md:48-50`). `install.cmd` renames a locked DLL to `.prev` rather than failing
-(`install.cmd:51-56`).
+shadow copy and logs `[HOTRELOAD] gen2 applied` (`HOTRELOAD.md:37-47`). Harness changes and load-time
+fixes need a **fresh launch**, not a reload (`CLAUDE.md` § *Version + release*); the four that
+cannot be reloaded — `MovementOrderTypeInitGuard`, `ClientBootstrapFix`, `ClanModeSoloFix` and any
+harness change — are listed at `HOTRELOAD.md:139-147`. `install.cmd` renames a locked DLL to `.prev`
+rather than failing (`install.cmd:51-56`).
