@@ -505,7 +505,8 @@ New crash guards and root-cause fixes (all self-disabling; health-reported; self
 - Cross-reload state (guard fire counts, launch session id) persists in a harness-owned shared
   store; per-generation health/self-test lists are reset each reload to avoid duplicates.
 - Known gap (Phase B): `BattleMode`'s foreign-patch stash doesn't yet survive a reload; reloading
-  in `battleMode=solo` can leave BT battle patches lifted (coop unaffected).
+  in `battleMode=solo` can leave BT battle patches lifted (coop unaffected). *(closed in v1.3.2 —
+  the stash moved into the harness bag.)*
 
 ## v1.1.0 — robustness & troubleshooting
 
