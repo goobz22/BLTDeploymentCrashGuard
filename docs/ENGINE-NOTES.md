@@ -8,7 +8,9 @@ are involved**, and **the date** it was proven where that is known.
 How the facts here were established, in rough order of how often each was used:
 
 - **IL of the installed build**, read with the probes in `tools/il-probes/` (`NameSearch`, `Inspect`,
-  `IlDump`, `Callers`, `VerCheck`) — no decompiler. This is what "IL-proven" means below.
+  `IlDump`, `Callers`, `VerCheck`) — no decompiler. This is what "IL-proven" means below. A probe's
+  `NOT FOUND` counts as evidence only once the target's dependency closure resolved — see
+  [§12](#a-probe-not-found-is-not-proof-of-absence-2026-09-04).
 - **Live log-only Harmony tracers** on native methods (`Payload/TracePatches.cs`,
   `Payload/ControlTrace.cs`, `Payload/TimeTrace.cs`, `Payload/RoleTrace.cs`,
   `Payload/CharacterCreationTrace.cs`) reproducing the case with `"tracing": true`.
@@ -16,6 +18,9 @@ How the facts here were established, in rough order of how often each was used:
   `Payload/RuntimeDiagnostics.cs`) and the session-wide first-chance exception capture.
 - **Self-tests** that pin a member or an enum value so a game update breaks loudly
   (`SelfHealing.RegisterTest`); several numbers below are pinned that way.
+- **Decompilation**, for the few entries that say "decompile-proven" rather than "IL-proven" —
+  currently only the `AgingCampaignBehavior` illness flow in
+  [§6](#old-age-illness-death-agingcampaignbehavior) (`Payload/IllnessDeathGuard.cs:8`).
 
 **Adding an entry.** Put it in the subsystem section it belongs to, in this shape: a precise
 statement, the evidence (`file:line`, IL member names, or the trace that captured it), the game
@@ -60,7 +65,11 @@ which runs earlier in `MissionState.OpenNew`. So by the time `AfterStart` adds t
 `ResetAux` with `Mission=live` is a cached re-throw, not the origin — see
 [MovementOrder](#movementorder-is-a-beforefieldinit-struct-whose-init-needs-a-live-mission-2026-09-04).
 
-Evidence: `Payload/MovementOrderInitProbe.cs:12-16`.
+Evidence: the call order is from the IL —
+`IlDump.exe TaleWorlds.MountAndBlade.dll "TaleWorlds.MountAndBlade.MissionState::FinishMissionLoading"`
+(`IL_0030 callvirt Mission::Tick` → `IL_0059 callvirt IMissionSystemHandler::OnMissionAfterStarting`
+→ `IL_006E callvirt Mission::AfterStart`); the `_current`/`AfterStart` half and the cached-re-throw
+consequence are in `Payload/MovementOrderInitProbe.cs:12-16`.
 Members: `MissionState.FinishMissionLoading`, `MissionState.OpenNew`, `Mission.Initialize`,
 `Mission.set_Current`, `Mission._current`, `Mission.AfterStart`, `Formation.ResetAux`.
 
@@ -169,11 +178,16 @@ mod lifts in vanilla mode (`Payload/BattleMode.cs:39-63`):
 The namespace split is real and matters for `AccessTools.TypeByName` lookups — see
 [reflection notes](#enumerating-patch-targets-by-name).
 
-### `Mission.SpawnTroop` has multiple overloads
+### `Mission.SpawnTroop` — enumerate, never name the signature
 
-`Mission.SpawnTroop` has several declared overloads returning `Agent` (public and non-public
-instance methods declared on `Mission` itself). Enumerate and patch all of them rather than naming a
-signature (`Payload/CoopCommandSplit.cs:79-87,:423-429`).
+`Mission.SpawnTroop` has **exactly one** declaration in the installed build: a 15-argument instance
+method returning `Agent` (`Inspect.exe TaleWorlds.MountAndBlade.dll TaleWorlds.MountAndBlade.Mission`
+→ ``method Agent SpawnTroop(IAgentOriginBase, Boolean, Boolean, Boolean, Boolean, Int32, Int32,
+Boolean, Boolean, Nullable`1, Nullable`1, String, ItemObject, FormationClass, Boolean)``). Patch it
+by enumerating every declared method named `SpawnTroop` whose return type is `Agent` — public and
+non-public, `DeclaredOnly` on `Mission` itself — rather than naming that signature, so an added or
+reshaped overload in a future build still binds
+(`Payload/CoopCommandSplit.cs:79-87,:423-429`).
 
 ### Hideout "Sneak in" is the stealth ambush mission (IL-proven, 2026-09-01)
 
@@ -272,11 +286,15 @@ treating it as a property is a silent reflection failure that quietly disables t
 
 - `Formation.set_PlayerOwner(v)` ⇒ `SetControlledByAI(v == null)`. Reassigning `PlayerOwner` also
   flips AI control of that formation (`Payload/PlayerIdentityGuard.cs:127-133`).
-- `Formation.SetControlledByAI(bool isControlledByAI)` **early-returns when the value is unchanged**,
-  so only real flips do anything and a tracer must compare against `IsAIControlled` to log anything
-  meaningful (`Payload/ControlTrace.cs:139-154`). There is also a two-bool overload
-  `SetControlledByAI(bool, bool)`; the second argument is passed `false` when a guard takes a
-  formation back (`Payload/SiegeCommandGuard.cs:93,:428`).
+- `Formation.SetControlledByAI(bool isControlledByAI, bool enforceNotSplittableByAI)` is a
+  **single** declaration — the one-argument call seen in C# is the optional second parameter, so a
+  reflection lookup must ask for `new[] { typeof(bool), typeof(bool) }`
+  (`Payload/SiegeCommandGuard.cs:93`; `Inspect` on `Formation` returns the one line
+  `method Void SetControlledByAI(Boolean, Boolean)`). It **early-returns when the value is
+  unchanged** (`IL_0001 call get_IsAIControlled; IL_0007 beq -> IL_00C7`), so only real flips do
+  anything and a tracer must compare against `IsAIControlled` to log anything meaningful
+  (`Payload/ControlTrace.cs:139-154`). The second argument is passed `false` when a guard takes a
+  formation back (`Payload/SiegeCommandGuard.cs:428`).
 - `Team.SetPlayerRole(bool isPlayerGeneral, bool isPlayerSergeant)` — the player's battle role is
   that **pair of booleans, not an enum** — and it sets every formation
   `SetControlledByAI(!IsPlayerGeneral)`, i.e. it hands **every** formation to the AI when the player
@@ -357,6 +375,13 @@ host mirrors them (`ApplyClientFormationMembership` → `ResolveFormationByClass
 parties' troops by class, so the mask is empty and the client commands nothing. `CoopCommandSplit`
 folds host party into formations I–IV and client into V–VIII so each block is pure. Remote player
 hero id via BT's session ghost-hero string id. Further BT internals: `docs/BT-INTERNALS.md`.
+
+Evidence: `Payload/CoopCommandSplit.cs:19-31` (the IL decode), `:33-35` (the I–IV / V–VIII split),
+`:324-326,:351` (`GhostHeroStringId` read through `PeerDetection.ReadCoopStaticString`);
+`CHANGELOG.md:29-38`.
+Members: `SpNativeBattleHostMissionBehavior.IsClientFormationCommandApproved`,
+`AllowedFormationMask`, `SendFormationMembershipSnapshot`, `ApplyClientFormationMembership`,
+`ResolveFormationByClass`.
 
 ---
 
@@ -547,6 +572,11 @@ while no remote peer is connected (solo host). When our guard blocks the write, 
 changes, so BT retries every tick — which, with the `[TIME]` tracer on, floods the log unless
 coalesced (now handled by `TraceThrottle`).
 
+Evidence: `Payload/TimeEnforcementGuard.cs:8-25` (the run-but-neutralize approach and its history),
+`:83-92` (the three blocked writes — `set_TimeControlMode`, `SetTimeControlModeLock`,
+`set_TimeControlModeLock` — prefixed only while no remote peer is connected);
+`Payload/TimeTrace.cs:38-42` (the `[TIME]` tag); `Payload/TraceThrottle.cs`.
+
 > Scoping the solo time-neutralizer to the campaign map (a 2026-09-04 hypothesis for the
 > sideways-character bug) was tried and **reverted** — it did not affect that bug. Do not re-add it
 > without evidence. The sideways/folded character is a separate, likely GPU-side, vanilla issue.
@@ -620,9 +650,10 @@ frame-starvation hang needs a **time** guard, not an exception guard
   variable set to `MathF.Round(amount * 100f)`, so a repaired effect can reproduce it exactly
   (`Payload/MapIncidentCrashGuard.cs:231-233`).
 - **`IncidentEffect.Consequence()` is the single choke point every incident effect flows through**,
-  returning `List<TextObject>`; `Incident.InvokeOption` is the campaign entry point behind the
-  option-click handler and **also** returns `List<TextObject>` — the return-type check is what
-  disambiguates its overloads. Both are patchable as a family-wide safety net
+  returning `List<TextObject>`; `Incident.InvokeOption(int)` is the campaign entry point behind the
+  option-click handler and **also** returns `List<TextObject>`. It has no overloads — the guard
+  resolves it by bare name and then **asserts** that return type before patching, so a future build
+  that reshapes the method cannot be bound blind. Both are patchable as a family-wide safety net
   (`Payload/MapIncidentCrashGuard.cs:83-98,:279,:294`; `CHANGELOG.md:257-259`).
 - The incident-popup-vs-dead-siege crash **reproduces in pure vanilla singleplayer**: the popup sits
   open while the siege ends, so on confirm no siege exists anywhere to receive progress
@@ -776,7 +807,7 @@ The screen that surfaces all of this — and the rules it applies — is in
 `ChangePlayerCharacterAction.Apply(Hero)` is vanilla's supported mechanism for changing **who the
 player is** — the same path death-succession uses — and it works on the campaign map, **outside a
 mission**. Never call it inside one (`Payload/CoopHeroIdentityLock.cs:22-24,:167`, pinned by the
-self-test at `:322`; `CHANGELOG.md:142-144`). Its co-op use is in [§11](#saveload).
+self-test at `:322`; `CHANGELOG.md:142-144`). Its co-op use is in [§11](#11-saveload).
 
 ---
 
@@ -872,7 +903,9 @@ sibling of this class of bug is in
 
 Signature needed to bind a Harmony finalizer: `GetBehaviors` returns its results through **by-ref
 parameters** — `ref AiBehavior bestAiBehavior, ref IInteractablePoint behaviorObject,
-ref CampaignVec2 bestTargetPoint`. `CampaignVec2` lives in `TaleWorlds.CampaignSystem.Map` and is a
+ref CampaignVec2 bestTargetPoint`. `CampaignVec2` lives in `TaleWorlds.CampaignSystem` — it is
+`IInteractablePoint` that lives in `TaleWorlds.CampaignSystem.Map`, so the finalizer's file needs
+**both** usings (`Payload/PartyAiCrashGuard.cs:4-5` for the finalizer at `:101-102`) — and it is a
 **value type**, so `default(CampaignVec2)` is a valid substitute.
 
 The safe "hold at current position this tick" answer is `AiBehavior.Hold` with a null `behaviorObject`
@@ -914,7 +947,10 @@ build (`Payload/ClanScreenCrashGuard.cs:58-60`).
 
 `TaleWorlds.CampaignSystem.ViewModelCollection.ClanManagement.Categories.ClanPartiesVM` drives the
 tab, through `GetNewPartyLeaderCandidates` (the leader popup list), `GetCanCreateNewParty` (button
-enable + a `TextObject disabledReason`) and `CreateNewClanParty(Hero newLeader)`
+enable + a `TextObject disabledReason`) and
+`CreateNewClanParty(Hero newLeader, int partyGoldLowerThreshold)` — the threshold argument is the
+`ClanFinanceModel.PartyGoldLowerThreshold` value the VM already computed, and the mod sidesteps the
+signature by resolving the method by name only
 (`Payload/ClanPartyCreationAdvisor.cs:46,:72-88,:103,:171`).
 
 Decoded from the installed build's IL (`Payload/ClanPartyCreationAdvisor.cs:19-28`;
@@ -1132,13 +1168,14 @@ into `%USERPROFILE%\Documents` with "crash" in the filename (`collect-diagnostic
 - Bannerlord loads module DLLs — this harness, `0Harmony` and BannerlordTogether — via
   `Assembly.LoadFrom`. **LoadFrom-context assemblies are invisible** to the default probing that
   resolves a byte-loaded assembly's references (`Harness/HotReload.cs:56-58`; field-hit 2026-08-21 15:14).
-- A process can hold **two** copies of `0Harmony`: the game bin ships **2.4.2.0** in the app base, and
-  `Bannerlord.Harmony` module-loads **2.3.6.0** — the copy a module actually binds
-  (`Harness/HotReload.cs:146-148,283-287`; `CHANGELOG.md:216-221,274-278`; field-hit 2026-08-29 22:44).
-  Harmony is **not** in the game's bin folder; it ships as its own module at
-  `<Game>\Modules\Bannerlord.Harmony\bin\Win64_Shipping_Client\0Harmony.dll`, referenced with
-  `Private=false` (`Harness/BLTDeploymentCrashGuard.csproj:30-33`;
-  `Payload/BLTDeploymentCrashGuard.Payload.csproj:54-57`).
+- A process can hold **two** copies of `0Harmony`, and **both are on disk**:
+  `<Game>\bin\Win64_Shipping_Client\0Harmony.dll` is the app-base **2.4.2.0**, and
+  `<Game>\Modules\Bannerlord.Harmony\bin\Win64_Shipping_Client\0Harmony.dll` is the module-loaded
+  **2.3.6.0** — the module copy is the one this mod references with `Private=false` and the one a
+  module actually binds (`Harness/BLTDeploymentCrashGuard.csproj:30-33`;
+  `Payload/BLTDeploymentCrashGuard.Payload.csproj:54-57`; `Harness/HotReload.cs:146-148,283-287`;
+  `CHANGELOG.md:216-221,274-278`; both paths and both versions re-verified on disk 2026-09-04;
+  field-hit 2026-08-29 22:44).
 - `Assembly.Load(byte[])` resolves references via **default-context probing**, which *succeeds* by
   finding the game's own 0Harmony 2.4.2.0 in the app base and binds it silently.
   **`AppDomain.AssemblyResolve` never fires**, because probing succeeded — a resolver only helps when
@@ -1178,7 +1215,7 @@ into `%USERPROFILE%\Documents` with "crash" in the filename (`collect-diagnostic
 - **ButterLib** loads older `System.Collections.Immutable` / `System.Reflection.Metadata` into the
   process, which bind-conflict with Roslyn inside Bannerlord on .NET Framework 4.8 — Roslyn's `Emit`
   can throw for this reason, which is why the prebuilt-DLL path is primary
-  (`Harness/HotReload.cs:21-25`; `Harness/PayloadCompiler.cs:21-23`; `HOTRELOAD.md:46-47`).
+  (`Harness/HotReload.cs:21-25`; `Harness/PayloadCompiler.cs:21-23`; `HOTRELOAD.md:59-61`).
 - Bannerlord **locks the module DLLs it has loaded** (write-blocked) while the game runs, but the NTFS
   **rename** of a locked-for-write file is still permitted — which is why the installer can update a
   running install by renaming the live DLLs to `.prev` (`install.cmd:49-50`).
@@ -1188,9 +1225,13 @@ into `%USERPROFILE%\Documents` with "crash" in the filename (`collect-diagnostic
 
 ### Target framework and the engine assembly split
 
-Bannerlord 1.4.8 runs on **.NET Framework 4.7.2**; both mod assemblies target `net472`, and a mod DLL
-must target `net472` to load (`Harness/BLTDeploymentCrashGuard.csproj:6`;
-`Payload/BLTDeploymentCrashGuard.Payload.csproj:6`).
+Both mod assemblies target **`net472`**, and a mod DLL must target `net472` to load
+(`Harness/BLTDeploymentCrashGuard.csproj:6`; `Payload/BLTDeploymentCrashGuard.Payload.csproj:6`).
+That is a *target framework*, not the runtime the process executes on: the two `.NET Framework 4.8`
+statements in [assembly binding](#assembly-binding-in-a-bannerlord-process-field-proven-2026-08-21--2026-09-01)
+above (no assembly unloading; the ButterLib/Roslyn bind conflict) are about the installed 4.x
+runtime and come from `Harness/HotReload.cs:12-14` and `HOTRELOAD.md:59-61`. A `net472` target runs
+on that runtime — the two facts are not competing claims, and the csproj proves only the first.
 
 The engine assemblies this mod binds: `TaleWorlds.DotNet`, `TaleWorlds.Library`, `TaleWorlds.Core`,
 `TaleWorlds.Localization`, `TaleWorlds.ObjectSystem`, `TaleWorlds.CampaignSystem`, `TaleWorlds.Engine`,
@@ -1199,16 +1240,46 @@ The engine assemblies this mod binds: `TaleWorlds.DotNet`, `TaleWorlds.Library`,
 (`Payload/BLTDeploymentCrashGuard.Payload.csproj:58-89`;
 `Harness/BLTDeploymentCrashGuard.csproj:34-49`).
 
-**SandBox *view* code is not in the game bin**: `SandBox.View.dll` lives in the SandBox **module**
-folder (`<Game>/Modules/SandBox/bin/Win64_Shipping_Client/SandBox.View.dll`), while the
-`TaleWorlds.*`, `SandBox.*` and `StoryMode.*` engine assemblies are in
-`<Game>/bin/Win64_Shipping_Client` (`tools/il-probes/README.md:30-31`).
+**No SandBox or StoryMode code is in the game bin.** `<Game>/bin/Win64_Shipping_Client` holds only
+the `TaleWorlds.*` assemblies (51 DLLs) plus `0Harmony` 2.4.2.0 and the native/third-party DLLs.
+`SandBox.dll`, `SandBox.View.dll`, `SandBox.ViewModelCollection.dll` and `SandBox.GauntletUI*.dll` live in
+`<Game>/Modules/SandBox/bin/Win64_Shipping_Client/`, and `StoryMode.dll` and its siblings in
+`<Game>/Modules/StoryMode/bin/Win64_Shipping_Client/`. Two more view assemblies a probe often needs —
+`TaleWorlds.MountAndBlade.View.dll` and `TaleWorlds.MountAndBlade.GauntletUI.dll` — are *not* in the
+game bin either; they are in `<Game>/Modules/Native/bin/Win64_Shipping_Client/`. The split is
+module-vs-app-base, not view-vs-engine: pointing a probe at
+`<Game>/bin/Win64_Shipping_Client/SandBox.dll` throws `FileNotFoundException` (directory listings
+re-verified 2026-09-04; `tools/il-probes/README.md:30` still lists `SandBox.*` and `StoryMode.*`
+under the game bin and needs the same correction).
 
 The SandBox assembly is **not a compile-time reference** for this mod, so every SandBox type
 (`MissionConversationCameraView`, `GauntletClanScreen`, `HideoutAmbushMissionController`,
 `SandBox.View.Map.MapScreen`) must be resolved by `AccessTools.TypeByName` with a fully-qualified
 string (`Payload/StealthHideoutAdvisor.cs:27`; `Payload/ConversationCameraCrashGuard.cs:23`;
 `Payload/ClanScreenCrashGuard.cs:26`).
+
+### A probe `NOT FOUND` is not proof of absence (2026-09-04)
+
+A probe that loads a target DLL whose **dependency closure does not resolve** silently returns a
+**partial** type list, so a member that exists reads as missing. The probes resolve references out of
+three hardcoded directories only — `Modules/BannerlordTogether`, `Modules/Bannerlord.Harmony` and the
+game bin (`tools/il-probes/Inspect/Inspect.cs:9-19`) — which is *not* the closure of a module
+assembly.
+
+Reproduced: `Inspect.exe <Game>/Modules/SandBox/bin/Win64_Shipping_Client/SandBox.View.dll
+SandBox.View.Map.MapScreen` prints `NOT FOUND`, while `NameSearch` on the same DLL lists the **nested**
+`SandBox.View.Map.MapScreen+MapOverlayType` — the outer type failed to load, the nested names in the
+metadata table still printed. Copying the SandBox module DLLs, the game-bin `TaleWorlds.*` DLLs and
+the **`Modules/Native`** DLLs (`TaleWorlds.MountAndBlade.View`, `.GauntletUI`, `.Platform.PC`) into one
+directory and probing there resolves the type and its members, including
+`HandleClickTimeChange(Boolean)` and `HandleLeftMouseButtonClick(...)` — the two asserted in
+[§4](#the-map-click-speed-downgrade). `Modules/Native` was the missing piece.
+
+So: treat `NOT FOUND` as **inconclusive** until the closure resolves, and never record "the game
+update removed this member" on a bare probe miss. The same artefact hid
+`SandBox.View.Missions.MissionConversationCameraView` ([§10](#10-agents-and-visuals)) and
+`Hero.get_StealthEquipment`, which `IlDump` then showed live at
+`HideoutAmbushMissionController::AfterStart` IL_0052.
 
 ### Enumerating patch targets by name
 
