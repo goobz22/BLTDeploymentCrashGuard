@@ -46,9 +46,14 @@ first; add what you prove.
   `SelfHealing.RegisterTest`, owning a log **tag**; per-mission state resets in `OnMissionInit`.
 - **`critical: true` is earned, not decorative.** Use it only when the fix's absence re-exposes a
   **crash-to-desktop** or makes **battles unplayable** — it puts a warning on the player's screen,
-  so a merely degraded feature must not claim it. Today: `deployment-guards`,
-  `movementorder-typeinit`, `client-bootstrap-fix`, and `battle-mode` *only* when a chokepoint hook
-  is missing (an unresolved lift target degrades and is not critical, `Payload/BattleMode.cs:126-130`).
+  so a merely degraded feature must not claim it. The complete current set of `critical:` call sites:
+  `deployment-guards` (`Payload/DeploymentCrashGuards.cs:42,48`), `movementorder-typeinit`
+  (`Payload/MovementOrderTypeInitGuard.cs:65,78,85,92`), `client-bootstrap-fix`
+  (`Payload/ClientBootstrapFix.cs:71,78`), `bg-tick-budget-guard` when
+  `TryBackgroundCampaignTick` is unresolved (`Payload/BackgroundTickBudgetGuard.cs:66` — a BT rename
+  there re-exposes the co-op background-tick freeze), and `battle-mode` when a chokepoint hook is
+  missing or `Apply` itself throws (`Payload/BattleMode.cs:130,136`; an unresolved lift target
+  degrades and is not critical). Adding or removing one updates this list in the same commit.
 - **Id naming**: kebab-case; the `Diag.Report` component id **is** the `SelfHealing.RecordFire` id;
   the self-test is `"<component>.contract"` (`.loopback` / `.wiring` for the pipeline suites). One
   documented exception — the two deployment finalizers fire as `setup-teams-guard` /
@@ -83,10 +88,14 @@ first; add what you prove.
   queue, `CampaignEvents` in `OnGameStart`, BT types resolved through a candidate-name list
   (`BannerlordTogether.Network.*`, then legacy — `StashSync/StashSyncGuard.cs:120`), reporting
   `DEGRADED`, never throwing.
-- A load-time fix goes **first** in `PayloadEntry.Apply`, before `PatchAll`. A few components still
-  report no health (`PlayerIdentityGuard`, `BootstrapWatch`, the time guards, `PeerDetection`,
-  `PayloadEntry`) — `docs/DIAGNOSTICS.md` § *What `MOD HEALTH:` does not cover*; wire new code up
-  instead. `PlayerIdentityGuard` is the known reset-convention exception: no `OnMissionInit`, it
+- A load-time fix goes **first** in `PayloadEntry.Apply`, before `PatchAll`. Some components still
+  report no health — `PlayerIdentityGuard`, `BootstrapWatch`, the time guards, `PeerDetection`,
+  `PayloadEntry` never do; others go absent *conditionally*, on the early return that precedes their
+  `Diag.Report` (`Payload/BackgroundTickBudgetGuard.cs:57-61`,
+  `Payload/JoinSyncPauseEscape.cs:69-73` when BT is not loaded;
+  `Payload/StealthHideoutAdvisor.cs:37-40` on an older game build). The table in
+  `docs/DIAGNOSTICS.md` § *What `MOD HEALTH:` does not cover* is the maintained list; wire new code
+  up instead of joining it. `PlayerIdentityGuard` is the known reset-convention exception: no `OnMissionInit`, it
   resets in `Tick` via `ReferenceEquals(Mission.Current, _lastMission)`
   (`Payload/PlayerIdentityGuard.cs:29,49-51`).
 - **Hazard:** `Campaign.set_TimeControlMode` carries three of our prefixes (`TimeEnforcementGuard`,
