@@ -16,6 +16,12 @@
     <XmlPoke XmlInputPath="$(MSBuildThisFileDirectory)SubModule.xml"
              Query="/Module/Version/@value"
              Value="v$(Version)" />
+    <!-- dist/ is what install.cmd downloads. Keep ITS SubModule.xml stamped too, so a release can
+         never ship a stale manifest (audit 2026-09-04: nothing else ever wrote dist/SubModule.xml).
+         The two DLLs + dist/manifest.txt are produced by tools/release.sh. -->
+    <Copy SourceFiles="$(MSBuildThisFileDirectory)SubModule.xml"
+          DestinationFolder="$(MSBuildThisFileDirectory)dist"
+          Condition="Exists('$(MSBuildThisFileDirectory)dist')" />
   </Target>
 
 </Project>
