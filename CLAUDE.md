@@ -14,34 +14,16 @@ need a restart. **Payload** (`Payload/` → `…Payload.dll`) — every guard, f
 hot-reloadable, wired by `PayloadEntry.Apply`; ~all iteration is here. `SubModule.xml` points at the
 harness, which loads the payload (`HOTRELOAD.md`).
 
-## Version + release (do ALL of it — it is the release)
+## Version + release
 
-`Directory.Build.props` `<Version>` is the **single** source — never version anything else. A build
-stamps both assemblies and the **repo-root** `SubModule.xml` only; nothing writes
-`dist/SubModule.xml`, so that copy is manual — the easiest to forget.
-
-**Pushing == releasing**: `install.cmd` pulls `dist/`, and the README one-liners curl `install.cmd`,
-`share-log.cmd`, `collect-diagnostics.cmd` from the **repo root of `main`** — release artifacts, not
-tooling. Edit **all three**: each has its own Steam-path list and they have drifted (11 entries in
-`install.cmd:15-25` and `share-log.cmd:14-24`, 6 in `collect-diagnostics.cmd:14-19`).
-
-```bash
-cd Harness && dotnet build -c Release && cd ../Payload && dotnet build -c Release
-```
-
-Deploy both DLLs + `SubModule.xml` to the game module — `<Steam>/…/Mount & Blade II
-Bannerlord/Modules/BLTDeploymentCrashGuard/` (`install.cmd:41-42`), DLLs in its
-`bin/Win64_Shipping_Client/`, XML at its root — **and** to `dist/`, then `md5sum` all three. The
-game's own `bin/Win64_Shipping_Client` is only the csprojs' `GameBin` reference dir, never a deploy
-target. **Nothing cross-checks the harness/payload pair** (the installer curls each file separately;
-the payload's `AssemblyVersion` is a per-build wildcard), so a half-updated `dist/` ships a mismatch.
-
-**Docs ship with the binary**, same commit: a `CHANGELOG.md` entry under the new `<Version>` (bug,
-cause, fix); a numbered README fix entry if player-visible — a crash the previous build still hits
-**must** be listed, the only thing telling players to update; README rows for a new config key and
-log tag; `docs/ENGINE-NOTES.md` for a newly IL-proven fact; a `docs/FIX-REFERENCE.md` row.
-`MovementOrderTypeInitGuard` shipped in v1.3.2 with no `CHANGELOG.md` entry (README #9, `[MO-INIT]`,
-ENGINE-NOTES and FIX-REFERENCE all landed) — the changelog gets forgotten.
+**The checklist lives in `docs/RELEASE.md` — follow it, do not improvise one here.** In short:
+`Directory.Build.props` `<Version>` is the **single** version source; `tools/release.sh` builds both
+assemblies, deploys the three files to the game module **and** `dist/`, writes `dist/manifest.txt`
+(version + a SHA256 per file) and refuses to call the tree release-ready unless every copy
+hash-matches; `install.cmd` re-verifies those hashes on the player's machine with `certutil`, so a
+half-updated `dist/` is caught instead of shipping a mismatched pair. `tools/lint-scripts.sh` guards
+the three player-facing `.cmd` scripts against drift. **Pushing `dist/` == releasing.** Docs ship in
+the same commit (CHANGELOG, README item, FIX-REFERENCE row); `docs/RELEASE.md` enumerates them.
 
 **While the game runs**: deploy the payload only (`[HOTRELOAD] gen2`); harness and load-time fixes
 need a fresh launch.
@@ -60,9 +42,21 @@ first; add what you prove.
 ## Conventions for guards/fixes
 
 - Static class, `Apply(Harmony)`, **idempotent** (`if (_applied) return;` — hot-reload re-applies),
-  reporting `Diag.Report(component, ok, detail, critical: false)` (`critical: true` only for a
-  load-bearing fix — it warns on-screen too), registering `SelfHealing.RegisterTest`, owning a log
-  **tag**; per-mission state resets in `OnMissionInit`.
+  reporting `Diag.Report(component, ok, detail, critical: false)`, registering
+  `SelfHealing.RegisterTest`, owning a log **tag**; per-mission state resets in `OnMissionInit`.
+- **`critical: true` is earned, not decorative.** Use it only when the fix's absence re-exposes a
+  **crash-to-desktop** or makes **battles unplayable** — it puts a warning on the player's screen,
+  so a merely degraded feature must not claim it. Today: `deployment-guards`,
+  `movementorder-typeinit`, `client-bootstrap-fix`, and `battle-mode` *only* when a chokepoint hook
+  is missing (an unresolved lift target degrades and is not critical, `Payload/BattleMode.cs:126-130`).
+- **Id naming**: kebab-case; the `Diag.Report` component id **is** the `SelfHealing.RecordFire` id;
+  the self-test is `"<component>.contract"` (`.loopback` / `.wiring` for the pipeline suites). One
+  documented exception — the two deployment finalizers fire as `setup-teams-guard` /
+  `finish-deployment-guard` under the single `deployment-guards` component.
+- **A decision point is hooked by the guard that owns it, never by a tracer.** `TracePatches` is
+  log-only (`Payload/TracePatches.cs:88`); behaviour must not depend on `"tracing"`. This was a real
+  bug twice: with tracing off, `BattleMode`'s `StartBattle`/`OpenNew` decisions and
+  `EncounterLoopGuard`'s `Finish` stamp never ran (`Payload/EncounterLoopGuard.cs:24-26`).
 - **Every `Apply` exit path reports**, "target type not found" included: a silent return is missing
   from `MOD HEALTH:`, reading as *not built*. A config-disabled guard logs the vanilla consequence
   and reports `(component, true, "disabled by config")` — off on purpose is healthy. Tracers are
@@ -74,7 +68,7 @@ first; add what you prove.
 - Player-visible change: `Log.Screen` **once per mission** beside the detailed `Log.Info`;
   main-thread follow-up goes in an `internal static void Tick()` pumped from `PayloadEntry.Tick` —
   never UI work from the patched call stack.
-- **Session state comes from `PeerDetection`** (`Payload/BattleMode.cs:390`), never hand-rolled
+- **Session state comes from `PeerDetection`** (`Payload/BattleMode.cs:618`), never hand-rolled
   reflection: `IsClient`, `AnyRemotePeerConnected`, `ReadCoopStaticBool/String`, `FindCoopType`,
   `Snapshot` — all tri-state, `null` = *could not read*, so **fail toward co-op**
   (`AnyRemotePeerConnected() != false`): a wrong "alone" sabotages a live session. A battle
@@ -89,19 +83,18 @@ first; add what you prove.
   queue, `CampaignEvents` in `OnGameStart`, BT types resolved through a candidate-name list
   (`BannerlordTogether.Network.*`, then legacy — `StashSync/StashSyncGuard.cs:120`), reporting
   `DEGRADED`, never throwing.
-- A load-time fix goes **first** in `PayloadEntry.Apply`, before `PatchAll`. Older components report
-  no health at all (attribute-based deployment guards, `BattleMode`/`PeerDetection`, `PayloadEntry`,
-  `PlayerIdentityGuard`, `BootstrapWatch`…) — `docs/DIAGNOSTICS.md` § *What `MOD HEALTH:` does not
-  cover*; wire new code up instead. Top gap left: a self-test resolving each `BattleMode` target type
-  and reporting the count (`EnumerateTargets` skips an unresolvable one with a bare `continue`,
-  `Payload/BattleMode.cs:227-234`). `PlayerIdentityGuard` is the known reset-convention exception:
-  no `OnMissionInit`, it resets in `Tick` via `ReferenceEquals(Mission.Current, _lastMission)`
+- A load-time fix goes **first** in `PayloadEntry.Apply`, before `PatchAll`. A few components still
+  report no health (`PlayerIdentityGuard`, `BootstrapWatch`, the time guards, `PeerDetection`,
+  `PayloadEntry`) — `docs/DIAGNOSTICS.md` § *What `MOD HEALTH:` does not cover*; wire new code up
+  instead. `PlayerIdentityGuard` is the known reset-convention exception: no `OnMissionInit`, it
+  resets in `Tick` via `ReferenceEquals(Mission.Current, _lastMission)`
   (`Payload/PlayerIdentityGuard.cs:29,49-51`).
 - **Hazard:** `Campaign.set_TimeControlMode` carries three of our prefixes (`TimeEnforcementGuard`,
   `MapClickSpeedKeeper`, `TimeTrace` when tracing) and Harmony runs every one even when another
-  returns false — read all three before adding a fourth. `[TIME]` reports whether the write survived
-  and the resulting mode (`Payload/TimeTrace.cs:113-119`), never which prefix won — identify that
-  from their own tags (`[TIME-GUARD]`, `[CLICK-SPEED]`).
+  returns false — read all three before adding a fourth. `[TIME]` now **names** the vetoer
+  (`change SUPPRESSED/ALTERED by [TIME-GUARD]` / `[CLICK-SPEED]` / `another patch (not one of ours)`,
+  `Payload/TimeTrace.cs:118-124`) because each vetoing prefix calls `TimeVeto.Note(...)`. A fourth
+  prefix must call it too, or that line will misattribute the veto.
 
 ## Working discipline (house rules, some hook-enforced)
 
@@ -117,9 +110,10 @@ Scratch goes in the session scratchpad, not the repo (`tools/` excepted).
 
 One guard/fix/tracer per `Payload/*.cs` file, header explaining bug + fix ·
 `tests/BirthPayloadTest`, `tests/StashPayloadTest` headless wire-format suites ·
-`tools/il-probes/` IL/reflection probes · `dist/` the three shipped artifacts.
+`tools/il-probes/` IL/reflection probes, `tools/release.sh` + `tools/lint-scripts.sh` ·
+`dist/` the three shipped artifacts + `manifest.txt`.
 
-Docs: `README.md` (player-facing), `CHANGELOG.md`, `HOTRELOAD.md`, and in `docs/`:
+Docs: `README.md` (player-facing), `CHANGELOG.md`, `HOTRELOAD.md`, and in `docs/`: `RELEASE.md`,
 `DIAGNOSTICS.md`, `ENGINE-NOTES.md`, `BT-INTERNALS.md`, `FIX-REFERENCE.md`, `MODDING-GUIDE.md`,
 `MODDING-PITFALLS.md`, `SPEC-pregnancy-coop-sync.md`, `UPSTREAM_CONTRIBUTION.md`, plus root
 `UPSTREAM_BUG_REPORT.md` — which fact goes where is the DOC_MAP table in
