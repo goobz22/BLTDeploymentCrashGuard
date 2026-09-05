@@ -23,7 +23,8 @@ stamps both assemblies and pokes the **repo-root** `SubModule.xml` only; nothing
 
 **Pushing == releasing**: `install.cmd` pulls `dist/`, and the README one-liners curl `install.cmd`,
 `share-log.cmd`, `collect-diagnostics.cmd` from the **repo root of `main`** — release artifacts, not
-tooling (their Steam path list is copy-pasted; edit all three).
+tooling. Each carries its own Steam-path list and they have drifted (11 entries in
+`install.cmd:15-25` and `share-log.cmd:14-24`, 6 in `collect-diagnostics.cmd:14-19`) — edit all three.
 
 ```bash
 cd Harness && dotnet build -c Release && cd ../Payload && dotnet build -c Release
@@ -33,13 +34,17 @@ Deploy both DLLs + `SubModule.xml` to the game module (DLLs → `bin/Win64_Shipp
 module root) **and** `dist/`, then `md5sum` all three across build output, game module and `dist/`.
 **Nothing cross-checks the harness/payload pair** (the installer curls each file separately; the
 payload's `AssemblyVersion` is a per-build wildcard), so a half-updated `dist/` ships a mismatch.
-Game: `<Steam>/steamapps/common/Mount & Blade II Bannerlord/bin/Win64_Shipping_Client`.
+The module is `<Steam>/…/Mount & Blade II Bannerlord/Modules/BLTDeploymentCrashGuard/`
+(`install.cmd:41-42`); the game's own `bin/Win64_Shipping_Client` is only the csprojs' `GameBin`
+reference dir, never a deploy target.
 
 **Docs ship with the binary**, same commit: a `CHANGELOG.md` entry under the new `<Version>` (bug,
 cause, fix); a numbered README fix entry if player-visible — a crash the previous build still hits
 **must** be listed, the only thing telling players to update; README rows for a new config key and
 log tag; `docs/ENGINE-NOTES.md` for a newly IL-proven fact; a `docs/FIX-REFERENCE.md` row.
-`MovementOrderTypeInitGuard` shipped in v1.3.2 with none of them.
+`MovementOrderTypeInitGuard` shipped in v1.3.2 with no `CHANGELOG.md` entry — README #9, the
+`[MO-INIT]` row, the ENGINE-NOTES fact and the FIX-REFERENCE row all landed; the changelog is the
+artifact that gets forgotten.
 
 **While the game runs**: deploy the payload only (`[HOTRELOAD] gen2`); harness and load-time fixes
 need a fresh launch.
@@ -87,14 +92,23 @@ was reverted → `docs/MODDING-PITFALLS.md`. Read them first; add what you prove
 - A **wire/sync** feature mirrors `Payload/StashSync/` and `Payload/PregnancySync/`: engine-free
   model files linked into `tests/*PayloadTest` (never copied), own 4-byte magic on the shared `0x00`
   marker, self-test registered before the enabled check, parse-only receive prefix feeding a `Tick`
-  queue, `CampaignEvents` in `OnGameStart`.
+  queue, `CampaignEvents` in `OnGameStart`, and BT types resolved through a candidate-name list
+  (`BannerlordTogether.Network.*` then legacy — `StashSync/StashSyncGuard.cs:120`) that reports
+  `DEGRADED` rather than throwing.
 - A load-time fix goes **first** in `PayloadEntry.Apply`, before `PatchAll`. Older components report
   no health at all (attribute-based deployment guards, `BattleMode`/`PeerDetection`, `PayloadEntry`,
   `PlayerIdentityGuard`, `BootstrapWatch`…) — `docs/DIAGNOSTICS.md` § *What `MOD HEALTH:` does not
-  cover*; wire new code up instead.
+  cover*; wire new code up instead. The top instrumentation gap is a self-test resolving each
+  `BattleMode` target type and reporting the count — it has no `Diag.Report` and no
+  `SelfHealing.RegisterTest`, and `EnumerateTargets` skips an unresolvable type with a bare
+  `continue` (`Payload/BattleMode.cs:227-234`). `PlayerIdentityGuard` is the known exception to the
+  reset convention: no `OnMissionInit`, it resets in `Tick` via
+  `ReferenceEquals(Mission.Current, _lastMission)` (`Payload/PlayerIdentityGuard.cs:29,49-51`).
 - **Hazard:** `Campaign.set_TimeControlMode` carries three of our prefixes (`TimeEnforcementGuard`,
   `MapClickSpeedKeeper`, `TimeTrace` when tracing) and Harmony runs every one even when another
-  returns false — read all three before adding a fourth. `[TIME]` says which won.
+  returns false — read all three before adding a fourth. `[TIME]` reports whether the write survived
+  and the mode that resulted (`Payload/TimeTrace.cs:113-119`), never which prefix won — identify
+  that from their own tags (`[TIME-GUARD]`, `[CLICK-SPEED]`).
 
 ## Working discipline (house rules, some hook-enforced)
 
@@ -116,15 +130,14 @@ was reverted → `docs/MODDING-PITFALLS.md`. Read them first; add what you prove
 - `README.md` — player-facing: install, numbered fixes, config, tags, troubleshooting, known issues.
   `CHANGELOG.md` — per-version. `HOTRELOAD.md` — the reload workflow.
 - `docs/`: `DIAGNOSTICS.md` (investigate) · `ENGINE-NOTES.md` (engine facts from IL) ·
-  `BT-INTERNALS.md` (BT internals from IL) · `FIX-REFERENCE.md` (per-fix developer table:
+  `BT-INTERNALS.md` (BT internals from IL) · `FIX-REFERENCE.md` (per-fix table:
   tag/config/scope/patched members/limitations/self-test) · `MODDING-GUIDE.md` (public techniques) ·
-  `MODDING-PITFALLS.md` (what bit us; reverted attempts) · `UPSTREAM_CONTRIBUTION.md` + root
-  `UPSTREAM_BUG_REPORT.md` (BT-side).
+  `MODDING-PITFALLS.md` (what bit us; reverted attempts) · `SPEC-pregnancy-coop-sync.md` (the
+  birth-sync design spec) · `UPSTREAM_CONTRIBUTION.md` + root `UPSTREAM_BUG_REPORT.md` (BT-side).
 - `tools/il-probes/` — IL/reflection probes + README. `tests/BirthPayloadTest`,
-  `tests/StashPayloadTest` — headless wire-format suites.
-- `install.cmd`, `share-log.cmd`, `collect-diagnostics.cmd` — installer and log-sharing scripts,
-  served live from `main`. `dist/` — the three shipped artifacts.
-- `SubModule.xml` (manifest, stamped by the build), `Directory.Build.props` (the one `<Version>` +
-  stamp target), `NuGet.config` (nuget.org only).
+  `tests/StashPayloadTest` — headless wire-format suites. `dist/` — the three shipped artifacts.
+- `install.cmd`, `share-log.cmd`, `collect-diagnostics.cmd` — installer/log-sharing, served live
+  from `main`. `SubModule.xml` (manifest, build-stamped), `Directory.Build.props` (the one
+  `<Version>` + stamp target), `NuGet.config` (nuget.org only).
 - `.claude/rules/*.md` — path-scoped conventions that auto-load with the files they cover;
   `.claude/skills/investigate-crash/SKILL.md` — invoke on any crash, freeze or pasted log.
