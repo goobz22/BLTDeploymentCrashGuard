@@ -15,7 +15,12 @@ Work down the list; do not skip to a fix.
 
 1. **Collect the evidence.** `Modules/BLTDeploymentCrashGuard/CrashGuard.log` plus its rotated
    segments (`.1 … .6`), TaleWorlds' `rgl_log_*` / `rgl_log_errors_*` / `watchdog_*`, and any
-   ButterLib report (§4). `collect-diagnostics.cmd` gathers them in one pass.
+   crash report (§4). `collect-diagnostics.cmd` gathers only part of that — `CrashGuard.log`,
+   `CrashGuard.log.1`, `guardconfig.json`, the Desktop `bt-sync-*.txt` files and the newest
+   `%USERPROFILE%\Documents\*crash*.html` (`collect-diagnostics.cmd:33-42`, and its own closing
+   banner at `:66` says so). Segments `.2 … .6` and everything under
+   `C:/ProgramData/Mount and Blade II Bannerlord/logs/` are **not** collected: none of the three
+   scripts reads that folder. Attach those by hand.
 2. **Identify the build that produced the log.** The banner line carries the mod version, harness
    build time and session id; `[HOTRELOAD] genN applied` says which payload generation was live at
    the moment of the crash (health and tracer lines are re-printed per generation).
@@ -85,7 +90,7 @@ Diagnostics added in the 2026-09-04 investigation:
 | Tag | What it gives you |
 |---|---|
 | `[CHARGEN]` | Character-creation lifecycle + a **session-wide first-chance exception capture** with the full inner-exception chain and the throwing frames. |
-| `[MO-PROBE]` | (dev) logs each `MovementOrder` construction + Mission.Current state — an origin probe for the type-init crash. |
+| `[MO-PROBE]` | (dev) logs the **first 12** `MovementOrder` constructions + `Mission.Current` state, and any throw out of the ctor at the instant it is thrown (`Payload/MovementOrderInitProbe.cs:27,56,73-92`). After the 12th it is silent except on a throw — an origin probe for the type-init crash, not a census. |
 | `[MO-INIT]` | The `MovementOrder` type-init guard's result at load: "initialized safely" or "already poisoned". |
 | `[DIAG]` | Memory + engine-state heartbeat (WS/private/managed, GC counts, handles, threads; Mission/GameState/Campaign) every ~15 s and at every mission transition. Use it to see a leak/balloon build up before a symptom. |
 | `[repeat] … ×N` | A high-frequency line coalesced by `TraceThrottle` (see below). |
@@ -103,6 +108,8 @@ payload generation from `Apply`. Read it before trusting anything a tracer did o
 | `[TIME] time-control tracer active on N method(s)` | the `Campaign.set_TimeControlMode` / lock tracer. |
 | `[TIME-GUARD] shared-pause tracer active on N method(s)` | the shared-pause observation hooks. |
 | `[TRACE] tracer active on N method overload(s)` | the generic tracer in `TracePatches.cs`. |
+| `[ROLE] role-transition tracer active (LoadSaveGameData hooks=N)` | co-op role across save loads (`Payload/RoleTrace.cs:61`). |
+| `[MO-PROBE] MovementOrder ctor origin probe active (logs first N constructions + any throw)` | the dev origin probe from the tag table above (`Payload/MovementOrderInitProbe.cs:44`). |
 | `[<TAG>] type not found: X` | the type could not be resolved by name — a game/BT rename, nothing was hooked. |
 | `[<TAG>] no patchable method T.M` | the type resolved, the method did not. |
 
@@ -110,11 +117,24 @@ payload generation from `Apply`. Read it before trusting anything a tracer did o
 reflection everywhere, a silent hook miss is indistinguishable from "the bug did not happen", so a
 tracer that prints no count is a tracer you cannot reason from — fix the count first.
 
+Two tracers can print **no load line at all**, so their absence is ambiguous rather than a count of
+zero:
+
+- `RoleTrace.Apply` returns before logging anything when `PeerDetection.FindCoopType("CoopSession")`
+  is null (`Payload/RoleTrace.cs:39-42`) — a missing `[ROLE] … active` line means *either* BT is not
+  loaded *or* BT renamed `CoopSession`, and the log cannot tell you which.
+- `CoopBattleTrace` prints its `active on N method(s)` line only inside `if (n > 0)`
+  (`Payload/CoopBattleTrace.cs:43-46`); with nothing hooked you get only per-type
+  `[COOP-BATTLE] type not found: X` lines (`:63`), never an `N = 0` count. Do not wait for one.
+
 ### What `MOD HEALTH:` does not cover
 
-`MOD HEALTH:` is built from the components that called `Diag.Report`, and is printed once per
-generation from `PayloadEntry.Apply` (with `[SELFTEST]` following when `"selfTest": true`). A
-component that never reports is **absent**, not healthy — and several shipped ones never report:
+`MOD HEALTH:` is built from the components that called `Diag.Report`. It is printed from
+`PayloadEntry.Apply` (`Payload/PayloadEntry.cs:102`, with `[SELFTEST]` following when
+`"selfTest": true`) **and again inside the `[HOTRELOAD] genN applied` line**
+(`Harness/HotReload.cs:381`) — so a reloaded generation produces two copies and a fresh launch one;
+do not count `MOD HEALTH:` lines as generations. A component that never reports is **absent**, not
+healthy — and several shipped ones never report:
 
 | Component | What it reports | Where it does show up |
 |---|---|---|
@@ -127,7 +147,9 @@ component that never reports is **absent**, not healthy — and several shipped 
 Practical consequences when reading a log:
 
 - A fix missing from `MOD HEALTH:` may still be loaded. Check `GUARD ACTIVITY:` and the fix's own
-  tag before concluding it did not apply.
+  tag before concluding it did not apply. `GUARD ACTIVITY:` is itself throttled — at most one line
+  per 120 s, and only reprinted when the summary text changes (`Payload/PayloadEntry.cs:189-202`) —
+  so *its* absence is not evidence either; grep the tag and `SUPPRESSED crash in` too.
 - A BT or game rename under `BattleTargets` produces **fewer patched methods, not a degraded
   component** — compare the `[BATTLE-MODE]` counts against a known-good log rather than trusting
   the health line.
@@ -162,8 +184,8 @@ manifested frame.
   `CrashGuard.log.1 … .6` (~48 MB of history), checked every 256 writes. A burst no longer
   discards the evidence being chased.
 - **Throttling** (`TraceThrottle`): identical repeated tracer lines are coalesced — first
-  occurrence logs in full, repeats collapse to `[repeat] key ×N in Ys (collapsed)` at most every
-  5 s. This is why a per-tick fight (e.g. BT re-requesting a time mode our guard blocks) no longer
+  occurrence logs in full, repeats collapse to `[repeat] key ×N in Ys (identical, collapsed)` at
+  most every 5 s (`Payload/TraceThrottle.cs:31,82`). This is why a per-tick fight (e.g. BT re-requesting a time mode our guard blocks) no longer
   floods the log. When adding a high-frequency tracer, route it through `TraceThrottle.Emit(key, msg)`.
 
 ---
@@ -173,8 +195,11 @@ manifested frame.
 - TaleWorlds logs: `C:/ProgramData/Mount and Blade II Bannerlord/logs/rgl_log_*.txt` (and
   `rgl_log_errors_*`, `watchdog_*`). `watchdog_*` carries the GPU/build tags; an
   `Unhandled Exception Code 0xE0434352` in `rgl_log_*` is a managed exception that killed the process.
-- ButterLib crash reports (when it catches one): under the user's Documents Bannerlord folder.
-  Note ButterLib does **not** catch every fatal — the mod's own first-chance capture is the backstop.
+- HTML crash reports: `%USERPROFILE%/Documents/crashreport*.html` — the Documents **root**, which is
+  the only place `collect-diagnostics.cmd:41-42` looks (newest `*.html` whose name contains "crash").
+  Reports have been observed there, not in the `Documents/Mount and Blade II Bannerlord/` subfolder
+  that `README.md:722-724` names; check both before concluding no report exists. ButterLib does
+  **not** catch every fatal — the mod's own first-chance capture is the backstop.
 
 ---
 
