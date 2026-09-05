@@ -1,5 +1,5 @@
 ---
-paths: ["docs/**", "tools/**", "README.md", "CHANGELOG.md"]
+paths: ["docs/**", "tools/**", "README.md", "CHANGELOG.md", "HOTRELOAD.md", "UPSTREAM_BUG_REPORT.md"]
 ---
 
 # Docs and tools — which fact goes where
@@ -19,9 +19,12 @@ documents summarise code, the code does not summarise them — when they disagre
 | `docs/DIAGNOSTICS.md` | How to investigate: probes, tracing, first-chance capture, log tags, rotation | Engine facts themselves |
 | `docs/ENGINE-NOTES.md` | Bannerlord engine facts **proven** from IL, per subsystem, with evidence + date | Speculation, BT internals |
 | `docs/BT-INTERNALS.md` | BannerlordTogether internals as observed from IL — unofficial, version-pinned | Vanilla engine facts |
-| `docs/FIX-REFERENCE.md` | Developer per-fix entries + the four indexes | Player-facing prose |
+| `docs/FIX-REFERENCE.md` | Developer per-fix entries + the **five** indexes (co-op scope · log tag → file · config key → file · patched member → fix · on-screen message → file) | Player-facing prose |
 | `docs/MODDING-GUIDE.md` | Reusable public techniques, each in production here | What went wrong |
 | `docs/MODDING-PITFALLS.md` | What bit us: mistakes, reverted attempts, gotchas, where each rule is now enforced | Techniques that just work |
+| `docs/SPEC-pregnancy-coop-sync.md` | The design spec for the co-op pregnancy/birth sync feature: problem, goal, wire format, host-authoritative flow | Per-fix reference rows; BT internals beyond what the spec needs |
+| `docs/UPSTREAM_CONTRIBUTION.md` | Which of our fixes are worth offering to the BT authors, ranked by value and self-containedness | The bug evidence itself |
+| `UPSTREAM_BUG_REPORT.md` (repo root) | The BT-side bug report as sent: symptoms, logs, the pinned environment. It is the environment-of-record other docs cite (`docs/BT-INTERNALS.md:15`) | Our own fix mechanics |
 | `CHANGELOG.md` | Per-version, user-visible: what changed and why | Ongoing investigation notes |
 | `tools/il-probes/README.md` | How to build and run the probes | Findings the probes produced |
 
@@ -37,14 +40,20 @@ pin if a finding is version-specific.
 
 ## Every new fix touches five places
 
-1. `README.md` — a numbered item under Crash fixes / Co-op & gameplay fixes / Diagnostics.
-2. The guard's `[TAG]` — README's grep-tag list (`README.md:246-248`) and the log-tag index in
-   `docs/FIX-REFERENCE.md`.
+1. `README.md` — a numbered item under Crash fixes (`README.md:77`), Co-op & gameplay fixes
+   (`README.md:172`) or Diagnostics & robustness (`README.md:444`).
+2. The guard's `[TAG]` — README's grep-tag legend (`README.md:461-490`) and the log-tag index in
+   `docs/FIX-REFERENCE.md:4059`. `[GATE]` and `[IDENTITY]` are already shared by two components
+   each (`README.md:468-472`); a new fix takes its own tag rather than joining either.
 3. `README.md` `## Config` table **and** `GuardConfig.DefaultJson` — a row and a documented key,
    if the fix adds one.
 4. `docs/FIX-REFERENCE.md` — a full entry: the header fields (README item · Source · Class · Tag ·
    Config · Scope) then Mechanism, Patched members, Limitations, Self-test
-   (`docs/FIX-REFERENCE.md:10-25`), plus the index rows.
+   (`docs/FIX-REFERENCE.md:10-25`), plus a row in each of the **five** indexes that applies:
+   Index 0 co-op scope (`:4044`), Index 1 log tag → file (`:4059`), Index 2 config key → file
+   (`:4118`), Index 3 patched member → fix (`:4149`), Index 4 on-screen message → file (`:4266`).
+   That document's own preamble (`docs/FIX-REFERENCE.md:4`) still says "three lookup indexes" and is
+   wrong; its table of contents (`docs/FIX-REFERENCE.md:53-56`) lists all five — trust the headings.
 5. `CHANGELOG.md` — an entry under the version being released, saying the symptom, the proven cause
    and the fix.
 
@@ -53,9 +62,14 @@ trap → MODDING-PITFALLS; a technique worth reusing → MODDING-GUIDE.
 
 ## Probes live in `tools/il-probes`
 
-Standalone net472 console exes that read the **installed** assemblies without a decompiler; each
-loads a target DLL by path and resolves dependencies from the game `bin` + module folders
-(`tools/il-probes/README.md:3-6`). The game path is hardcoded near the top of each `.cs`.
+Standalone net472 console exes that read the **installed** assemblies without a decompiler
+(`tools/il-probes/README.md:3-6`). The four IL readers — `NameSearch`, `Inspect`, `IlDump`,
+`Callers` — load a target DLL by path, hardcode the Steam game path near the top of their `.cs`
+(`tools/il-probes/Inspect/Inspect.cs:9-10`) and install an `AssemblyResolve` handler that probes the
+game `bin` + module folders (`Inspect.cs:20-25`). `VerCheck` is the exception: five lines that read
+assembly identity only, with no game path and no resolver (`tools/il-probes/VerCheck/VerCheck.cs:1-5`),
+which is why it works on any DLL. `tools/il-probes/README.md:5-6,15` states the "each" form and
+carries the same over-broad wording — fix it there too when that file is next touched.
 
 ```
 cd tools/il-probes/<Tool> && dotnet build -c Release
@@ -71,4 +85,4 @@ cd tools/il-probes/<Tool> && dotnet build -c Release
 | `VerCheck` | `VerCheck.exe <dll>` — assembly version identity |
 
 Durable tooling belongs in `tools/`; throwaway probe scripts belong in the session scratchpad, not
-the repo (`CLAUDE.md:92-93`). A new tool gets a row in `tools/il-probes/README.md`.
+the repo (`CLAUDE.md` § *Working discipline*). A new tool gets a row in `tools/il-probes/README.md`.
