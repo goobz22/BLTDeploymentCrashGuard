@@ -22,8 +22,8 @@ stamps both assemblies and the **repo-root** `SubModule.xml` only; nothing write
 
 **Pushing == releasing**: `install.cmd` pulls `dist/`, and the README one-liners curl `install.cmd`,
 `share-log.cmd`, `collect-diagnostics.cmd` from the **repo root of `main`** — release artifacts, not
-tooling. Each carries its own Steam-path list and they have drifted (11 entries in
-`install.cmd:15-25` and `share-log.cmd:14-24`, 6 in `collect-diagnostics.cmd:14-19`) — edit all three.
+tooling. Edit **all three**: each has its own Steam-path list and they have drifted (11 entries in
+`install.cmd:15-25` and `share-log.cmd:14-24`, 6 in `collect-diagnostics.cmd:14-19`).
 
 ```bash
 cd Harness && dotnet build -c Release && cd ../Payload && dotnet build -c Release
@@ -41,9 +41,8 @@ so a half-updated `dist/` ships a mismatch.
 cause, fix); a numbered README fix entry if player-visible — a crash the previous build still hits
 **must** be listed, the only thing telling players to update; README rows for a new config key and
 log tag; `docs/ENGINE-NOTES.md` for a newly IL-proven fact; a `docs/FIX-REFERENCE.md` row.
-`MovementOrderTypeInitGuard` shipped in v1.3.2 with no `CHANGELOG.md` entry (README #9, the
-`[MO-INIT]` row, the ENGINE-NOTES fact and the FIX-REFERENCE row all landed) — the changelog is the
-artifact that gets forgotten.
+`MovementOrderTypeInitGuard` shipped in v1.3.2 with no `CHANGELOG.md` entry (README #9, `[MO-INIT]`,
+ENGINE-NOTES and FIX-REFERENCE all landed) — the changelog is the one that gets forgotten.
 
 **While the game runs**: deploy the payload only (`[HOTRELOAD] gen2`); harness and load-time fixes
 need a fresh launch.
@@ -56,21 +55,19 @@ probes in `tools/il-probes/` (`NameSearch`, `Inspect`, `IlDump`, `Callers`, `Ver
 installed assemblies without a decompiler. Runtime: `"tracing": true` in `guardconfig.json`,
 reproduce, read `CrashGuard.log` — the session-wide first-chance capture logs even swallowed
 exceptions with the inner chain and the **live** stack. A failed type initializer is **cached**: a
-logged throw can be a re-throw.
-
-Engine facts → `docs/ENGINE-NOTES.md`; BT internals → `docs/BT-INTERNALS.md`; what bit us and what
-was reverted → `docs/MODDING-PITFALLS.md`. Read them first; add what you prove.
+logged throw can be a re-throw. Engine facts → `ENGINE-NOTES.md`; BT internals → `BT-INTERNALS.md`;
+what bit us and what was reverted → `MODDING-PITFALLS.md`. Read them first; add what you prove.
 
 ## Conventions for guards/fixes
 
 - Static class, `Apply(Harmony)`, **idempotent** (`if (_applied) return;` — hot-reload re-applies),
   reporting `Diag.Report(component, ok, detail, critical: false)` (`critical: true` only for a
-  load-bearing fix — it also warns on-screen), registering `SelfHealing.RegisterTest` and owning a
-  log **tag**; per-mission state resets in `OnMissionInit`.
+  load-bearing fix — it warns on-screen too), registering `SelfHealing.RegisterTest`, owning a log
+  **tag**; per-mission state resets in `OnMissionInit`.
 - **Every `Apply` exit path reports**, "target type not found" included: a silent return is missing
-  from `MOD HEALTH:`, reading as *not built*. A guard disabled by config logs the vanilla
-  consequence and reports `(component, true, "disabled by config")` — off on purpose is healthy.
-  Tracers are exempt: their load line *is* their health report, so print the resolved count.
+  from `MOD HEALTH:`, reading as *not built*. A config-disabled guard logs the vanilla consequence
+  and reports `(component, true, "disabled by config")` — off on purpose is healthy. Tracers are
+  exempt: their load line *is* their health report, so print the resolved count.
 - **Fail open** — wrap every patch body; the catch returns the vanilla-preserving value (`return;` /
   `return true` / `return __exception`), `return null` from a finalizer only for a deliberate
   suppressor. A depth counter decrements in a **finalizer**, never a postfix. Reflect (`AccessTools`)
@@ -81,9 +78,9 @@ was reverted → `docs/MODDING-PITFALLS.md`. Read them first; add what you prove
 - **Session state comes from `PeerDetection`** (`Payload/BattleMode.cs:390`), never hand-rolled
   reflection: `IsClient`, `AnyRemotePeerConnected`, `ReadCoopStaticBool/String`, `FindCoopType`,
   `Snapshot` — all tri-state, `null` = *could not read*, so **fail toward co-op**
-  (`AnyRemotePeerConnected() != false`): a wrong "alone" sabotages a live session. A battle chokepoint
-  calls `BattleMode.DecideAndApply(PayloadEntry.Harmony, "<reason>")` — the live generation's
-  Harmony, never a captured one.
+  (`AnyRemotePeerConnected() != false`): a wrong "alone" sabotages a live session. A battle
+  chokepoint calls `BattleMode.DecideAndApply(PayloadEntry.Harmony, "<reason>")` — the live
+  generation's Harmony, never a captured one.
 - **A `GuardConfig` knob is a launch-time snapshot** (the file is cached behind a `_loaded` latch)
   and cannot be hot-reloaded; one that must flip mid-session reads fresh from `GuardConfig.Path` like
   `PayloadEntry.FreshTracingFlag()` — say so in its `_<key>` doc string.
@@ -91,16 +88,16 @@ was reverted → `docs/MODDING-PITFALLS.md`. Read them first; add what you prove
   model files linked into `tests/*PayloadTest` (never copied), own 4-byte magic on the shared `0x00`
   marker, self-test registered before the enabled check, parse-only receive prefix feeding a `Tick`
   queue, `CampaignEvents` in `OnGameStart`, BT types resolved through a candidate-name list
-  (`BannerlordTogether.Network.*` then legacy, `StashSync/StashSyncGuard.cs:120`) that reports
-  `DEGRADED` rather than throwing.
+  (`BannerlordTogether.Network.*`, then legacy — `StashSync/StashSyncGuard.cs:120`) that reports
+  `DEGRADED` instead of throwing.
 - A load-time fix goes **first** in `PayloadEntry.Apply`, before `PatchAll`. Older components report
   no health at all (attribute-based deployment guards, `BattleMode`/`PeerDetection`, `PayloadEntry`,
   `PlayerIdentityGuard`, `BootstrapWatch`…) — `docs/DIAGNOSTICS.md` § *What `MOD HEALTH:` does not
-  cover*; wire new code up instead. Highest-value gap left: a self-test resolving each `BattleMode`
-  target type and reporting the count (`EnumerateTargets` skips an unresolvable one with a bare
-  `continue`, `Payload/BattleMode.cs:227-234`). `PlayerIdentityGuard` is the known exception to the
-  reset convention — no `OnMissionInit`, it resets inside `Tick` via
-  `ReferenceEquals(Mission.Current, _lastMission)` (`Payload/PlayerIdentityGuard.cs:29,49-51`).
+  cover*; wire new code up instead. Top gap left: a self-test resolving each `BattleMode` target type
+  and reporting the count (`EnumerateTargets` skips an unresolvable one with a bare `continue`,
+  `Payload/BattleMode.cs:227-234`). `PlayerIdentityGuard` is the known exception to the reset
+  convention — no `OnMissionInit`; it resets in `Tick` via `ReferenceEquals(Mission.Current,
+  _lastMission)` (`Payload/PlayerIdentityGuard.cs:29,49-51`).
 - **Hazard:** `Campaign.set_TimeControlMode` carries three of our prefixes (`TimeEnforcementGuard`,
   `MapClickSpeedKeeper`, `TimeTrace` when tracing) and Harmony runs every one even when another
   returns false — read all three before adding a fourth. `[TIME]` reports whether the write survived
@@ -109,16 +106,15 @@ was reverted → `docs/MODDING-PITFALLS.md`. Read them first; add what you prove
 
 ## Working discipline (house rules, some hook-enforced)
 
-- **Never guess a root cause** — prove it from IL/logs with a probe; a web result is a lead, not a
-  diagnosis. Revert speculative changes when evidence contradicts them; keep the diagnostics.
-- **Do not push mid-investigation** — a push releases to players; iterate on a local deploy, push
-  once the fix is proven. The owner says when to ship.
-- **git**: never `reset` / `checkout -- <path>` / `restore` / `stash` / `clean` / `revert` (discard
-  family); `env -u GIT_DIR git -C "<dir>"`; multi-line messages via `git commit -F <file>` (the hook
-  greps commit bodies — reword prose containing "stash"); keep the `Co-Authored-By` trailer.
-- **No PowerShell** (bun/git/dotnet and the Bash tool only). **Never kill the owner's game or Chrome
-  process** — read logs, don't force-close. Scratch goes in the session scratchpad, not the repo
-  (`tools/` excepted).
+**Never guess a root cause** — prove it from IL/logs with a probe; a web result is a lead, not a
+diagnosis. Revert speculative changes when evidence contradicts them; keep the diagnostics. **Do not
+push mid-investigation** — a push releases to players; iterate on a local deploy and push once the
+fix is proven; the owner says when to ship. **git**: never `reset` / `checkout -- <path>` /
+`restore` / `stash` / `clean` / `revert` (discard family); `env -u GIT_DIR git -C "<dir>"`;
+multi-line messages via `git commit -F <file>` (the hook greps commit bodies — reword prose
+containing "stash"); keep the `Co-Authored-By` trailer. **No PowerShell** (bun/git/dotnet and the
+Bash tool only). **Never kill the owner's game or Chrome process** — read logs, don't force-close.
+Scratch goes in the session scratchpad, not the repo (`tools/` excepted).
 
 ## Map of the repo
 
@@ -126,15 +122,11 @@ was reverted → `docs/MODDING-PITFALLS.md`. Read them first; add what you prove
 lifecycle, logging, config, reload engine, self-heal · `README.md` player-facing (install, numbered
 fixes, config, tags, troubleshooting, known issues) · `CHANGELOG.md` per-version · `HOTRELOAD.md`
 the reload workflow · `tools/il-probes/` IL/reflection probes + README · `tests/BirthPayloadTest`,
-`tests/StashPayloadTest` headless wire-format suites · `dist/` the three shipped artifacts ·
-`install.cmd`, `share-log.cmd`, `collect-diagnostics.cmd` installer/log-sharing, served live from
-`main` · `SubModule.xml` (manifest, build-stamped) · `Directory.Build.props` (the one `<Version>` +
-stamp target) · `NuGet.config` (nuget.org only) · `.claude/rules/*.md` path-scoped conventions that
-auto-load with the files they cover · `.claude/skills/investigate-crash/SKILL.md`, invoked on any
-crash, freeze or pasted log.
+`tests/StashPayloadTest` headless wire-format suites · `dist/` the three shipped artifacts.
 
-`docs/`: `DIAGNOSTICS.md` (investigate) · `ENGINE-NOTES.md` (engine facts from IL) ·
-`BT-INTERNALS.md` (BT internals from IL) · `FIX-REFERENCE.md` (per-fix table: tag/config/scope/
-patched members/limitations/self-test) · `MODDING-GUIDE.md` (public techniques) ·
-`MODDING-PITFALLS.md` (what bit us; reverted attempts) · `SPEC-pregnancy-coop-sync.md` (birth-sync
-design) · `UPSTREAM_CONTRIBUTION.md` + root `UPSTREAM_BUG_REPORT.md` (BT-side).
+`docs/`: `DIAGNOSTICS.md` · `ENGINE-NOTES.md` · `BT-INTERNALS.md` · `FIX-REFERENCE.md` ·
+`MODDING-GUIDE.md` · `MODDING-PITFALLS.md` · `SPEC-pregnancy-coop-sync.md` (birth-sync design) ·
+`UPSTREAM_CONTRIBUTION.md`, plus root `UPSTREAM_BUG_REPORT.md` — which fact belongs in which is the
+DOC_MAP table in `.claude/rules/blt-docs-tools.md`. That rule and its siblings are path-scoped and
+auto-load with the files they cover; `.claude/skills/investigate-crash/SKILL.md` is for any crash,
+freeze or pasted log.
