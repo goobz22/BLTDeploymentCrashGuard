@@ -35,6 +35,12 @@ namespace BLTDeploymentCrashGuard
                     return;
                 }
 
+                // MUST be first: initialize the MovementOrder struct safely before any patch
+                // that references Formation/OrderController makes the CLR prepare (and, because
+                // it is beforefieldinit, run the static ctor of) MovementOrder while Mission.Current
+                // is null — which permanently poisons the type and crashes every battle.
+                MovementOrderTypeInitGuard.ApplyEarly(harmony);
+
                 // Attribute-based patches (the two deployment crash finalizers) for THIS assembly.
                 harmony.PatchAll(typeof(PayloadEntry).Assembly);
 
