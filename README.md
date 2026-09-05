@@ -348,8 +348,9 @@ Nothing is written outside those two folders, so there is nothing else to clean 
     character"*. It is a corrective net over a BannerlordTogether defect, not a prevention — expect
     a brief moment as the wrong character. Since v1.3.2 every correction is fire-counted, so
     `player-identity-guard=N` appears in `GUARD ACTIVITY:` — that is how you tell whether the swap
-    still happens on your machine at all (and, one day, that it can be retired). It still registers
-    no `MOD HEALTH:` entry and no self-test.
+    still happens on your machine at all (and, one day, that it can be retired). Since this release
+    it also reports `player-identity-guard` in `MOD HEALTH:` and runs a
+    `player-identity-guard.contract` self-test that pins the mission/agent members it writes.
 
 14. **Time fixes (co-op)** — four separate fixes:
     - *Keep fast-forward through map clicks* — exactly one transition is vetoed: the
@@ -596,9 +597,9 @@ Nothing is written outside those two folders, so there is nothing else to clean 
     fails to resolve, BannerlordTogether was likely updated and this mod needs a matching update —
     but read the caveats in
     [Is the mod actually doing anything?](#is-the-mod-actually-doing-anything): a fix that is
-    *disabled by config* still reports healthy, and a handful of components (the player-identity
-    guard, the `BootstrapAborted` watcher, four of the five time fixes, the log streamer, the
-    tracers) still register no health entry at all.
+    *disabled by config* still reports healthy, a guard whose BannerlordTogether type has not
+    loaded yet reports healthy as *inert*, and only the log streamer and the tracers register no
+    health entry at all.
 
     When something is NOT resolved the summary line now spells out how to read it: *"read each
     detail: a BannerlordTogether OR game update may have renamed a member; a detail saying 'inert',
@@ -755,11 +756,13 @@ It uploads `CrashGuard.log` to a file host with a 24-hour link and puts the link
   the exceptions: a component that resolved contributes only to the `N active` total and is never
   named, so its detail text never reaches the log at all — only NOT-resolved components are listed,
   each with its detail in brackets. A guard turned off in
-  `guardconfig.json` still counts as resolved, and a handful
-  of components still register no health entry at all — the player-identity guard (#13), the
-  `BootstrapAborted` watcher, four of the five time fixes, the log streamer and the tracers (see
-  the third design principle). For those, check the guard's own `active …` line and its
-  patched-method count. Every crash guard *does* report now, so a crash fix missing from the
+  `guardconfig.json` still counts as resolved, a guard whose BannerlordTogether type has not
+  loaded yet counts as resolved too (its detail says *inert*), and only the log streamer and the
+  tracers register no health entry at all (see the third design principle). For those, check the
+  tracer's own `active …` line and its hooked-method count. The line is printed at load and again
+  at game start (tagged *re-checked at game start*); read the second one — a guard whose
+  BannerlordTogether type loaded late has resolved by then, and the newer report replaces the
+  older. Every guard and fix *does* report now, so a fix missing from the
   summary is a real problem rather than a known blind spot. The startup block also carries
   `payload build HH:mm:ss applying on <id>` and, once everything is wired,
   `patches applied; battleMode=<mode> tracing=<bool>` — the one line that states the effective
