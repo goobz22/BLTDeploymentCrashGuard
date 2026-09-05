@@ -51,8 +51,8 @@ Design principles:
   the party-AI tick skip (#6), the background-tick throttle (#19), the encounter-loop breaker (#7),
   the map-incident repair (#8) and the two time vetoes (#14) — which means they do run on every
   call, but only to make a cheap check and step aside; the party-AI and map-incident fixes pair that
-  prefix with finalizers for anything that still throws, and #9 is a transpiler that changes one
-  instruction. Root fixes go inert when the bad condition stops occurring: if TaleWorlds or
+  prefix with finalizers for anything that still throws, and #9 is a transpiler that rewrites a
+  single call site. Root fixes go inert when the bad condition stops occurring: if TaleWorlds or
   BannerlordTogether fixes something upstream, our fix simply never fires again — the guard then
   stops appearing in `GUARD ACTIVITY:` and can be retired. Nearly every guard is fire-counted; the
   `MovementOrder` type-init fix (#9) is not, because it is a one-shot load-time repair rather than a
@@ -271,8 +271,14 @@ Nothing is written outside those two folders, so there is nothing else to clean 
    constructor is then forced to run immediately under the patched constructor, so the type is cached
    successfully initialized for the whole process. It applies solo and in co-op, runs **first**,
    before any other patch, and logs its outcome as `[MO-INIT] MovementOrder initialized safely`.
-   Being a load-time fix it needs a **fresh game launch** — a hot-reload cannot deliver it. Root
-   cause proven from IL: `docs/ENGINE-NOTES.md`.
+   Being a load-time fix it needs a **fresh game launch** — a hot-reload cannot deliver it. It
+   reports the `movementorder-typeinit` health component (critical) and a
+   `movementorder-typeinit.contract` self-test that re-resolves the constructor, re-checks the
+   premise the fix rests on (`MovementOrder` is still a `beforefieldinit` struct), asserts exactly
+   **one** transpiled site, and calls the null-safe time helper. If a game update ever makes the
+   premise false, that self-test says so rather than the fix quietly becoming pointless. It is the
+   one guard with no fire count — a one-shot load-time repair, not a recurring guard. Root cause
+   proven from IL: `docs/ENGINE-NOTES.md`.
 
 ### Co-op & gameplay fixes
 
@@ -294,6 +300,11 @@ Nothing is written outside those two folders, so there is nothing else to clean 
     already primed this session (by us)`, or `action-cache mirrors already primed and we never
     intervened — bug not present, BT/engine handles it (fix is dormant)`, which means it can be
     retired.
+
+    The priming half reports the `client-bootstrap-fix` health component and a
+    `client-bootstrap-fix.wiring` self-test. `BootstrapWatch` — the half that detects a silent
+    `BootstrapAborted` and renames BT's stale cache — reports neither, but since v1.3.2 each abort
+    it handles is fire-counted, so `bootstrap-watch=N` shows up in `GUARD ACTIVITY:`.
 
 11. **Marriage fixes** — two decompile-proven BannerlordTogether defects:
    - *Solo clan-mode block*: BT gates marriage on clan-mode sync, which can never complete when you
@@ -318,10 +329,10 @@ Nothing is written outside those two folders, so there is nothing else to clean 
     lords still catch the illness and die of it, so the world keeps ageing; each machine protects
     its own player, so in co-op both players need the mod. It **coexists** with the standalone
     *NoSickness* mod rather than detecting it: this guard never increments ill days, so once it
-    cures a hero that mod's own prefix sees a healthy hero and passes through. (The `_noSickness`
-    doc string inside the generated `guardconfig.json` still says the guard "stands down
-    automatically if the third-party NoSickness mod is installed" — that is wrong; there is no
-    detection of that mod anywhere in the code. This entry is the accurate one.) Logged under
+    cures a hero that mod's own prefix sees a healthy hero and passes through. (There is no
+    detection of that mod anywhere in the code. As of v1.3.2 the `_noSickness` doc string in the
+    generated `guardconfig.json` says "coexists" as well — the old "stands down automatically if the
+    third-party NoSickness mod is installed" wording was wrong and has been removed.) Logged under
     `[NOSICK]`.
 
 13. **Player-identity guard (co-op)** — fixes the spawn identity swap where you spawn AI-controlled
@@ -332,7 +343,10 @@ Nothing is written outside those two folders, so there is nothing else to clean 
     normal), and does nothing if your own hero has no live agent in the mission (spectating). When
     it acts it says so on screen: *"fixed player identity — you are back in control of your own
     character"*. It is a corrective net over a BannerlordTogether defect, not a prevention — expect
-    a brief moment as the wrong character.
+    a brief moment as the wrong character. Since v1.3.2 every correction is fire-counted, so
+    `player-identity-guard=N` appears in `GUARD ACTIVITY:` — that is how you tell whether the swap
+    still happens on your machine at all (and, one day, that it can be retired). It still registers
+    no `MOD HEALTH:` entry and no self-test.
 
 14. **Time fixes (co-op)** — four separate fixes:
     - *Keep fast-forward through map clicks* — exactly one transition is vetoed: the
@@ -362,12 +376,32 @@ Nothing is written outside those two folders, so there is nothing else to clean 
     vanilla battles; a peer connected (or you're the client) → every stashed patch is restored under
     its original owner/priority so co-op battle sync is fully intact.
 
-    The decision re-runs at mod startup, at the launcher/module screen, at every campaign load and
-    at **every mission's initialization** (two extra battle-start checks exist only with `tracing`
-    on), so a friend joining or leaving mid-session flips the mode before your next battle with no
-    restart. Only *battle* methods are ever lifted — deployment, troop spawn, order of battle,
-    battle end and battle-agent logic; campaign/map co-op machinery is deliberately never touched,
-    so the overworld stays synced in every mode.
+    **Fixed in v1.3.2 — this used to be broken with the default config.** The decision re-runs at
+    six points, and all six are now always-on: mod startup, the launcher/module screen, every
+    campaign load, every mission's initialization, and the two battle chokepoints this fix now hooks
+    itself — `PlayerEncounter.StartBattle` and `MissionState.OpenNew`. Those last two are the ones
+    that matter, and until v1.3.2 they lived in the tracer and therefore existed only with
+    `"tracing": true`. Field evidence from every log segment of the 2026-09-04 audit: the only
+    decision that ever actually lifted BannerlordTogether's 24 battle patches was `start-battle` —
+    BT installs those patches *after* our game-start decision, and the pre-mission half of them
+    (`MapEventSide.MakeReadyForMission`, the troop-supplier model, Order of Battle) runs *before*
+    mission init. So with tracing off (the default) the first solo battle of a session ran with the
+    player side stripped. With the chokepoints always hooked, a friend joining or leaving
+    mid-session flips the mode before your next battle with no restart, tracing or not.
+
+    Only *battle* methods are ever lifted — 24 of them across deployment, troop spawn, order of
+    battle, battle end and battle-agent logic; campaign/map co-op machinery is deliberately never
+    touched, so the overworld stays synced in every mode.
+
+    It now reports the `battle-mode` health component and a `battle-mode.contract` self-test (which
+    re-resolves all 24 lift targets and both chokepoints, and re-verifies the decision table, the
+    own-patch owner filter and the `battleMode` config parser including the legacy
+    `soloVanillaBattles` key). A missing **chokepoint** is critical — without it solo battles strip
+    the player side again. A lift target that no longer resolves is reported as degraded rather than
+    critical, since it only costs the one method, and it is now logged once —
+    `[BATTLE-MODE] lift target type/method not found: … (game update?)` — instead of being silently
+    skipped. The startup line reads `[BATTLE-MODE] battle chokepoints hooked — chokepoints
+    StartBattle=True OpenNew=True; lift targets 24/24 method(s)`.
 
     In `auto` the session check can come back **unreadable** (BannerlordTogether absent, updated, or
     its state not legible yet). When that happens the mod deliberately leaves co-op battle sync
@@ -556,9 +590,17 @@ Nothing is written outside those two folders, so there is nothing else to clean 
 26. **Startup health + self-tests** — every launch logs the build/version, a `MOD HEALTH:` summary
     of which fixes resolved, and (with `selfTest`) a decision-logic self-test per fix. If a core fix
     fails to resolve, BannerlordTogether was likely updated and this mod needs a matching update —
-    but read the two caveats in
+    but read the caveats in
     [Is the mod actually doing anything?](#is-the-mod-actually-doing-anything): a fix that is
-    *disabled by config* still reports healthy, and several fixes register no health entry at all.
+    *disabled by config* still reports healthy, and a handful of components (the player-identity
+    guard, the `BootstrapAborted` watcher, four of the five time fixes, the log streamer, the
+    tracers) still register no health entry at all.
+
+    When something is NOT resolved the summary line now spells out how to read it: *"read each
+    detail: a BannerlordTogether OR game update may have renamed a member; a detail saying 'inert',
+    'not loaded' or 'older game build' is on purpose"*. Those three details are healthy states, not
+    failures — e.g. the encounter-loop breaker without BannerlordTogether installed, or the
+    map-incident guard on a game build older than v1.4.8.
 
 27. **Diagnostics log** — `CrashGuard.log` records battle flow (menu switches, encounters, mission
     launches with caller stacks) and command control (who becomes player-controlled, order/formation
@@ -571,9 +613,12 @@ Nothing is written outside those two folders, so there is nothing else to clean 
     With `tracing` on, the swallowed-exception capture uses the same mechanism, so its collapsed
     lines read `[repeat] CHARGEN-FC <ExceptionType> @ <Namespace.Type.Method> ×N …`.
 
-    Almost every fix logs under its own tag, so you can grep for what happened. **Always on:**
-    `[MO-INIT]` the `MovementOrder` type-init guard's load result, `[AI-GUARD]` party-AI,
-    `[ENCOUNTER-GUARD]` encounter-loop breaker, `[INCIDENT-GUARD]` map incidents,
+    Every fix logs under its own tag, so you can grep for what happened. **Always on:**
+    `[DEPLOY-GUARD]` the two deployment crash guards (#1) — new in v1.3.2, these were the one
+    component that logged untagged, `[MO-INIT]` the `MovementOrder` type-init guard's load result,
+    `[AI-GUARD]` party-AI,
+    `[ENCOUNTER-GUARD]` encounter-loop breaker (attach line, `LOOP BROKEN:` fires),
+    `[INCIDENT-GUARD]` map incidents,
     `[TICK-GUARD]` background-tick throttle, `[CONVO-CAM]` conversation camera, `[CLAN-GUARD]`
     clan screen, `[HEROCREATE-GUARD]` client hero creation, `[DEADHERO]` dead-hero reactivation,
     `[NOSICK]` old-age illness, `[MARRIAGE-GUARD]` atomic marriage barter, `[CLANMODE-FIX]` solo
@@ -587,7 +632,10 @@ Nothing is written outside those two folders, so there is nothing else to clean 
     gate fixes plus suppressed gate-tick errors, `[SIEGE-CMD]` siege-defense command (formations
     taken back from the AI, refused hand-offs, stopped troop shuffles), `[COOP-CMD]` co-op
     own-army formation blocks (who commands I–IV / V–VIII, troops re-sorted), `[BATTLE-MODE]` the
-    vanilla/co-op battle switch, `[PEER-DETECT]` a BannerlordTogether type lookup that *threw*
+    vanilla/co-op battle switch — its config read, the chokepoint-hook line, each VANILLA/CO-OP
+    decision with the reason that triggered it, and (new in v1.3.2) a one-time
+    `lift target type/method not found: …` line for any of the 24 targets a game update moved,
+    `[PEER-DETECT]` a BannerlordTogether type lookup that *threw*
     (note that a BT type simply missing — renamed by a BT update — resolves to null silently with
     no `[PEER-DETECT]` line; the earliest warning of a BT update is a fix's own `INACTIVE` /
     `not found` startup line and its `MOD HEALTH:` entry, not this tag), `[TIME-FLOW]` idle
@@ -603,8 +651,17 @@ Nothing is written outside those two folders, so there is nothing else to clean 
     capture — which is armed once and covers the **whole session**, not just character creation,
     capped at 400 events, `[DIAG]` memory + engine-state heartbeat, `[MO-PROBE]` `MovementOrder`
     construction probe.
-    The deployment guards (#1) are the exception with no tag at all — grep their literal text
-    instead. `docs/FIX-REFERENCE.md` § *Index 1: log tag → file* is the complete tag→file index;
+
+    **`[TIME]` now names the vetoer.** Three of this mod's prefixes sit on
+    `Campaign.set_TimeControlMode` and Harmony runs all of them even when one refuses the write, so
+    the tracer used to be able to say only "suppressed by another patch". Since v1.3.2 the prefix
+    that vetoes notes itself, and the follow-up line reads `change SUPPRESSED/ALTERED by
+    [TIME-GUARD]` (the co-op speed-enforcement neutralizer), `by [CLICK-SPEED]` (the map-click
+    fast-forward keeper) or `by another patch (not one of ours)` — which means a *different mod* is
+    fighting over the speed. The `[repeat] … ×N` collapse key includes the vetoer, so two different
+    vetoers never collapse into one line.
+
+    `docs/FIX-REFERENCE.md` § *Index 1: log tag → file* is the complete tag→file index;
     `docs/DIAGNOSTICS.md` is the investigation playbook (probes, tracing, first-chance capture,
     rotation) and lists only the tags added in the 2026-09-04 investigation.
 
@@ -621,10 +678,23 @@ Nothing is written outside those two folders, so there is nothing else to clean 
     whenever it changed, listing which guards actually fired as `guard-id=count` pairs — so a quiet
     session shows one line, not one every two minutes, and a guard that never fires is a bug that
     never happened. The crash-guard ids you will see there: `setup-teams-guard`,
-    `finish-deployment-guard` (#1), `conversation-camera-guard` (#3), `clan-screen-guard` (#4),
+    `finish-deployment-guard` (#1 — the two finalizers keep their own ids; the health component is
+    the single `deployment-guards`), `conversation-camera-guard` (#3), `clan-screen-guard` (#4),
     `hero-creation-guard` (#5), `party-ai-guard` (#6), `encounter-loop-guard` (#7),
     `map-incident-guard` (#8), `bg-tick-budget-guard` (#19). A non-zero count is a crash that was
     caught — attach the log to a bug report.
+
+    Fixes that correct state rather than catch a crash are counted the same way, and v1.3.2 added
+    four that were previously invisible here: `battle-mode` (#15, each time patches are lifted or
+    restored), `player-identity-guard` (#13), `bootstrap-watch` (#10's abort detector) and the
+    deployment guards' new health component. The rest: `client-bootstrap-fix` (#10),
+    `dead-hero-return-fix` / `dead-hero-activate-invariant` (#2), `marriage-barter-guard` /
+    `clanmode-solo-fix` (#11), `illness-death-guard` (#12), `join-sync-pause-escape` (#18),
+    `hero-identity-lock` (#21), `siege-gate-prompt-fix` / `civilian-gate-fix` (#20),
+    `stealth-hideout-advisor` (#22), `clan-party-advisor` (#23), `siege-command-guard` (#24),
+    `coop-command-split` (#25), `pregnancy-sync` (#16), `stash-sync` (#17). The `MovementOrder`
+    type-init fix (#9) is deliberately absent — it is a one-shot load-time repair, and `[MO-INIT]`
+    is its evidence instead.
 
 28. **Safe mode** — `safeMode` disables everything the mod does, to isolate whether an issue is this
     mod or BannerlordTogether. It is an isolation switch, not a play mode: it returns **before any
@@ -672,18 +742,26 @@ It uploads `CrashGuard.log` to a file host with a 24-hour link and puts the link
   and a harness without its payload loads cleanly and applies nothing. If you copied files by hand,
   copy both.
 - **A green `MOD HEALTH:` line does not by itself mean a fix is running.** A guard turned off in
-  `guardconfig.json` still reports as resolved with the detail `disabled by config`, and several
-  fixes register no health entry at all (see the third design principle). For those, check the
-  guard's own `active …` line and its patched-method count. The startup block also carries
+  `guardconfig.json` still reports as resolved with the detail `disabled by config`, and a handful
+  of components still register no health entry at all — the player-identity guard (#13), the
+  `BootstrapAborted` watcher, four of the five time fixes, the log streamer and the tracers (see
+  the third design principle). For those, check the guard's own `active …` line and its
+  patched-method count. Every crash guard *does* report now, so a crash fix missing from the
+  summary is a real problem rather than a known blind spot. The startup block also carries
   `payload build HH:mm:ss applying on <id>` and, once everything is wired,
   `patches applied; battleMode=<mode> tracing=<bool>` — the one line that states the effective
   battle mode for the session. `FAILED to apply patches:` there means the harness kept the previous
   payload generation.
 - **If a core fix shows NOT resolved**, BannerlordTogether was most likely updated — but not
-  always: `map-incident-guard` reports NOT resolved on any **game** build older than **v1.4.8**,
-  which has no `TaleWorlds.CampaignSystem.Incidents` for #8 to patch. The health line's stock
-  advice ("a BannerlordTogether update renamed a method") does not apply in that case; check your
-  game version first.
+  always, which is why the line ends with *"read each detail: a BannerlordTogether OR game update
+  may have renamed a member; a detail saying 'inert', 'not loaded' or 'older game build' is on
+  purpose"*. Read the detail in brackets before you act on it: `map-incident-guard` reports NOT
+  resolved on any **game** build older than **v1.4.8**, which has no
+  `TaleWorlds.CampaignSystem.Incidents` for #8 to patch, and `encounter-loop-guard` reports `inert —
+  BannerlordTogether not loaded` in plain single-player. Neither means anything is broken. A detail
+  naming a specific member (`BattleSyncBehavior not found`, `ApplyEncounterRequestNow not found`,
+  `FindMostSuitableHomeSettlement(Clan) not found`, `chokepoints StartBattle=False …`) is the real
+  signal that something moved and the mod needs an update.
 - **A fix missing from `MOD HEALTH:` entirely** rather than listed as failed: the hideout sneak-in
   advisor (#22) returns silently on a game build with no stealth-ambush controller, so it appears
   in neither list.
@@ -695,7 +773,9 @@ It uploads `CrashGuard.log` to a file host with a 24-hour link and puts the link
 ### Messages the mod puts on screen
 
 Anything prefixed **`[Deploy Guard]`** in the in-game message feed is this mod talking, not a game
-bug. It only speaks when it acts.
+bug. It only speaks when it acts. (That on-screen prefix is the whole mod's name badge — every
+message uses it, whichever fix spoke. It is not the same thing as the `[DEPLOY-GUARD]` **log** tag,
+which belongs to the deployment crash guards, #1, alone.)
 
 | Message | What it means |
 |---|---|
@@ -738,7 +818,19 @@ bug. It only speaks when it acts.
 - **Solo battle starts with empty formations / no troops / an instant crash?** Grep for
   `[BATTLE-MODE]`. `VANILLA battles active` means #15 did its job and the problem is elsewhere.
   `CO-OP battles active (auto: state unreadable …)` means it could not confirm you are alone and
-  stayed safe — set `"battleMode": "solo"` in `guardconfig.json` and restart.
+  stayed safe — set `"battleMode": "solo"` in `guardconfig.json` and restart. If you are on
+  **v1.3.1 or older**, this is the bug v1.3.2 fixes: the decision that actually lifts BT's battle
+  patches ran only with `"tracing": true`, so the first solo battle of a session was stripped with
+  the default config. Update rather than turning tracing on. Also check the startup line
+  `[BATTLE-MODE] battle chokepoints hooked — chokepoints StartBattle=True OpenNew=True; lift targets
+  24/24 method(s)`: a `False` chokepoint or a count below 24 means a game update moved something and
+  part of the fix is not in place.
+- **Stuck in an encounter-meeting loop that re-opens forever?** Grep for `[ENCOUNTER-GUARD]`. The
+  `encounter-request loop breaker active (N method(s); local-Finish stamp hooked=True)` line at
+  startup means it is armed; `LOOP BROKEN:` means it tripped. On **v1.3.1 or older** the breaker
+  could not trip at all without `"tracing": true` — v1.3.2 hooks `PlayerEncounter.Finish` itself, so
+  updating is the fix. `inert — BannerlordTogether not loaded` in `MOD HEALTH:` is expected in
+  single-player, where this loop cannot happen.
 - **Your partner's army never shows up in a co-op battle?** Check the **host's** log for
   `[BATTLE-MODE] VANILLA battles active`. If the detail says `config=solo`, the host has forced
   vanilla — set `"battleMode": "auto"` (or `"coop"`) on that machine and restart. Both players
@@ -761,7 +853,12 @@ bug. It only speaks when it acts.
   escape active`. A count of `0`, a `[CLICK-SPEED] MapScreen not found — keeper idle` line, or
   `[SHARE-TIME] required method(s) not found … INACTIVE` means the game or BannerlordTogether moved
   a method and that fix is not running. To see *what* is changing the speed, set `"tracing": true`,
-  reproduce, and read the `[TIME]` lines (old → new mode plus the calling stack). Turn tracing back
+  reproduce, and read the `[TIME]` lines (old → new mode plus the calling stack). Since v1.3.2 a
+  refused write also names the refuser on the next line — `change SUPPRESSED/ALTERED by
+  [TIME-GUARD]` or `by [CLICK-SPEED]` for this mod's own two vetoes, and `by another patch (not one
+  of ours)` when a **different mod** is fighting over the speed. That distinction is the whole point
+  of the line: three of this mod's prefixes share that setter, and Harmony runs all of them even
+  when one refuses. Turn tracing back
   off afterwards: while you host alone, BannerlordTogether asks for its own speed every tick and
   this mod blocks the write, so the request repeats forever — the `[TIME]` tracer coalesces those
   into one line plus a periodic `[repeat] … ×N in Ys (identical, collapsed)`, but it still churns
@@ -802,39 +899,60 @@ bug. It only speaks when it acts.
 curl -fsSL -o "%TEMP%\bltdiag.cmd" https://raw.githubusercontent.com/goobz22/BLTDeploymentCrashGuard/main/collect-diagnostics.cmd && call "%TEMP%\bltdiag.cmd"
 ```
 
-Bundles `CrashGuard.log`, `guardconfig.json`, BT's `bt-sync-*.txt`, and the newest crash report
-into a zip and uploads it (link to clipboard, 72-hour retention).
+It zips everything a bug report needs and uploads it (link to clipboard, 72-hour retention). As of
+v1.3.2 the bundle contains:
 
-- **The bundle carries only the two most recent log segments** — `CrashGuard.log` and
-  `CrashGuard.log.1`. Rotation keeps six (`.1`–`.6`), so if the evidence you need is older than the
-  last rollover, attach those segments by hand from
-  `Modules\BLTDeploymentCrashGuard\` as well.
+| From | What |
+|---|---|
+| `Modules\BLTDeploymentCrashGuard\` | `CrashGuard.log` **and every rotated segment** `.1`–`.6`, `guardconfig.json`, `hero-identity.json`, `SubModule.xml` |
+| Your Desktop | BannerlordTogether's `bt-sync-host.txt` / `bt-sync-client.txt` / `bt-sync-solo.txt` |
+| `%ProgramData%\Mount and Blade II Bannerlord\logs\` | the game's own logs — the 3 newest `rgl_log_*`, the 3 newest `rgl_log_errors_*`, the 2 newest `watchdog_log_*`, the newest `launcher_log_*` |
+| `%ProgramData%\Mount and Blade II Bannerlord\crashes\` | the newest crash folder's **text** files (memory dumps are deliberately left out — they are enormous) |
+| `%USERPROFILE%\Documents` | the newest `*.html` whose name contains "crash" |
 
 - **After a crash, don't rely on a streamed log alone.** With `logStreamBin` set, uploads happen at
   most once a minute and only when the file has grown, so the last seconds before a crash-to-desktop
   are usually still local-only. Collect from the machine that crashed.
-- **My bundle has no crash report in it.** The collector looks only at the top level of
-  `%USERPROFILE%\Documents` for the newest `*.html` whose name contains "crash". ButterLib writes
-  its reports into a *Bannerlord subfolder* of Documents, and TaleWorlds' own logs live under
-  `C:\ProgramData\Mount and Blade II Bannerlord\logs\` — neither is picked up. Attach those by hand.
+- **My bundle has no crash report in it.** Crash reports do not all land in the same place, so check
+  **both**: the Documents root (`%USERPROFILE%\Documents\*.html`), which the collector scans, and a
+  *Bannerlord subfolder* of Documents, which it does not — ButterLib can write there, and the
+  collector only looks at the top level. If the report you need is in a subfolder, attach it by
+  hand. The game's own `%ProgramData%` logs and crash folder *are* collected, so those you do not
+  have to fetch yourself.
 - **"ERROR: could not create the zip."** The collector builds the bundle with PowerShell's
   `Compress-Archive`. If PowerShell is blocked on your machine the zip step fails, but every
   collected file is still in `%TEMP%\bltguard-diag` — zip that folder yourself and send it, and zip
   it **before** re-running the collector, which clears that folder on every run.
 - **Stacks have no line numbers.** Both DLLs ship without PDBs, so a crash report names methods but
   not lines — the `CrashGuard.log` tag lines are what pin the location.
-- **The collector asks for my folder even though the installer found it.**
-  `collect-diagnostics.cmd` scans fewer Steam locations than `install.cmd` and `share-log.cmd`
-  (`D:\Steam`, `E:\Steam`, `F:\Steam` and both `G:` paths are missing). Set `BANNERLORD_DIR` before
-  running it, or paste the path at the prompt.
+- **All three scripts now search the same 11 Steam locations.** `install.cmd`, `share-log.cmd` and
+  `collect-diagnostics.cmd` used to disagree — the collector knew only 6 and would ask for a folder
+  the installer had already found. They are kept identical by `tools/lint-scripts.sh`. If yours is
+  not a Steam layout on C:–G: at all, set `BANNERLORD_DIR` before running, or paste the path at the
+  prompt.
+
+### Where to send a bug report
+
+Open an issue at <https://github.com/goobz22/BLTDeploymentCrashGuard/issues> and attach the
+`collect-diagnostics.cmd` link from above — the bundle is the whole picture, and without it almost
+every report needs a round trip. Read
+[What gets uploaded](#what-gets-uploaded-read-before-sharing) before you paste the link, since
+nothing in it is redacted; if you would rather not upload, attach the files from
+`Modules\BLTDeploymentCrashGuard\` to the issue directly.
+
+Worth putting in the issue text itself: your mod version (the first line of `CrashGuard.log`), your
+game and BannerlordTogether versions, whether you were hosting / joining / solo, and the exact
+on-screen message if there was one.
 
 ### What gets uploaded (read before sharing)
 
 Both share scripts POST your files **unredacted** to a public anonymous file host
 (litterbox.catbox.moe, falling back to 0x0.st). Anyone with the link can read them.
 `CrashGuard.log` contains Windows paths (including your user name), save names and hero names; the
-diagnostics bundle adds `guardconfig.json`, BannerlordTogether's `bt-sync-*.txt` and your newest
-Bannerlord crash report. Single-log links live 24 hours, bundle links 72. If you would rather not
+diagnostics bundle adds the rotated log segments, `guardconfig.json`, `hero-identity.json`,
+`SubModule.xml`, BannerlordTogether's `bt-sync-*.txt`, the game's own `rgl`/watchdog/launcher logs
+and your newest Bannerlord crash report — so the bundle exposes more than a single log does, not
+less. Single-log links live 24 hours, bundle links 72. If you would rather not
 upload, the log is at `Modules\BLTDeploymentCrashGuard\CrashGuard.log` — attach it directly.
 
 `logStreamBin` (or a `logstream.txt` file) is a *continuous* version of the same exposure — see the
@@ -850,17 +968,37 @@ Config notes.
   contains `bin\Win64_Shipping_Client`, then re-run.
 - **I re-ran the installer while the game was open and nothing changed.** Expected — see the update
   note in [Install](#install-players). Restart Bannerlord.
+- **"ERROR: downloaded files do not match the release manifest".** The installer hashed what it
+  downloaded against `dist/manifest.txt` and one file disagreed — most often because a release was
+  mid-upload on GitHub when you ran it. Run the one-liner again in a minute. Nothing was left
+  half-installed that a successful re-run won't replace; if it keeps failing, report it with the
+  exact file name the message printed.
+- **"(no release manifest or certutil available - skipping the integrity check)".** Harmless: either
+  GitHub did not serve `dist/manifest.txt` or `certutil` is not on your PATH. The files still
+  downloaded; you can hash them yourself against `dist/manifest.txt` (see
+  [Manual install (no curl)](#manual-install-no-curl)).
 
 ### Files this mod writes and renames
 
 In its own folder (`Modules/BLTDeploymentCrashGuard/`): `CrashGuard.log` (+ `.1`–`.6`),
 `guardconfig.json`, `hero-identity.json` (this machine's campaign→hero record, #21),
 `bootstrapwatch.state` (which BT aborts it has already acted on), and `logstream.txt` if log
-streaming was enabled at install time.
+streaming was enabled at install time. The two small state files are plain text you can read and
+edit with Notepad:
+
+| File | Format | Example |
+|---|---|---|
+| `hero-identity.json` | a flat JSON object, one `"<campaignId>": "<heroStringId>"` line per campaign | `  "a1b2c3…": "lord_1_1"` |
+| `bootstrapwatch.state` | one `<logname>\|<offset>` line per BT log it has read, where the offset is how far into that log it has already scanned | `bt-sync-client.txt\|184320` |
+
+Both are written with no escaping, so do not hand-edit a value containing a quote or a `|`. To make
+the mod re-claim a campaign, delete that campaign's line from `hero-identity.json` (see the Config
+notes); to make it re-warn about a `BootstrapAborted` it already handled, delete
+`bootstrapwatch.state`.
 
 In **BannerlordTogether's** folder: when it sees a `BootstrapAborted` it *renames* (never deletes)
 `Modules/BannerlordTogether/RuntimeDataCache/*.rdc` to `*.rdc.stale-<timestamp>` so BT rebuilds
-them. To undo, rename them back. If your install is not the standard
+them. To undo, rename them back (see [Uninstall](#uninstall)). If your install is not the standard
 `Modules/<mod>/bin/Win64_Shipping_Client/` layout it cannot find either folder and silently does
 nothing.
 
@@ -883,9 +1021,12 @@ read — a fix listed as NOT resolved means the method it hooks moved.
 ## Config
 
 `Modules/BLTDeploymentCrashGuard/guardconfig.json` is auto-written on first run with every key
-documented inline. (If that write ever fails, a minimal two-key file — `battleMode` and
-`timeAlwaysFlows`, with no inline documentation — can be written instead; delete it and relaunch to
-regenerate the full template. Every key below is read whether or not it appears in the file.)
+documented inline, by exactly one writer — the harness, before any fix runs. (v1.3.2 deleted a
+second, undocumented two-key writer that could leave you with a `battleMode`/`timeAlwaysFlows` stub
+if the harness write had failed; there is now one template and one code path that produces it.
+Every key below is read whether or not it appears in the file, so a partial file is still valid —
+missing keys just take their defaults.) If the file ever looks wrong, delete it and relaunch to
+regenerate the documented template.
 
 **Edits take effect on the next game launch.** The file is read once at startup and cached for the
 whole session, so changing a setting while the game runs does nothing. The one exception is
@@ -905,7 +1046,7 @@ hot-reload on, tracers can be turned on *during* a live repro instead of restart
 | `siegeCommandAll` | `true` | **siege defense** — you command every formation and placed formations hold (no AI hand-off after deployment, no tactic troop shuffles into or out of the formations you command; owner of the settlement = general). Applies when you are the general of the defense; sally-outs are excluded. F6 still delegates on purpose |
 | `coopOwnArmyCommand` | `true` | **co-op** — each player commands their own army: host's troops in formations I–IV, client's in V–VIII, on both machines |
 | `myHero` | `""` | **shared-save co-op** — this machine's hero, matched by **name**, case-insensitive, among **living** heroes, preferring one in your own clan. Applied on load as **host or solo only**, never as a joining client. Needed once per existing campaign; new campaigns record automatically. An unmatched name changes nothing (the log says so); if two living heroes share the name the clan one wins |
-| `tracing` | `false` | verbose diagnostic tracers — off for play, on for troubleshooting. **Load-bearing for #7**: the encounter-loop breaker cannot trip without it. **Not purely passive**: the mission/encounter tracer also re-decides battle mode at mission-open and battle-start, so a bug reproduced with tracing on is not byte-for-byte the same run as with it off — confirm a fix with tracing back off |
+| `tracing` | `false` | verbose diagnostic tracers — off for play, on for troubleshooting. **Log-only since v1.3.2**: the tracer no longer decides battle mode (#15) or stamps the encounter `Finish` (#7) — both now hook their own always-on chokepoints — so turning tracing on changes *what is written*, not *what the mod does*. A bug reproduced with tracing on is the same run as with it off, and neither #7 nor #15 needs it any more. It still costs log volume, so turn it back off afterwards |
 | `selfTest` | `false` | run each fix's decision-logic self-test at startup and log PASS/FAIL. Not every fix registers one (see the design principles) |
 | `logStreamBin` | `""` | a filebin.net bin id; when set, the **last 2 MB** of the log auto-uploads to `https://filebin.net/<bin>` about once a minute whenever the log has grown. **Anything in the log becomes publicly fetchable by anyone with the bin id**, and the uploaded file is named `blt-<H/C/S>-<YourMachineName>.log`. Leave empty unless you are actively debugging with someone |
 | `hotReload` | `false` | **dev only** — no-restart reload of the payload. The flag alone does nothing: a runtime code-load also requires an empty `.hotreload-dev` file in the module root. Both are required by design, so a copied dev config can never turn runtime code loading on for a player |
@@ -925,9 +1066,32 @@ Notes:
   `"soloVanillaBattles": false`. It is honoured only when `battleMode` is absent or unparseable, and
   maps to `battleMode=coop` (logged as `[BATTLE-MODE] legacy config soloVanillaBattles=false ->
   coop`). Delete it and set `battleMode` explicitly.
-- **Two time fixes have no key at all** and are always on: the map-click fast-forward keeper
-  (`[CLICK-SPEED]`) and the co-op speed-enforcement neutralizer (`[TIME-GUARD]`, which also carries
-  a shared-pause trace). `safeMode` is the only switch that disables them.
+- **Most fixes have no key at all**, and `safeMode` is the only switch that turns them off. The
+  table above is the complete list of keys; everything else is always on. Specifically, these have
+  no config key of their own:
+
+  | Fix | Tag |
+  |---|---|
+  | #1 deployment crash guards | `[DEPLOY-GUARD]` |
+  | #2 dead-hero reactivation (both the roster fix and the domain invariant) | `[DEADHERO]` |
+  | #3 conversation-camera guard | `[CONVO-CAM]` |
+  | #4 clan-screen guard | `[CLAN-GUARD]` |
+  | #5 client hero-creation guard | `[HEROCREATE-GUARD]` |
+  | #6 party-AI guards | `[AI-GUARD]` |
+  | #7 encounter-loop breaker (its 4/15 s/60 s/4 s constants are compile-time too) | `[ENCOUNTER-GUARD]` |
+  | #8 map-incident siege crash fix | `[INCIDENT-GUARD]` |
+  | #9 `MovementOrder` type-init fix | `[MO-INIT]` |
+  | #10 client bootstrap priming + the `BootstrapAborted` watcher | `[CLIENT-FIX]`, `[BOOTSTRAP-WATCH]` |
+  | #11 marriage fixes (atomic dowry + solo clan mode) | `[MARRIAGE-GUARD]`, `[CLANMODE-FIX]` |
+  | #13 player-identity guard | `[IDENTITY]` |
+  | #14 map-click fast-forward keeper and co-op speed-enforcement neutralizer (the other two time fixes *do* have keys) | `[CLICK-SPEED]`, `[TIME-GUARD]` |
+  | #18 join-hold pause escape | `[JOIN-ESCAPE]` |
+  | #19 background-tick freeze guard (its 100 ms budget and 10 s cap are compile-time too) | `[TICK-GUARD]` |
+  | #20 both gate fixes | `[GATE]` |
+  | #22 hideout sneak-in advisor | `[STEALTH]` |
+
+  #21's shared-save handoff is the odd one out: it runs automatically with no key, and `myHero` only
+  exists to claim an *existing* campaign once.
 - **Log streaming has a second source, checked first:** `logstream.txt` in
   `Modules/BLTDeploymentCrashGuard/`, a plain text file holding just the bin id, which `install.cmd`
   writes automatically if the `BLTGUARD_BIN` environment variable is set when you install. The
@@ -939,10 +1103,13 @@ Notes:
 - **Turning a guard off is a healthy state, not a failure.** A disabled fix logs what vanilla will
   now do and still counts as resolved in `MOD HEALTH` with the detail `disabled by config`.
 - Alongside `guardconfig.json` the mod keeps **`hero-identity.json`** — this machine's campaign→hero
-  record, one line per campaign. It is written automatically and is **per machine**: never copy it to
+  record, one `"<campaignId>": "<heroStringId>"` line per campaign inside a flat JSON object. It is
+  written automatically and is **per machine**: never copy it to
   your partner's PC. To re-claim a campaign for a different hero, delete its line (or the whole
   file), set `"myHero": "YourHeroName"` and load again. It stores raw ids with no escaping, so do not
-  hand-edit a value containing a quote.
+  hand-edit a value containing a quote. The third state file, **`bootstrapwatch.state`**, is one
+  `<logname>|<offset>` line per BannerlordTogether log the abort watcher has scanned — see
+  [Files this mod writes and renames](#files-this-mod-writes-and-renames).
 
 ## Architecture
 
@@ -964,10 +1131,12 @@ Every fix lives in its own `Payload/*.cs` file whose header explains the bug and
 a Harmony patch (prefix/postfix/finalizer/transpiler) or a by-name reflection hook into the game or
 BannerlordTogether. Game and BT members are resolved by reflection so that a game or BT update
 degrades gracefully instead of crashing, and each fix logs under its own tag so you can grep the log
-for exactly what happened. Most also carry a startup self-test that pins the members and its
-decision logic (`selfTest`) and report health (`MOD HEALTH`) — the exceptions are listed in the
-design principles above and, per fix, in `docs/FIX-REFERENCE.md`. The single version number lives in
-`Directory.Build.props` and is stamped into both assemblies and `SubModule.xml` at build time.
+for exactly what happened. Every crash guard reports health (`MOD HEALTH`) and registers a
+`<component>.contract` self-test that pins its members and its decision logic (run with
+`selfTest`); the remaining exceptions are listed in the design principles above and, per fix, in
+`docs/FIX-REFERENCE.md`. The single version number lives in `Directory.Build.props` and is stamped
+into both assemblies, `SubModule.xml` **and** `dist/SubModule.xml` at build time — the last of those
+was previously written by hand and is the copy `install.cmd` actually downloads.
 
 ### For developers and AI agents
 
@@ -975,6 +1144,8 @@ The how-it-works-so-we-don't-re-derive-it docs:
 
 - **`CLAUDE.md`** — operating guide: architecture, build/deploy (deploy both DLLs + `SubModule.xml`
   to the game module *and* `dist/`, hash-verify; pushing == releasing), and the house rules.
+- **`docs/RELEASE.md`** — the one release checklist: `tools/release.sh`, the manifest, which docs
+  must ship in the same commit.
 - **`docs/DIAGNOSTICS.md`** — how to investigate a crash without guessing: the IL-probe toolchain,
   runtime tracing, the session-wide first-chance exception capture, log rotation and throttling. Its
   tag table covers the diagnostics tags added in the 2026-09-04 investigation, not every tag — the
@@ -1015,9 +1186,20 @@ Deploy **both** DLLs **and** `SubModule.xml` to
 `<Bannerlord>/Modules/BLTDeploymentCrashGuard/` (DLLs in `bin/Win64_Shipping_Client/`, the XML in
 the module root) **and** to the repo `dist/`, then hash-verify all three across build output, game
 module and `dist/`. `install.cmd` downloads from `dist/`, so **pushing to GitHub == releasing**, and
-a stale `dist/` ships nothing to players. Nothing cross-checks the harness/payload pair at install
-or load time, so updating one and not the other ships a mismatch with no error. Full procedure:
-`CLAUDE.md`.
+a stale `dist/` ships nothing to players.
+
+`tools/release.sh` does all of that in one step: it builds both assemblies, deploys the three files
+to the game module and to `dist/`, writes `dist/manifest.txt` (the version plus a SHA256 per file),
+re-hashes every copy across build output / `dist/` / game module, and **refuses** to print
+`release-ready` if any of them disagree. `--no-build` re-deploys and re-verifies the existing build
+output; `BANNERLORD_DIR` overrides the game path. That manifest is what `install.cmd` checks on the
+player's machine, so a half-updated `dist/` now fails loudly at install time instead of silently
+shipping a harness from one build with a payload from another.
+
+`tools/lint-scripts.sh` guards the three player-facing scripts: it fails if `install.cmd`,
+`share-log.cmd` and `collect-diagnostics.cmd` no longer carry identical Steam path lists, or if
+`install.cmd` does not download **and** verify every file `dist/manifest.txt` names. Run it before
+committing a script or a release. Full procedure: `docs/RELEASE.md`.
 
 There are headless test suites for the pregnancy-sync and stash-sync
 wire formats (`tests\BirthPayloadTest`, `tests\StashPayloadTest`), e.g.:
@@ -1130,12 +1312,12 @@ record):
   receiver cannot resolve is skipped, and because the next snapshot from that machine will not name
   it, the machine that *can* resolve it deletes it. A single malformed entry rejects the whole
   update rather than that one stack.
-- **Battle mode is not covered by the health report or self-tests** — #15 registers neither, so if a
-  Bannerlord or BannerlordTogether update renames one of the battle methods it targets, that method
-  is silently skipped and nothing turns red. The only evidence is a smaller
-  `removed N foreign patch(es)` count under `[BATTLE-MODE]`. It also lifts only what is on the
-  target methods *at the moment it decides*: another mod that patches one of them afterwards keeps
-  its patch until the next decision point.
+- **Battle mode lifts only what is on its targets at the moment it decides** — another mod that
+  patches one of the 24 battle methods *after* a decision keeps its patch until the next decision
+  point (mod startup, module screen, campaign load, mission init, `StartBattle`, `MissionState.OpenNew`).
+  The v1.3.2 gap this used to sit next to is closed: #15 now registers the `battle-mode` health
+  component and a `battle-mode.contract` self-test, and a target a game update renamed is logged
+  once and reported as degraded instead of being skipped in silence.
 - **Most time fixes are not in `MOD HEALTH:`** — only the join-hold pause escape reports health and
   runs a self-test. The idle-hold suppressor, map-click keeper, shared-time-control enabler and
   co-op enforcement neutralizer prove themselves only by their startup log line and its
@@ -1198,3 +1380,7 @@ record):
   is subscribed only from the game's `OnGameStart`, which does not fire again on a reload, so the
   new generation never subscribes and the previous generation's listener is never removed. Reload
   at the main menu, or restart, before testing birth sync. Detail: `HOTRELOAD.md`.
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
