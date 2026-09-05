@@ -32,7 +32,8 @@ Work down the list; do not skip to a fix.
    build time and session id; `[HOTRELOAD] genN applied` says which payload generation was live at
    the moment of the crash (health and tracer lines are re-printed per generation).
 3. **Read the mod's own verdict before the exception.** `MOD HEALTH:`, `[SELFTEST]`,
-   `[BATTLE-MODE]` — but see § *What `MOD HEALTH:` does not cover* below: absence is not health.
+   `GUARD ACTIVITY:`, `[BATTLE-MODE]`, `[DEPLOY-GUARD]` — but see § *What `MOD HEALTH:` does not
+   cover* below: absence is not health.
 4. **Turn tracing on and reproduce** (§2). Then check the tracer load lines: a tracer that hooked
    0 methods produces silence that is easy to misread as "the bug did not happen".
 5. **Find the first-chance exception, not the last log line** (§2): inner-exception chain,
@@ -51,7 +52,9 @@ A hang produces no exception, so **every piece of exception tooling in this repo
 construction** — the session-wide first-chance capture only fires on a throw, the finalizer guards
 only run on an escaping exception, and `GUARD ACTIVITY:` stays at "none fired this session". That
 silence is the expected output of a hang, not evidence of health. Do not read it as "the mod was
-fine".
+fine". One of our own layers can also change behaviour with no exception in sight and therefore
+nothing to log: `PartyAiCrashGuard`'s layer 1 is a **prefix** that skips a party's tick in a
+proven-inconsistent state (`Payload/PartyAiCrashGuard.cs:22-25`), not a finalizer.
 
 1. **Read the `[DIAG]` heartbeat.** It is emitted on a timer regardless of whether anything throws,
    so it is the one signal a hang still produces. Compare consecutive lines for build-up in
@@ -151,7 +154,7 @@ Diagnostics added in the 2026-09-04 investigation:
 | `[MO-INIT]` | The `MovementOrder` type-init guard's result at load: "initialized safely" or "already poisoned". |
 | `[DIAG]` | Memory + engine-state heartbeat (WS/private/managed, GC counts, handles, threads; Mission/GameState/Campaign) every ~15 s and at every mission transition. Use it to see a leak/balloon build up before a symptom — and it is the only signal a freeze still produces (§0 *Branch: freeze / hang*). |
 | `[DEPLOY-GUARD]` | The two deployment finalizers (README fix #1) and their health check. `deployment crash guards active — SetupTeams=guarded FinishDeployment=guarded` at load (`Payload/DeploymentCrashGuards.cs:43`), `SUPPRESSED crash in DeploymentMissionController.SetupTeams: …` when one fires (`:107,128`), and one line per recovery step that itself failed (`:144-159`). Every line in that file now carries the tag; before 2026-09-04 they were untagged and ungreppable. |
-| `[TIME] … change SUPPRESSED/ALTERED by [X]` | Names **which** of our three prefixes on `Campaign.set_TimeControlMode` vetoed a write — `[TIME-GUARD]`, `[CLICK-SPEED]`, or `another patch (not one of ours)` when the vetoer was not ours (`Payload/TimeTrace.cs:118-124`). The vetoing prefix notes itself (`TimeEnforcementGuard.cs:217`, `MapClickSpeedKeeper.cs:93`) and the `[repeat]` dedup key includes the vetoer (`TimeTrace.cs:127-128`), so a collapsed burst still says who won. |
+| `[TIME] … change SUPPRESSED/ALTERED by [X]` | Names **which** of our three prefixes on `Campaign.set_TimeControlMode` vetoed a write — `[TIME-GUARD]`, `[CLICK-SPEED]`, or `another patch (not one of ours)` when the vetoer was not ours (`Payload/TimeTrace.cs:118-124`). The vetoing prefix notes itself (`Payload/TimeEnforcementGuard.cs:217`, `Payload/MapClickSpeedKeeper.cs:93`) and the `[repeat]` dedup key includes the vetoer (`Payload/TimeTrace.cs:127-128`), so a collapsed burst still says who won. |
 | `[repeat] … ×N` | A high-frequency line coalesced by `TraceThrottle` (see below). |
 
 ### Tracer load lines — a tracer's health report
@@ -201,7 +204,7 @@ instead of passing silently:
 
 | Component id | Self-test | Critical? | Notes |
 |---|---|---|---|
-| `battle-mode` | `battle-mode.contract` | critical only when a chokepoint hook is missing | Detail carries `chokepoints StartBattle=… OpenNew=…; lift targets N/M method(s)` and names any unresolved one (`Payload/BattleMode.cs:120-130`). An unresolved lift target degrades but is not critical — it costs one lifted method, not the player side. |
+| `battle-mode` | `battle-mode.contract` | critical only when a chokepoint hook is missing | Detail carries `chokepoints StartBattle=… OpenNew=…; lift targets N/M method(s)` and names any unresolved one (`Payload/BattleMode.cs:119-130`). An unresolved lift target degrades but is not critical — it costs one lifted method, not the player side. |
 | `encounter-loop-guard` | `encounter-loop-guard.contract` | no | Reports healthy with detail `inert — BannerlordTogether not loaded` when BT is absent, and degraded when BT is present but `BattleSyncBehavior` / `ApplyEncounterRequestNow` is missing (`Payload/EncounterLoopGuard.cs:83,114-121`). |
 | `deployment-guards` | `deployment-guards.contract` | **yes** | Verifies after `PatchAll` that our finalizers really sit on `SetupTeams` and `FinishDeployment` (`Payload/DeploymentCrashGuards.cs:35-43`). |
 | `party-ai-guard` | `party-ai-guard.contract` | no | |
@@ -219,7 +222,7 @@ What still never reaches `MOD HEALTH:`:
 | `PlayerIdentityGuard`, `BootstrapWatch` | no `Diag.Report`, no self-test — but each now calls `SelfHealing.RecordFire` on every correction / handled abort (`Payload/PlayerIdentityGuard.cs:89`, `Payload/BootstrapWatch.cs:80`) | `GUARD ACTIVITY:` — `player-identity-guard`, `bootstrap-watch` — and their own tags, e.g. `[IDENTITY]` |
 | `TimeEnforcementGuard`, `MapClickSpeedKeeper`, `TimeFlowPatch`, `ShareTimeControl` | nothing | their own tags only: `[TIME-GUARD]`, `[CLICK-SPEED]`, `[TIME-FLOW]`, `[SHARE-TIME]` |
 | `PeerDetection`, `PayloadEntry` | nothing of their own | `PeerDetection.Snapshot()` embedded in other components' lines |
-| `StealthHideoutAdvisor` | returns before reporting when `HideoutAmbushMissionController` is missing — older game build (`Payload/StealthHideoutAdvisor.cs:36-41`) | nothing — it is simply absent |
+| `StealthHideoutAdvisor` | returns before reporting when `HideoutAmbushMissionController` is missing — older game build (`Payload/StealthHideoutAdvisor.cs:37-40`) | nothing — it is simply absent |
 
 The two deployment finalizers keep their **own** fire ids, `setup-teams-guard` and
 `finish-deployment-guard` (`Payload/DeploymentCrashGuards.cs:106,127`), under the single
@@ -378,7 +381,7 @@ the chokepoint never ran.
   discards the evidence being chased.
 - **Throttling** (`TraceThrottle`): identical repeated tracer lines are coalesced — first
   occurrence logs in full, repeats collapse to `[repeat] key ×N in Ys (identical, collapsed)` at
-  most every 5 s (`Payload/TraceThrottle.cs:30,82`). This is why a per-tick fight (e.g. BT
+  most every 5 s (`Payload/TraceThrottle.cs:31,82`). This is why a per-tick fight (e.g. BT
   re-requesting a time mode our guard blocks) no longer floods the log. When adding a high-frequency
   tracer, route it through `TraceThrottle.Emit(key, msg)`. The key is part of the evidence: the
   `[TIME]` key names the vetoing prefix (§2 tag table), so a collapsed burst still says who won.
