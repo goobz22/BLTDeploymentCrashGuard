@@ -13,11 +13,14 @@ data in instead (e.g. `Log.SetRoleTag`, `Harness/Log.cs:8-10,32-39`).
 
 `Directory.Build.props` `<Version>` is the single source of truth. MSBuild stamps both assemblies
 from it, and the `StampSubModuleVersion` target `XmlPoke`s `SubModule.xml`'s `/Module/Version/@value`
-to `v$(Version)` on every harness build (`Directory.Build.props:12-18`). The same target then
-**copies the freshly stamped `SubModule.xml` into `dist/`** (`:19-24`) — before that, nothing ever
-wrote `dist/SubModule.xml`, so a release could ship a stale one. `Diag.Version` reads the version back
-off the assembly identity at runtime (`Harness/Diag.cs:14-31`). Never hardcode a version anywhere
-else, including either `SubModule.xml` — a build overwrites both. Bump `<Version>` for a release.
+to `v$(Version)` on every harness build (`Directory.Build.props` § `StampSubModuleVersion`). **The
+build deliberately never touches `dist/`**: `dist/SubModule.xml` is placed by `tools/release.sh` from
+the same build that writes `dist/manifest.txt`, so `dist/` only ever changes as one atomic set — a
+build-time copy was added and then removed on 2026-09-04 because it let an ordinary build desync
+`dist/` from its manifest, which `install.cmd` treats as a fatal mismatch for every player.
+`Diag.Version` reads the version back off the assembly identity at runtime (`Harness/Diag.cs`
+§ `ResolveVersion`). Never hardcode a version anywhere else, including the repo `SubModule.xml` — a
+build overwrites it. Bump `<Version>` for a release.
 
 ## Log contract (`Harness/Log.cs`)
 
@@ -55,7 +58,7 @@ else, including either `SubModule.xml` — a build overwrites both. Bump `<Versi
   (`GuardConfig.cs:17-24`). It is **read with regex, not a JSON parser** — no JSON dependency — and
   cached for the whole session (`GuardConfig.cs:26-80`). A value that must be re-readable mid-session
   has to bypass the cache with its own fresh disk read; that is why the tracing flag has
-  `FreshTracingFlag` in the payload (`Payload/PayloadEntry.cs:213-234`).
+  `FreshTracingFlag` in the payload (`Payload/PayloadEntry.cs:219`).
 - `Bool(key, fallback)` and `String(key, fallback)` both fall back silently on any failure, so a
   malformed file degrades to defaults rather than crashing.
 - **`DefaultJson` must list every key with its `_key` explanation string** and is written on first run

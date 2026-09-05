@@ -127,8 +127,8 @@ Per `.claude/rules/blt-docs-tools.md` § *Every new fix touches five places*:
    `guardconfig.json` does not exist, so an existing install keeps its old text — say so if the
    change is a correction to an explanation.
 4. `docs/FIX-REFERENCE.md` — a full entry (README item · Source · Class · Tag · Config · Scope, then
-   Mechanism / Patched members / Limitations / Self-test) plus a row in each of the five indexes
-   that applies.
+   Mechanism / Patched members / Limitations / Self-test) plus a row in each of the six indexes
+   that applies — the sixth maps every health, fire and self-test id to its file.
 5. `docs/ENGINE-NOTES.md` for a newly IL-proven engine fact (statement, evidence, members, date);
    `docs/BT-INTERNALS.md` for a BannerlordTogether-side fact; `docs/MODDING-PITFALLS.md` for a
    reverted attempt or a trap; `docs/MODDING-GUIDE.md` for a technique worth reusing.
