@@ -43,10 +43,12 @@ namespace BLTDeploymentCrashGuard
 
                 // Attribute-based patches (the two deployment crash finalizers) for THIS assembly.
                 harmony.PatchAll(typeof(PayloadEntry).Assembly);
+                DeploymentCrashGuardHealth.Apply(); // verifies + reports the two attribute-applied finalizers
 
                 // Always-on guards and fixes.
                 TimeFlowPatch.Apply(harmony);
                 PartyAiCrashGuard.Apply(harmony);
+                BattleMode.Apply(harmony); // always-on battle chokepoints (StartBattle/OpenNew) + health/self-test
                 EncounterLoopGuard.Apply(harmony);
                 MapClickSpeedKeeper.Apply(harmony);
                 ClientHeroCreationGuard.Apply(harmony);
