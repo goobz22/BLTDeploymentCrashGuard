@@ -113,13 +113,19 @@ namespace BLTDeploymentCrashGuard
                 }
                 _pendingLogged = false;
                 bool suppressed = __instance.TimeControlMode != _pendingNewMode;
+                // Three of our prefixes sit on this setter and Harmony runs all of them even when
+                // one returns false; the vetoing prefix notes itself in TimeVeto so this line can
+                // NAME it instead of just saying "another patch" (audit 2026-09-04).
+                string vetoedBy = TimeVeto.Take();
                 string message = "[TIME] TimeControlMode " + _pendingOldMode + " -> " + _pendingNewMode + _pendingStack;
                 if (suppressed)
                 {
-                    message += "\n[TIME]   ^ change SUPPRESSED/ALTERED by another patch — actual mode now " + __instance.TimeControlMode;
+                    message += "\n[TIME]   ^ change SUPPRESSED/ALTERED by " + (vetoedBy != null ? "[" + vetoedBy + "]" : "another patch (not one of ours)") +
+                               " — actual mode now " + __instance.TimeControlMode;
                 }
                 // Dedup key ignores the (identical) stack: a request that repeats collapses.
-                string key = "TIME " + _pendingOldMode + "->" + _pendingNewMode + (suppressed ? " SUPPRESSED->" + __instance.TimeControlMode : " applied");
+                string key = "TIME " + _pendingOldMode + "->" + _pendingNewMode +
+                             (suppressed ? " SUPPRESSED by " + (vetoedBy ?? "other") + "->" + __instance.TimeControlMode : " applied");
                 TraceThrottle.Emit(key, message);
             }
             catch
