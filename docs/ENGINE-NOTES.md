@@ -178,6 +178,39 @@ mod lifts in vanilla mode (`Payload/BattleMode.cs:39-63`):
 The namespace split is real and matters for `AccessTools.TypeByName` lookups — see
 [reflection notes](#enumerating-patch-targets-by-name).
 
+### When a co-op mod's battle patches are installed, relative to our lifecycle hooks (2026-09-04)
+
+BannerlordTogether installs the 24 battle patches listed above **after**
+`MBSubModuleBase.OnGameStart` and **before** `PlayerEncounter.StartBattle`. The pre-mission half of
+that set — `MapEventSide.MakeReadyForMission`, the troop-supplier model
+(`DefaultTroopSupplierProbabilityModel.EnqueueTroopSpawnProbabilitiesAccordingToUnitSpawnPrioritization`)
+and Order of Battle (`OrderOfBattleCampaignBehavior`) — then runs **before**
+`OnMissionBehaviorInitialize`.
+
+Both ends of that window matter for anything that decides whether to lift those patches:
+
+| Decision point | What it sees |
+|---|---|
+| `OnGameStart` | No BT battle patches yet — a lift finds nothing to lift |
+| `PlayerEncounter.StartBattle` | The patches are installed and none of them has run yet — the only point where lifting still changes the battle |
+| `OnMissionBehaviorInitialize` / mission init | Too late for the pre-mission half: the roster, the spawn probabilities and the Order-of-Battle data are already decided |
+
+Evidence: across every log segment the **only** decision that ever lifted the 24 patches was the one
+taken at `StartBattle` — the game-start decision never removed any, and mission-init came after the
+pre-mission half had run (`Payload/BattleMode.cs:24-34`, the field-evidence paragraph in the class
+header). The two chokepoints are hooked by `BattleMode` itself, always-on
+(`Payload/BattleMode.cs:110-150`); the lifecycle order the mod hangs on is
+[below](#modulegame-lifecycle-the-mod-hangs-on) (`Payload/PayloadEntry.cs:115-158`).
+
+Consequence for the pattern, not just for this mod: a "decide once at game start" hook is
+structurally wrong for anything that reacts to another mod's Harmony patches, because module load
+order is not guaranteed and a peer mod may patch at any point after its own `OnGameStart`. The
+decision has to be re-taken at the last chokepoint before the behaviour is used.
+Members: `TaleWorlds.MountAndBlade.MBSubModuleBase.OnGameStart`,
+`MBSubModuleBase.OnMissionBehaviorInitialize`,
+`TaleWorlds.CampaignSystem.Encounters.PlayerEncounter.StartBattle`,
+`TaleWorlds.CampaignSystem.MapEvents.MapEventSide.MakeReadyForMission`.
+
 ### `Mission.SpawnTroop` — enumerate, never name the signature
 
 `Mission.SpawnTroop` has **exactly one** declaration in the installed build (re-probed 2026-09-04):
