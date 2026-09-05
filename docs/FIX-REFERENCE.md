@@ -22,7 +22,9 @@ Each entry carries a header line with these fields:
 
 and then four prose fields: **Mechanism** (patch kind plus the exact game/BT members
 patched), **Patched members**, **Limitations**, **Self-test** (what the registered
-`SelfHealing` test pins, or `none registered`).
+`SelfHealing` test pins, or `none registered`). A few entries add **Health** and **Fires** where
+the reporting is more than one line — which branches are `critical`, or which fire ids a
+component records.
 
 Health component ids (`Diag.Report`), self-test names (`SelfHealing.RegisterTest`) and fire ids
 (`SelfHealing.RecordFire`) are collected in *Index 5*.
@@ -33,15 +35,15 @@ Two config keys gate almost everything and are therefore not repeated per entry:
 
 - `safeMode` (`Payload/PayloadEntry.cs:31-36`) — when true `Apply` returns before any patch
   is installed, so every guard, fix and tracer in this document is off.
-- `selfTest` (`Payload/PayloadEntry.cs:103`) — when true `SelfHealing.RunSelfTests()` runs
+- `selfTest` (`Payload/PayloadEntry.cs:105`) — when true `SelfHealing.RunSelfTests()` runs
   after wiring; only the components that call `SelfHealing.RegisterTest` are exercised.
 
-`tracing` (read fresh from disk, `Payload/PayloadEntry.cs:211-232`) gates the tracer bundle and
-**nothing else**. Until v1.3.2 it was also load-bearing for two non-tracer behaviours: the
-battle-mode decisions at `PlayerEncounter.StartBattle` / `MissionState.OpenNew` and the local-
-`Finish` stamp the encounter-loop breaker trips on both rode on `TracePatches` hooks, so with the
-default `tracing: false` neither existed. Both moved into the guards themselves
-(`Payload/BattleMode.cs:112-137`, `Payload/EncounterLoopGuard.cs:69-72`), and `TracePatches` is
+`tracing` (read fresh from disk, `Payload/PayloadEntry.cs:217-234`) gates the tracer bundle and
+**nothing else**. Until v1.3.2 it was also load-bearing for two non-tracer behaviours — the
+battle-mode decisions at `PlayerEncounter.StartBattle` / `MissionState.OpenNew`, and the
+local-`Finish` stamp the encounter-loop breaker trips on. Both rode on `TracePatches` hooks, so
+under the default `tracing: false` neither existed. Both now live in the guards themselves
+(`Payload/BattleMode.cs:110-137`, `Payload/EncounterLoopGuard.cs:70-72`), and `TracePatches` is
 now literally log-only (`Payload/TracePatches.cs:14-21`).
 
 ## Contents
@@ -72,6 +74,12 @@ None of the five files in this area reads `guardconfig.json` directly (verified 
 `Payload/EncounterLoopGuard.cs`, `Payload/MapIncidentCrashGuard.cs`,
 `Payload/BackgroundTickBudgetGuard.cs` — zero hits). They are gated only by `safeMode`, and
 their self-tests only by `selfTest`.
+
+As of v1.3.2 all five report a health component and register a `<component>.contract` self-test:
+`deployment-guards` (critical), `party-ai-guard`, `encounter-loop-guard`, `map-incident-guard`
+and `bg-tick-budget-guard` (critical). The first three were added in this release — before it,
+the deployment finalizers, the party-AI layers and the loop breaker were invisible to both
+`MOD HEALTH:` and `[SELFTEST]`.
 
 ### SetupTeams crash guard
 
@@ -306,7 +314,7 @@ taken from runtime stack traces in `CrashGuard.log` (`Payload/EncounterLoopGuard
 **Mechanism.** Signature-gated loop breaker in two halves, **both always-on**.
 
 *The stamp.* Harmony **prefix** on every declared `PlayerEncounter.Finish` overload, installed by
-this class itself (`PatchFinish`, `:69-71`, `:135-172`) and resolved with
+this class itself (`PatchFinish`, `:70-72`, `:135-169`) and resolved with
 `AccessTools.TypeByName("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter")`. `FinishPrefix`
 calls `NoteEncounterFinish()` (`:171-174`), which records `_lastFinishTick`. **New in v1.3.2:**
 until then the stamp was written only by the `[TRACE]` tracer's own `Finish` hook, which exists
@@ -322,7 +330,7 @@ buffer of timestamps (`:41`, `:210-213`) trips when four signature hits land ins
 tripped, applications are suppressed and after 60 s of suppression exactly one retry is let
 through so the system self-recovers, re-tripping if it has not (`:190-202`). Only
 applications that closely follow a **local** `PlayerEncounter.Finish` (within
-`FinishChainMs` — `FollowsFinish`, `:175-179`, `:204-207`) count toward tripping — the loop
+`FinishChainMs` — `FollowsFinish`, `:176-179`, `:204-207`) count toward tripping — the loop
 signature is finish → immediate re-application, so a partner's legitimate join storm is never
 suppressed. Any exception in the prefix returns true (fail-open, `:224-227`).
 
@@ -343,7 +351,7 @@ root defect — an unconsumed pending-request entry in BT — remains. Trip stat
 Without BannerlordTogether nothing is patched on the BT side, and the health entry then reads
 healthy with the detail `inert — BannerlordTogether not loaded`.
 
-**Self-test.** `encounter-loop-guard.contract` (`:243-262`): `PlayerEncounter.Finish` re-resolves;
+**Self-test.** `encounter-loop-guard.contract` (`:244-262`): `PlayerEncounter.Finish` re-resolves;
 `BattleSyncBehavior.ApplyEncounterRequestNow` re-resolves **when BT is loaded** (a missing BT is a
 pass, not a failure); and the decision logic is exercised on fixed timestamps — no finish ever
 means no signature, 3 s after a finish is the signature, 5 s after is not, a 4th hit 9 s after the
@@ -560,11 +568,11 @@ session is sabotaged.
 No third-party code is read, copied or modified — only runtime patch metadata.
 
 **Chokepoints (v1.3.2: hooked by this class, always-on).** `Apply(harmony)`
-(`Payload/BattleMode.cs:112-137`, called from `Payload/PayloadEntry.cs:51`) installs its own
+(`Payload/BattleMode.cs:110-137`, called from `Payload/PayloadEntry.cs:51`) installs its own
 prefixes on `PlayerEncounter.StartBattle` (`StartBattlePrefix` → `DecideAndApply(…,
-"start-battle")`, `:139-142`) and `MissionState.OpenNew` (`MissionOpenPrefix` → reason
-`"mission-open"`, `:145-149`), via `PatchByName` over `GetMethods` with
-`Public|NonPublic|Static|Instance|DeclaredOnly` (`:151-187`). Until v1.3.2 those two decision
+"start-battle")`, `:141-144`) and `MissionState.OpenNew` (`MissionOpenPrefix` → reason
+`"mission-open"`, `:146-150`), via `PatchByName` over `GetMethods` with
+`Public|NonPublic|Static|Instance|DeclaredOnly` (`:152-187`). Until v1.3.2 those two decision
 points lived in `TracePatches` and therefore existed only with `tracing: true`; the field
 evidence is explicit (`:29-33`): across every log segment the only decision that ever lifted the
 24 patches was `start-battle`, because BT installs its battle patches *after* our `game-start`
@@ -633,8 +641,8 @@ including the legacy key (`{"battleMode":"solo"}`→solo, `"coop"`→coop,
 Registering a component plus a self-test is the convention for the resolved-by-name guards, not a
 universal one — the tracers, the wire-model files and the identity/bootstrap watchers register
 neither. `Payload/PayloadEntry.cs` registers no component of its own but is the **caller** that
-prints `Diag.HealthSummary()` (`:102`), runs `SelfHealing.RunSelfTests()` under `selfTest`
-(`:105`) and renders `SelfHealing.FireSummary()`. Each entry states which. *Index 5* is the full
+prints `Diag.HealthSummary()` (`:104`), runs `SelfHealing.RunSelfTests()` under `selfTest`
+(`:105-108`) and renders `SelfHealing.FireSummary()`. Each entry states which. *Index 5* is the full
 list.
 
 **Fires.** `SelfHealing.RecordFire("battle-mode")` on every actual change of state — whenever
@@ -745,11 +753,11 @@ BT packets were arriving every ~2 seconds; the mod went solo mid-session and the
 game speeds desynced.
 
 **Mechanism.** Any traced BT packet handler stamps `PeerDetection.NoteCoopActivity()` →
-`_lastActivityTick = Environment.TickCount` (`:402-405`); the only in-repo caller is
+`_lastActivityTick = Environment.TickCount` (`:630-633`); the only in-repo caller is
 `Payload/TimeEnforcementGuard.cs:234`. `RecentCoopActivity()` is true when
 `_lastActivityTick != 0 && now-last < 15000 && now >= last` (the `now >= last` term guards
-`Environment.TickCount` wraparound) (`:407-416`). `AnyRemotePeerConnected()` returns true
-immediately on recent activity, before any reflection (`:513-516`): packets arriving mean a
+`Environment.TickCount` wraparound) (`:635-644`). `AnyRemotePeerConnected()` returns true
+immediately on recent activity, before any reflection (`:762-765`): packets arriving mean a
 live session regardless of what reflection says.
 
 **Limitations.** 15 s window; the stamp only happens on code paths that are actually traced or
@@ -765,17 +773,17 @@ patched by other guards, so with those guards absent the fail-safe never arms.
 **Bug.** A boolean "is anyone connected" cannot express "I could not read the state", and
 treating unreadable as false caused the mid-session false-alone above.
 
-**Mechanism.** Returns `bool?` — true / false / null (unknown). Order (`:511-555`): recent
+**Mechanism.** Returns `bool?` — true / false / null (unknown). Order (`:760-804`): recent
 packets → true; `CoopSession` type missing → null (co-op mod absent or unreadable);
 `IsClient==true` → true; then read `IsHost`, `IsClient`, `Server`. If `Server` is null,
 return false **only** when `isHost==false && isClient==false`, otherwise null — "a null
 Server with unreadable roles previously returned false and caused a mid-session false-alone
-(2026-08-19 20:27) — that must be UNKNOWN" (`:531-533`). If `Server` is non-null, enumerate
+(2026-08-19 20:27) — that must be UNKNOWN" (`:780-782`). If `Server` is non-null, enumerate
 `GameplayPeerIds` then `ConnectedPeerIds`; first element → true; a collection that was found
 but empty → false; no collection found at all → null.
 
 **Limitations.** **Both** collections are enumerated — there is no early break in the member
-loop (`:541-553`), so an empty `GameplayPeerIds` still falls through to `ConnectedPeerIds`.
+loop (`:790-803`), so an empty `GameplayPeerIds` still falls through to `ConnectedPeerIds`.
 (`Snapshot()` differs: it stops at the first collection that resolves, `:444`.) Renamed BT
 members degrade to null (unknown), which the caller treats as co-op.
 
@@ -788,7 +796,7 @@ members degrade to null (unknown), which the caller treats as co-op.
 
 **Mechanism.** `Snapshot()` builds
 `isClient=? isHost=? server=null|set <GameplayPeerIds|ConnectedPeerIds>=<count> recentPackets=<bool>`
-(`:418-454`), or `sessionType=missing`, or `snapshot failed: <msg>`. Consumed by other guards,
+(`:646-681`), or `sessionType=missing`, or `snapshot failed: <msg>`. Consumed by other guards,
 e.g. `Payload/TimeEnforcementGuard.cs:160`.
 
 **Self-test.** None.
@@ -805,11 +813,11 @@ absent or updated.
 `GetName().Name == "BannerlordTogether"`, call `GetTypes()` inside try/catch and on
 `ReflectionTypeLoadException` fall back to `loadEx.Types` (partially loaded types are still
 usable), match `Type.Name == simpleName`, and return null after the first matching assembly is
-exhausted (`:457-491`). Failures log `[PEER-DETECT] type lookup failed for <name>`.
+exhausted (`:706-740`). Failures log `[PEER-DETECT] type lookup failed for <name>`.
 
 **Limitations.** Only searches an assembly literally named `BannerlordTogether`; matches on
 **simple** name, so two same-named types in different BT namespaces resolve to whichever comes
-first; the `SessionType` cache latches even a null result (`_searched`, `:497-503`), so a BT
+first; the `SessionType` cache latches even a null result (`_searched`, `:742-753`), so a BT
 assembly that loads after the first probe is never re-searched for `CoopSession`.
 
 **Self-test.** None.
@@ -820,11 +828,11 @@ assembly that loads after the first probe is never re-searched for `CoopSession`
 **Tag** none (silent) · **Config** none · **Scope** both
 
 **Mechanism.** One resolution and caching path shared by all guards:
-`ReadCoopStaticBool(name)` for `IsHost`/`IsClient`/`IsActive` (`:557-562`);
-`ReadCoopStaticString(name)` for e.g. the remote player's hero id (`:564-573`).
+`ReadCoopStaticBool(name)` for `IsHost`/`IsClient`/`IsActive` (`:808-811`);
+`ReadCoopStaticString(name)` for e.g. the remote player's hero id (`:814-822`).
 `ReadStaticMember` tries `GetProperty(Public|NonPublic|Static)` first, then `GetField`,
-catch → null (`:586-602`); `ReadInstanceMember` does the same on an instance (`:604-621`).
-`ReadStaticBool` unboxes only if `value is bool`, else null (`:583`).
+catch → null (`:835-851`); `ReadInstanceMember` does the same on an instance (`:853-869`).
+`ReadStaticBool` unboxes only if `value is bool`, else null (`:832`).
 
 **Limitations.** All failures are swallowed to null and nothing is logged when a member
 disappears, so a BT rename shows up only as "unknown" downstream.
@@ -887,8 +895,8 @@ destroyed the live repro being traced.
 
 **Mechanism.** Read `File.ReadAllText(GuardConfig.Path)` directly and regex
 `"tracing"\s*:\s*(true|false)` with `RegexOptions.IgnoreCase`; on any failure fall back to
-`GuardConfig.Bool("tracing", false)` (`:211-232`). Called once per `Apply`, so editing the
-file and hot-reloading the payload turns tracers on without losing the session (`:77-81`).
+`GuardConfig.Bool("tracing", false)` (`:217-234`). Called once per `Apply`, so editing the
+file and hot-reloading the payload turns tracers on without losing the session (`:79-83`).
 
 **Limitations.** Only the `tracing` key gets this treatment; `safeMode` and `selfTest` still
 come from the cached `GuardConfig`.
@@ -909,7 +917,7 @@ exception context"); then logs "tracing ENABLED (guardconfig tracing=true)".
 **Limitations.** None behavioural, as of v1.3.2: this gate now switches **only** logging. The
 two behaviours that used to ride on it — `BattleMode`'s mission-open and start-battle decisions,
 and the encounter breaker's local-`Finish` stamp — are hooked by their own guards, always-on
-(`Payload/BattleMode.cs:112-137`, `Payload/EncounterLoopGuard.cs:69-71`). Turning tracing on
+(`Payload/BattleMode.cs:110-137`, `Payload/EncounterLoopGuard.cs:70-72`). Turning tracing on
 still costs performance and log volume, and `RuntimeDiagnostics` / `MovementOrderInitProbe`
 exist only while it is on.
 
@@ -947,7 +955,7 @@ case the co-op assembly loaded late"), `ClanModeSoloFix.Apply`, `JoinSyncPauseEs
 
 **Limitations.** `PeerDetection.SessionType` is **not** re-searched on this retry — its
 `_searched` latch caches a null `CoopSession` from the first probe
-(`Payload/BattleMode.cs:497-503`).
+(`Payload/BattleMode.cs:742-753`).
 
 **Self-test.** n/a.
 
@@ -961,7 +969,7 @@ case the co-op assembly loaded late"), `ClanModeSoloFix.Apply`, `JoinSyncPauseEs
 `"module-screen"` (`:125`), `"game-start"` (`:132`) and `"mission-init"` (`:139`).
 `BattleMode.Apply` (`Payload/PayloadEntry.cs:51`) installs the last two itself:
 `"start-battle"` on `PlayerEncounter.StartBattle` and `"mission-open"` on `MissionState.OpenNew`
-(`Payload/BattleMode.cs:120-121`, `:139-149`).
+(`Payload/BattleMode.cs:119-120`, `:141-150`).
 
 **Limitations.** Ordering matters and is load-bearing: BT installs its 24 battle patches after
 our `game-start` decision, and the pre-mission half of them runs before mission init — so
@@ -1013,7 +1021,7 @@ changed since last time (`:189-209`).
 looks identical to a working one.
 
 **Mechanism.** After wiring, logs `Diag.HealthSummary()`; if `GuardConfig.Bool("selfTest", false)`
-it runs `SelfHealing.RunSelfTests()` (`:103-107`).
+it runs `SelfHealing.RunSelfTests()` (`:104-108`).
 
 **Limitations.** It reports only components that called `Diag.Report` and runs only tests that
 called `SelfHealing.RegisterTest` — a mechanism that registers neither is invisible here, which is
@@ -1118,7 +1126,7 @@ prefix/postfix" is **literally true since v1.3.2** (`:14-21`). It was not before
 carried side effects — `MissionOpenNewPrefix` and `EncounterStartBattlePrefix` re-decided battle
 mode, and `EncounterFinishPrefix` stamped the encounter-loop guard's local-`Finish` clock — so
 turning tracing on changed *when* battle mode was decided and *whether* the loop breaker could
-trip at all. All three moved to the guards that own them (`Payload/BattleMode.cs:139-149`,
+trip at all. All three moved to the guards that own them (`Payload/BattleMode.cs:141-150`,
 `Payload/EncounterLoopGuard.cs:171-174`); the three prefixes here now only call `Log.Info`
 (`:90-94`, `:182-186`, `:188-192`). Noise filters still make some events deliberately invisible:
 settlement/party encounters and `CanPartyJoinBattle` log only when the main party is an argument,
@@ -1174,7 +1182,7 @@ battles with enemy parties double-counted (`Payload/CoopBattleTrace.cs:9-16`).
 
 **Mechanism.** Void prefixes on four BannerlordTogether internals resolved by simple type name
 inside the assembly literally named `BannerlordTogether`
-(`PeerDetection.FindCoopType`, `Payload/BattleMode.cs:456-490`; used at
+(`PeerDetection.FindCoopType`, `Payload/BattleMode.cs:706-740`; used at
 `Payload/CoopBattleTrace.cs:37`, `:60`). Every emitted line is suffixed with a co-op topology
 snapshot (`Topo()`, `:149-172`) so role-tagged, timestamped logs from the server and both
 clients line up.
@@ -1494,10 +1502,10 @@ Each of these registers a `Diag` component id, which is the name that appears in
 | #2 dead hero (invariant) | `dead-hero-activate-invariant` | `[DEADHERO]` | — | `Hero.ChangeState(CharacterStates)` prefix |
 | #3 conversation camera | `conversation-camera-guard` | `[CONVO-CAM]` | — | `MissionConversationCameraView.MakeSpeakerLookToListener` + `UpdateAgentLooksForConversation` finalizers |
 | #4 clan screen | `clan-screen-guard` | `[CLAN-GUARD]` | — | `GauntletClanScreen.CreateDataSource` finalizer (+ reflective `ScreenManager.PopScreen()`) |
-| #10 atomic dowry | `marriage-barter-guard` | `[MARRIAGE-GUARD]` | — | `BarterManager.ApplyAndFinalizePlayerBarter(Hero,Hero,BarterData)` prefix |
-| #11 no sickness | `illness-death-guard` | `[NOSICK]` | `noSickness` | `AgingCampaignBehavior.IsItTimeOfDeath` + `DailyTickHero` prefixes |
-| #21 sneak-in | `stealth-hideout-advisor` | `[STEALTH]` | — | `HideoutAmbushMissionController.AfterStart` postfix + the three stealth→battle transitions |
-| #22 party creation | `clan-party-advisor` | `[CLAN-PARTY]` | `partyTroopsOnCreate` | `ClanPartiesVM.GetCanCreateNewParty` / `GetNewPartyLeaderCandidates` / `CreateNewClanParty` postfixes |
+| #11 atomic dowry | `marriage-barter-guard` | `[MARRIAGE-GUARD]` | — | `BarterManager.ApplyAndFinalizePlayerBarter(Hero,Hero,BarterData)` prefix |
+| #12 no sickness | `illness-death-guard` | `[NOSICK]` | `noSickness` | `AgingCampaignBehavior.IsItTimeOfDeath` + `DailyTickHero` prefixes |
+| #22 sneak-in | `stealth-hideout-advisor` | `[STEALTH]` | — | `HideoutAmbushMissionController.AfterStart` postfix + the three stealth→battle transitions |
+| #23 party creation | `clan-party-advisor` | `[CLAN-PARTY]` | `partyTroopsOnCreate` | `ClanPartiesVM.GetCanCreateNewParty` / `GetNewPartyLeaderCandidates` / `CreateNewClanParty` postfixes |
 
 Component ids are registered at `Payload/IllnessDeathGuard.cs:44`,
 `Payload/MarriageBarterGuard.cs:39`, `Payload/ConversationCameraCrashGuard.cs:27`,
@@ -1815,9 +1823,12 @@ exposes `IsDisabled` / `DisabledReason` / `Title` as either a field or a propert
 
 `myHero` is the only `guardconfig.json` key read inside these six files
 (`GuardConfig.String("myHero", "")` at `Payload/CoopHeroIdentityLock.cs:129`). `safeMode`
-disables all six; `selfTest` runs the three registered contracts
-(`hero-identity-lock.contract`, `client-bootstrap-fix.wiring`, `clanmode-solo-fix.contract`).
-`tracing` gates none of them — all six are always on — but it enables
+disables all six; `selfTest` runs the four registered contracts
+(`hero-identity-lock.contract`, `hero-creation-guard.contract` — new in v1.3.2 —
+`client-bootstrap-fix.wiring`, `clanmode-solo-fix.contract`). The remaining two,
+`PlayerIdentityGuard` and `BootstrapWatch`, register no health component and no test; both now
+record fires (`player-identity-guard`, `bootstrap-watch`), so `GUARD ACTIVITY:` is their only
+signal. `tracing` gates none of them — all six are always on — but it enables
 `CharacterCreationTrace`, `ControlTrace`, `RoleTrace` and `RuntimeDiagnostics`, which are the
 tracers used to diagnose identity and bootstrap failures.
 
@@ -2119,7 +2130,7 @@ un-inline existing callers. If BT is absent or the type/getter was renamed it re
 silently return the wrong mode. The 2 s verdict cache means up to 2 s of stale verdict right
 after a peer connects or disconnects. Peer confidence is only as good as `PeerDetection`: a null
 `Server` with unreadable role flags returns null (unknown) and therefore never forces
-(`Payload/BattleMode.cs:529-538`). `CHANGELOG.md` describes the same fix as inert once a peer
+(`Payload/BattleMode.cs:778-787`). `CHANGELOG.md` describes the same fix as inert once a peer
 joins.
 
 **Self-test.** `clanmode-solo-fix.contract` (`:105-119`) re-resolves
@@ -3289,16 +3300,16 @@ solo-host; active only while no remote player is connected, fully inert with a p
 **Bug.** After loading a save mid-session while hosting alone, fast-forward stops working until
 you relaunch the game: BannerlordTogether's `CoopCampaignBehavior.EnforcePlaySpeed` runs every
 campaign tick and forces `UnstoppablePlay`, stomping whatever speed the player picked (evidence:
-`CrashGuard.log` 2026-08-19 00:07-00:08) (`:9-12`).
+`CrashGuard.log` 2026-08-19 00:07-00:08) (`:35-39`).
 
 **Mechanism.** A two-layer neutralizer, "run but neutralize". (1) **Prefix + finalizer** on
 every declared non-abstract `CoopCampaignBehavior.EnforcePlaySpeed`, found by name over
 `Public|NonPublic|Static|Instance|DeclaredOnly` on the type resolved via
-`PeerDetection.FindCoopType("CoopCampaignBehavior")` (`:56-80`). `EnforcePrefix` re-evaluates
+`PeerDetection.FindCoopType("CoopCampaignBehavior")` (`:75-106`). `EnforcePrefix` re-evaluates
 peer state at most every 2000 ms (`Environment.TickCount`, with an explicit wraparound guard
 `now < _lastCheckTick`) and, when confidently alone, sets the `[ThreadStatic]`
-`_inSoloEnforce = true` (`:147-178`); `EnforceFinalizer` clears it and returns `__exception`
-unchanged so exceptions still propagate (`:180-184`). (2) **Prefix**
+`_inSoloEnforce = true` (`:174-205`); `EnforceFinalizer` clears it and returns `__exception`
+unchanged so exceptions still propagate (`:207-211`). (2) **Prefix**
 `BlockSoloEnforceWritePrefix` on Campaign's time setters — patched for each of
 `set_TimeControlMode`, `SetTimeControlModeLock` and `set_TimeControlModeLock` that
 `AccessTools.Method` finds on `AccessTools.TypeByName("TaleWorlds.CampaignSystem.Campaign")` —
@@ -3307,14 +3318,14 @@ inside the enforcer while solo (`:211-222`). When it does veto, it first calls
 `TimeVeto.Note("TIME-GUARD")` (`:217`) so the `[TIME]` tracer can name it rather than reporting
 an anonymous suppression. BT's method itself always runs, so its
 bookkeeping and sync side effects stay fresh; with a peer connected nothing is touched
-(`:16-21`, `:164-167`).
+(`:42-47`, `:183-190`).
 
-This guard is also the only in-repo caller of `PeerDetection.NoteCoopActivity()` (`:234`), the
-packet-liveness stamp, and it consumes `PeerDetection.Snapshot()` (`:160`). It additionally
+This guard is also the only in-repo caller of `PeerDetection.NoteCoopActivity()` (`:266`), the
+packet-liveness stamp, and it consumes `PeerDetection.Snapshot()` (`:187`). It additionally
 installs a shared-pause tracer — log-only prefixes on BT `CoopSubModule.SetPaused` and
 `ApplyTimeState` — whose apply evidence is
-`[TIME-GUARD] shared-pause tracer active on N method(s)` (`:136`); `_pauseTraceApplied` latches
-after the first successful application (`:133-137`), and that tracer is **not** gated on
+`[TIME-GUARD] shared-pause tracer active on N method(s)` (`:163`); `_pauseTraceApplied` latches
+after the first successful application (`:160-164`), and that tracer is **not** gated on
 `tracing`.
 
 **Patched members.** BT `CoopCampaignBehavior.EnforcePlaySpeed` (prefix + finalizer, all
@@ -3324,27 +3335,27 @@ skip-original — whichever of the two lock members exists).
 
 **Limitations.** Fails **toward co-op**: it neutralizes only on a confident "no session" —
 `PeerDetection.AnyRemotePeerConnected() != false`, so an unknown (null) peer state counts as
-connected and enforcement is left fully intact (`:155-156`). Peer state is re-read only every
-2 s, so the switch back to full enforcement when a peer joins lags up to 2 s (`:152`). The
+connected and enforcement is left fully intact (`:183-184`). Peer state is re-read only every
+2 s, so the switch back to full enforcement when a peer joins lags up to 2 s (`:179`). The
 setter prefixes are installed only if at least one `EnforcePlaySpeed` was patched (`count > 0`,
-`:81-83`). `_applied` latches, so a second `Apply` is a no-op — but `Apply` is deliberately
+`:108`). `_applied` latches, so a second `Apply` is a no-op — but `Apply` is deliberately
 retried from `PayloadEntry.OnBeforeInitialModuleScreen` and `OnGameStart` because the BT
-assembly may load after us (`Payload/PayloadEntry.cs:122`, `:128`; `:56-59`). The setter block
+assembly may load after us (`Payload/PayloadEntry.cs:124`, `:130`; `:77-80`). The setter block
 is thread-scoped, so an unrelated write on another thread during the enforcer window is
 unaffected. No `Diag.Report`, no self-test. Scoping this neutralizer to the campaign map was
 tried on 2026-09-04 and **reverted** (`docs/ENGINE-NOTES.md` §4 "Campaign time control",
 `:550-552`). The BT member names were
-taken from **runtime stack traces**, not from a decompile (`:23-24`), so a BT rename silently
-disables the tracer — the only reveal is the "could not trace" line (`:130`) or a missing
+taken from **runtime stack traces**, not from a decompile (`:49-50`), so a BT rename silently
+disables the tracer — the only reveal is the "could not trace" line (`:157`) or a missing
 "shared-pause tracer active" line. The packet-frame heuristic is name-based (a "Packet"
 substring) and depth-bounded to 12 frames, so a deeply-nested or renamed handler is missed, in
 which case the liveness stamp simply does not fire (a fail-safe direction).
 
 **Self-test.** None registered. Observable state transitions are logged: the apply line
 `[TIME-GUARD] EnforcePlaySpeed neutralizer active (N method(s)) — runs every tick, writes
-blocked while no remote player is connected` (`:94`), the peer-state edge line including
-`PeerDetection.Snapshot()` (`:160`), and a once-per-edge "neutralizing EnforcePlaySpeed
-time-writes" line gated by `_skipLogged` (`:169-173`).
+blocked while no remote player is connected` (`:121`), the peer-state edge line including
+`PeerDetection.Snapshot()` (`:187`), and a once-per-edge "neutralizing EnforcePlaySpeed
+time-writes" line gated by `_skipLogged` (`:196-201`).
 
 Note the interaction with the `[TIME]` tracer: with `tracing=true` while hosting alone at the
 co-op setup menu, BT re-requests `UnstoppablePlay` every tick, this guard blocks the write, the
