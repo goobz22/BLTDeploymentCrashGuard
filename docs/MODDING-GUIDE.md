@@ -58,9 +58,12 @@ Reference paths that catch people out:
 
 - **Engine assemblies**: `<Game>/bin/Win64_Shipping_Client/TaleWorlds.*.dll` (plus `SandBox.*`,
   `StoryMode.*`).
-- **Harmony is not in the game bin.** It ships as its own module:
+- **Do not reference the game bin's Harmony.** The process holds *two* copies: the game bin ships
+  `0Harmony 2.4.2.0`, and the `Bannerlord.Harmony` module ships `0Harmony 2.3.6.0`
+  (`CHANGELOG.md:215-220`; `Harness/HotReload.cs:146-151`). Mods bind the **module's** copy:
   `<Game>/Modules/Bannerlord.Harmony/bin/Win64_Shipping_Client/0Harmony.dll`
-  (`Harness/BLTDeploymentCrashGuard.csproj:31`).
+  (`Harness/BLTDeploymentCrashGuard.csproj:31`). That two-copy split is exactly the type-identity
+  hazard §4.4 and §10.2 are about.
 - **SandBox *view* code is also in a module**:
   `<Game>/Modules/SandBox/bin/Win64_Shipping_Client/SandBox.View.dll` (`tools/il-probes/README.md:30-31`).
 - **BannerlordTogether**: `<Game>/Modules/BannerlordTogether/bin/Win64_Shipping_Client/BannerlordTogether.dll`
@@ -153,7 +156,7 @@ and when each is right are §2. Two facts to carry from the start:
 - Harmony **keys patches by owner string**, which is what makes a whole patch set removable later
   (`new Harmony(id).UnpatchAll(id)`) — see §2.12.
 - Harmony runs **all** prefixes even when one of them returns `false`
-  (`Payload/TimeTrace.cs:20-22`). That is both a hazard (your prefix runs even when the call is already
+  (`Payload/TimeTrace.cs:17-19`). That is both a hazard (your prefix runs even when the call is already
   vetoed) and a tool (§6.8).
 
 ### 1.5 The ButterLib / Roslyn caveat, and optional features in a csproj
@@ -198,9 +201,9 @@ and they are scriptable from an agent loop.
 **The `.cctor`-then-`.ctor` pattern for type-initializer crashes.** When a `TypeInitializationException`
 points at a type, dump the static constructor to see what it constructs, then dump the instance
 constructor it calls and look for the single line that can dereference null; confirm with a reflection
-check of the type's attributes (`beforefieldinit`, value type). Verbatim from the README, three commands
-produced the whole root cause of the 2026-09-04 `MovementOrder` crash — "No decompiler, no guessing"
-(`tools/il-probes/README.md:34-44`):
+check of the type's attributes (`beforefieldinit`, value type). Verbatim from the README, two IL dumps
+plus that reflection check produced the whole root cause of the 2026-09-04 `MovementOrder` crash — "No
+decompiler, no guessing" (`tools/il-probes/README.md:34-44`):
 
 ```
 IlDump.exe TaleWorlds.MountAndBlade.dll "TaleWorlds.MountAndBlade.MovementOrder::.cctor"
@@ -414,7 +417,9 @@ the unwanted change — read the old value from `__instance`, the new from the `
 while `_inMapClick`). Everything else in that hot engine setter keeps working, including click-to-unpause.
 
 **Only install a dependent hook when its scoping hook landed** (`if (count > 0)`), or you leave a
-permanently-armed setter blocker with no owner (`Payload/TimeEnforcementGuard.cs:117-132`).
+permanently-armed setter blocker with no owner (`Payload/TimeEnforcementGuard.cs:81-92` — the
+`set_TimeControlMode` / `SetTimeControlModeLock` / `set_TimeControlModeLock` blockers are installed only
+inside the `count > 0` gate).
 
 ### 2.8 Patch by name via AccessTools, so updates degrade gracefully
 
@@ -424,8 +429,11 @@ result, and on a miss log `<tag> inactive — members not resolved (game update?
 `Diag.Report(component, false, …)` and **return without patching**
 (`Payload/SiegeCommandGuard.cs:93-109`; `Payload/SiegeGatePromptFix.cs:42-49`;
 `Payload/CivilianGateCloseFix.cs:40-48`; `Payload/CoopCommandSplit.cs:88-94`;
-`Payload/PartyAiCrashGuard.cs:37-56`; `Payload/BackgroundTickBudgetGuard.cs:57-68`). The failure mode of
-a crash-guard mod must never be a crash.
+`Payload/BackgroundTickBudgetGuard.cs:57-68`). The failure mode of a crash-guard mod must never be a
+crash. `Payload/PartyAiCrashGuard.cs:37-57` shows the same resolution discipline without the reporting
+half — it null-checks each member and counts, but on a total miss it logs "active on 0 method(s)" and
+carries on, never calling `Diag.Report`, so a drift there never reaches the health board. That is the
+gap §5.4 describes.
 
 **Enumerate overloads by name.** `AccessTools.Method` ambiguates on overloads and cannot see all
 binding-flag combinations at once, so loop instead — this is the only reliable way to reach private,
@@ -460,7 +468,9 @@ escapes the guard.
 
 **Validate the return type before patching.** A postfix taking `bool __result` breaks if the target
 becomes `void` — check `ReturnType` and refuse to install with a named reason instead
-(`Payload/TimeEnforcementGuard.cs`, §2.14 pattern).
+(`Payload/JoinSyncPauseEscape.cs:83-93`, which appends `" ToggleHostManualPause(bool-return)"` to a
+`missing` string and reports `Diag.Report("join-sync-pause-escape", false, "missing:" + …)`; the
+shape-filter variants are `Payload/MapIncidentCrashGuard.cs:94` and `Payload/CoopCommandSplit.cs:81`).
 
 **Field-first or property-first, and know which trap you are avoiding.** TaleWorlds' VM info types mix
 public fields and auto-properties, and `AccessTools.Field(t, "IsDisabled")` returns **null** for an
@@ -474,8 +484,10 @@ field**, because third-party code freely converts public fields to properties an
 `Payload/ShareTimeControl.cs:37-38,142-144,172-173`).
 
 **Write state that has no public mutator.** `AccessTools.PropertySetter(typeof(Hero), "DeathMark")?
-.Invoke(hero, new object[] { HeroDeathMark.None })` — the `?.` makes a missing setter a no-op instead of
-an NRE (`Payload/IllnessDeathGuard.cs:121-122`). For a get-only auto-property, write the backing field:
+.Invoke(hero, new object[] { KillCharacterAction.KillCharacterActionDetail.None })` — the `?.` makes a
+missing setter a no-op instead of an NRE (`Payload/IllnessDeathGuard.cs:121-122`; `Hero.DeathMark` is a
+`KillCharacterActionDetail`, and the enum is nested in
+`TaleWorlds.CampaignSystem.Actions.KillCharacterAction`). For a get-only auto-property, write the backing field:
 `AccessTools.Field(type, "<IsPlayerGeneral>k__BackingField")`, cached at `Apply` and written with
 `SetValue` (`Payload/SiegeCommandGuard.cs:101-102,373-380`) — and treat that hook as **optional** with an
 announced degradation, because the name is a compiler detail that can vanish (:118-126,132).
@@ -606,10 +618,10 @@ catch (TypeInitializationException tie)
 initialized for the rest of the process, and the `catch` doubles as a diagnostic that says "too late,
 move the fix earlier" — it distinguishes "fixed" from "you lost the race".
 
-**Ordering is part of the fix.** `MovementOrderTypeInitGuard.ApplyEarly` is the **first** statement of
-`PayloadEntry.Apply`, before `harmony.PatchAll` and every other guard, with a comment stating why:
-patching `Formation`/`OrderController` is itself what makes the CLR prepare `MovementOrder`
-(`Payload/PayloadEntry.cs:38-46`). Your own instrumentation can trigger the type preparation you are
+**Ordering is part of the fix.** `MovementOrderTypeInitGuard.ApplyEarly` is the **first patch installed**
+by `PayloadEntry.Apply` — before `harmony.PatchAll` and every other guard, with only the `safeMode` kill
+switch ahead of it (§7.5) — and a comment states why: patching `Formation`/`OrderController` is itself
+what makes the CLR prepare `MovementOrder` (`Payload/PayloadEntry.cs:31-46`). Your own instrumentation can trigger the type preparation you are
 trying to make safe. This repo states it as a convention: a fix that must run before the game touches a
 type goes first in `PayloadEntry.Apply` (`CLAUDE.md:77-78`).
 
@@ -798,13 +810,15 @@ multiply listeners (`Payload/PregnancySync/PregnancySyncGuard.cs:76,84-89`).
   `Payload/SiegeGatePromptFix.cs:143-146`; `Payload/CoopCommandSplit.cs:153-184`;
   `Payload/BackgroundTickBudgetGuard.cs:88-95`; `Payload/JoinSyncPauseEscape.cs:269-278`). Patch plumbing
   cannot be unit-tested in-process; the decision logic can (§5).
-- **One scope predicate, shared by every patch in the guard.** `InScope(out Mission mission)` answers
+- **One scope predicate, shared by the patches on the hot path.** `InScope(out Mission mission)` answers
   "is this the situation I exist for?" once — `Mission.Current != null`, `IsSiegeBattle`,
   `!IsSallyOutBattle`, `PlayerTeam.Side == Defender`, not a BT client — with
   `IsGuardedFormation(formation, mission)` as its per-formation companion
-  (`Payload/SiegeCommandGuard.cs:209-228`, used at :289 and :314). Four patches then share one
+  (`Payload/SiegeCommandGuard.cs:209-228`, used at :289 and :314). Those two formation patches share one
   definition of scope: a scope bug is fixed in one place, and the whole condition is legible on one
-  screen instead of being re-derived, slightly differently, in each patch body.
+  screen. The guard installs six patches in all (:110-117,121), and two of them still re-derive a
+  narrower scope inline — the role prefix at :349 and the deployment postfix at :394-395 — which is
+  exactly the drift this pattern exists to prevent.
 - **Rate-detect without allocating.** A fixed `int[TripCount]` ring buffer with a rolling index: each call
   overwrites the oldest slot and compares `now - oldest < WindowMs`. O(1), no lists, no timers, no GC
   pressure inside a game loop (`Payload/EncounterLoopGuard.cs:31,114-117`).
@@ -842,7 +856,7 @@ multiply listeners (`Payload/PregnancySync/PregnancySyncGuard.cs:76,84-89`).
   "allow/log now" rather than latching a breaker forever. This appears in essentially every timed path in
   the repo (`Payload/EncounterLoopGuard.cs:96,109,117`; `Payload/PartyAiCrashGuard.cs:155`;
   `Payload/BackgroundTickBudgetGuard.cs:130`; `Payload/SiegeCommandGuard.cs:512-521`;
-  `Payload/TraceThrottle.cs:63-65`; `Payload/PayloadEntry.cs:172-176,193-197`). See §10.6 for the exact
+  `Payload/TraceThrottle.cs:63-65`; `Payload/PayloadEntry.cs:166,194`). See §10.6 for the exact
   arithmetic.
 
 ### 2.17 Never do UI work on a call stack that is still unwinding
@@ -858,8 +872,9 @@ Around that pump:
   client), because a client-side provisional object can be replaced by the host-authoritative one.
   Re-check **identity** with `ReferenceEquals` and restart the window on a swap, logging "party instance
   changed (co-op reconciliation)" (:226-233).
-- **A bounded timeout** (15 s) that exits with a user-visible fallback note — never wait forever for state
-  a peer may never confirm (:185-197).
+- **A bounded timeout** (`PendingTimeoutMs = 15000`) that exits with a user-visible fallback note —
+  "could not open the troop exchange automatically — click the party on the map to fill it" — never wait
+  forever for state a peer may never confirm (:51,209-216).
 - **Screen-state gating before pushing a screen**: refuse if `Mission.Current != null`, refuse if the
   active state is already a `PartyState`, pop a `ClanState` with `PopState(0)` to land on the map, and
   refuse if the active state is not `MapState` — the same preconditions vanilla's own manage-troops flows
@@ -1054,7 +1069,10 @@ Three facts, each of which cost a release to learn (`CHANGELOG.md:119-128,211-22
    Bannerlord that resolves `0Harmony` to a *different* copy than the one the harness patched with, the
    two Harmony instances do not see each other's patches, and `IPayload.Apply(Harmony …)` fails with
    `TypeLoadException: Method 'Apply' … does not have an implementation`
-   (`HOTRELOAD.md:10`; `Payload/BLTDeploymentCrashGuard.Payload.csproj:16-18`).
+   (`HOTRELOAD.md:10` for the binding mechanism; `CHANGELOG.md:219` and `Harness/HotReload.cs:60` for
+   the exception text; `Payload/BLTDeploymentCrashGuard.Payload.csproj:16-18`). Concretely: probing
+   finds the game bin's `0Harmony 2.4.2.0`, while the harness is bound to the module-loaded
+   `0Harmony 2.3.6.0` (`CHANGELOG.md:215-220`).
 2. **Copy the canonical DLL to a unique sibling path in the *same* directory and load the copy**
    (`Harness/HotReload.cs:276-314`). Same directory keeps `LoadFrom` dependency probing pointed at the
    harness's own module folder; the canonical file stays unlocked so a build can overwrite it and trigger
@@ -1111,9 +1129,15 @@ family so it is never redirected, (b) **hard-pins every assembly whose types cro
 logging `AMBIGUOUS` when more than one copy exists. Wrap the whole handler in an empty catch: a resolver
 must never throw into the binder (`Harness/HotReload.cs:63,134-192`).
 
+The two copies that can split here are concrete: the game bin's `0Harmony 2.4.2.0` and the
+`Bannerlord.Harmony` module's `0Harmony 2.3.6.0`, of which the harness is bound to the latter
+(`Harness/HotReload.cs:146-151`; `CHANGELOG.md:215-220`).
+
 **Pinning is necessary but not sufficient.** `AssemblyResolve` only fires when probing *fails*, and
 byte-loading probes successfully (against the wrong copy), so the pin can never run. Change the **load
-context**; do not just add a resolver (`CHANGELOG.md:274-278`). Generation 1 always worked, which masked
+context**; do not just add a resolver (`CHANGELOG.md:213-221`; `Harness/HotReload.cs:281-287`). The
+resolver pin was in fact shipped first as the fix (`CHANGELOG.md:274-278`) and did not work, which is
+why it is worth stating this way round. Generation 1 always worked, which masked
 the bug for three releases — a path that works by accident on the first iteration hides the defect until
 iteration N.
 
@@ -1169,8 +1193,9 @@ diagnostics, and returns `null` on any failure so the caller falls back to the p
 ### 4.7 Failing loudly when the mod is not actually active
 
 Retry the payload load at multiple lifecycle points and, if it still is not loaded, show an in-game
-message — `CRASH GUARD NOT ACTIVE — all fixes are OFF` — not just a log line
-(`Harness/HotReload.cs:247-263`). This exists because a whole session was played unprotected when the only
+message — `[Deploy Guard] CRASH GUARD NOT ACTIVE — payload failed to load, all fixes are OFF (see
+CrashGuard.log)` — not just a log line (`Harness/HotReload.cs:261`, with the `[Deploy Guard]` prefix
+added by `Harness/Log.cs:126`; the retry points are `Harness/HotReload.cs:247-263`). This exists because a whole session was played unprotected when the only
 evidence of the failure sat in a file nobody opened. The same principle is recommended upstream for BT's
 silent `BootstrapAborted` (`docs/UPSTREAM_CONTRIBUTION.md:68-70`).
 
@@ -1271,22 +1296,28 @@ Conventions that keep the board honest:
   game-update breakage is still reported for a feature the user may re-enable
   (`Payload/IllnessDeathGuard.cs:38-52`).
 - **Report the count, not a bare boolean.** Where a guard patches a set of optional methods, make
-  `ok = patched > 0` and put the count in the detail — "active on N method(s)"
-  (`Payload/ConversationCameraCrashGuard.cs:30-46`; `Payload/StealthHideoutAdvisor.cs:42-59`;
-  `Payload/ClanPartyCreationAdvisor.cs:71-91`). A partial resolve after a game patch then looks different
-  from a full one.
+  `ok = patched > 0` and print the count — "active on N method(s)" — in the guard's active log line
+  (`Payload/ConversationCameraCrashGuard.cs:46-47`; `Payload/StealthHideoutAdvisor.cs:58-59`;
+  `Payload/ClanPartyCreationAdvisor.cs:90-91`). Note what those three do *not* do: each passes an empty
+  health detail on success, so a 1-of-3 partial resolve is visible in the log but indistinguishable from
+  a full one on the board. Put the count in the detail as well if you want the board to show the
+  difference.
 - **Announce a degraded scope explicitly.** When the optional role-controller members do not resolve, the
   siege guard still applies its six core patches and logs "owner-is-general promotion limited to
   `Team.SetPlayerRole`", with `role controller unresolved` in the health detail
   (`Payload/SiegeCommandGuard.cs:118-126,132`). Partial capability beats all-or-nothing, and the report
-  says *which* leg is missing.
+  says *which* leg is missing. The same guard's other optional leg is quieter and shows the cost:
+  `PatchBtReleases` logs a per-name miss ("BT release method not found (BT update?): " + name,
+  `Payload/SiegeCommandGuard.cs:185-186`) but nothing about it reaches `Diag` — the health detail carries
+  only `roleHooked`, and the `_btPatched` count goes to the log line alone (:129-132). A missing BT
+  release hook is therefore invisible on the board.
 - **Print what actually resolved** in the active line — lambda count, `consequence=`, `invokeOption=`
   (`Payload/MapIncidentCrashGuard.cs:103-110`).
 
 ### 5.4 Fire tracking: separating "wired" from "working", and knowing when to retire
 
 `Diag.Report` says *this guard installed, and how completely*. `SelfHealing.RecordFire(component)` says
-*this guard actually did something* (`Harness/SelfHealing.cs:9-14,43-81`). Both are used on every guard,
+*this guard actually did something* (`Harness/SelfHealing.cs:9-14,43-81`). Both are used on most guards,
 and the pair is what makes the health board diagnostic:
 
 | Health | Fires | Meaning |
@@ -1299,7 +1330,20 @@ The ids in use here are `setup-teams-guard`, `finish-deployment-guard`, `party-a
 `encounter-loop-guard`, `map-incident-guard`, `bg-tick-budget-guard` and one per gameplay fix
 (`Payload/DeploymentCrashGuards.cs:22,43`; `Payload/PartyAiCrashGuard.cs:110,139`;
 `Payload/EncounterLoopGuard.cs:121`; `Payload/MapIncidentCrashGuard.cs:227,242,285,300`;
-`Payload/BackgroundTickBudgetGuard.cs:128`). Safety-net logs label themselves "root-fix candidate", which
+`Payload/BackgroundTickBudgetGuard.cs:128`).
+
+**The exceptions are worth knowing, because the table above cannot be read for them.** Twelve guards and
+fixes here record fires but never call `Diag.Report` (and never `SelfHealing.RegisterTest`):
+`DeploymentCrashGuards`, `PartyAiCrashGuard`, `EncounterLoopGuard`, `MapClickSpeedKeeper`,
+`ClientHeroCreationGuard`, `MovementOrderTypeInitGuard`, `PlayerIdentityGuard`, `TimeEnforcementGuard`,
+`TimeFlowPatch`, `ShareTimeControl`, `BattleMode` and `BootstrapWatch`. Four of the six ids listed above
+— `setup-teams-guard`, `finish-deployment-guard`, `party-ai-guard` and `encounter-loop-guard` — belong to
+that set, including both flagship deployment crash finalizers, so a drift in them shows only as a log
+line and never as `NOT resolved` on the board. The convention stated in `CLAUDE.md:71-73` is
+aspirational rather than enforced; if you adopt this pattern, know which of your own guards are still
+invisible to it.
+
+Safety-net logs label themselves "root-fix candidate", which
 turns a symptom suppressor into an instrument: the log lines become the evidence for the upstream bug
 report and for deciding which net to promote to a real fix.
 
@@ -1429,9 +1473,15 @@ Three rules make it safe:
    **always** its inner; printing only the outer is what made the 2026-09-04 crash undiagnosable for so
    long.
 
-**Arm a narrow window when you can.** The `[CHARGEN]` tracer arms only while a character is being created,
-coalesces by exception type + throwing frame, and caps the number logged per activation
-(`CHANGELOG.md:19-23`).
+**Arm a narrow window when you can — and know which you actually shipped.** A window scoped to the
+activity under investigation is the cheaper design. The `[CHARGEN]` observer here is *not* that: `Apply`
+calls `Arm()` unconditionally, `Arm()` subscribes once via an AppDomain slot and never unsubscribes, and
+the cap is a session total, not a per-activation one — `FirstChanceCap = 400` against a
+`_firstChanceEmitted` counter that is only ever incremented (`Payload/CharacterCreationTrace.cs:33,46,
+133-144,172-176`; the header says so at :19-27, and the active line logs "session-wide first-chance
+exception capture ARMED"). It is filtered to game frames and coalesced by exception type + throwing
+frame, and the cap is what keeps a session-wide observer safe (§6.6). If you want the narrow window,
+arm and disarm it explicitly; do not assume a tracer is narrow because it was written for one screen.
 
 **One handler across hot reloads.** Before subscribing to an AppDomain event, check
 `AppDomain.CurrentDomain.GetData("BLTCG_FirstChanceArmed")`; if unset, `SetData` then subscribe
@@ -1476,7 +1526,7 @@ meaningful lines while preserving the single most valuable one.
 - **Bound everything.** Stack frames (14–20 kept), argument text (80 chars), total first-chance emissions
   (400), ctor probes (12), throttle keys (512), upload size (last 2 MB), heartbeat 15 s, role snapshot at
   most 1/s, upload at most 1/60 s (`Payload/TracePatches.cs:228-231,279`; `Payload/ControlTrace.cs:381`;
-  `Payload/CharacterCreationTrace.cs:34,205,267`; `Payload/MovementOrderInitProbe.cs:28`;
+  `Payload/CharacterCreationTrace.cs:33,205,267`; `Payload/MovementOrderInitProbe.cs:28`;
   `Payload/RuntimeDiagnostics.cs:29,186`; `Payload/TraceThrottle.cs:31-32`;
   `Payload/LogStreamer.cs:101,132`). Every diagnostic in a game process is one unbounded loop away from
   being the bug; caps are what make it safe to ship tracers to a player.
@@ -1649,7 +1699,7 @@ this is what makes "turn tracing on, now, without losing the repro" possible: ed
 payload build, and the next generation reads the new value.
 
 Guards that own one flag do the same thing with their own narrow regex rather than routing through the
-harness — `Payload/TimeFlowPatch.cs:80-98`, `Payload/ShareTimeControl.cs:191-209`,
+harness — `Payload/TimeFlowPatch.cs:81-100`, `Payload/ShareTimeControl.cs:191-209`,
 `Payload/BattleMode.cs:349-382`, `Payload/LogStreamer.cs:44-73`. The rule for all of them: **the fresh
 read is best-effort, and its failure path is the cached or default answer**, never a throw and never a
 silent behaviour change.
@@ -1663,7 +1713,7 @@ Two shapes are in use here, and the difference is the point:
 | Symmetric match with an explicit fallback | `GuardConfig.Bool(key, fallback)` | the fallback the call site names |
 | Off-only match | `Regex.IsMatch(text, "\"timeAlwaysFlows\"\\s*:\\s*false")` → `false`, else `true` | **on** — the shipped behaviour |
 
-(`Harness/GuardConfig.cs:50-64`; `Payload/TimeFlowPatch.cs:80-98`;
+(`Harness/GuardConfig.cs:50-64`; `Payload/TimeFlowPatch.cs:81-100`;
 `Payload/ShareTimeControl.cs:191-209`.) The off-only shape says "this feature is on unless the file
 explicitly says otherwise", so a truncated or half-edited config cannot silently disable it. Either is
 defensible; what is not defensible is not knowing which one you wrote.
@@ -1703,7 +1753,7 @@ launcher's load order for everything else.
 |---|---|---|
 | `safeMode` | `false` | `Payload/PayloadEntry.cs:31` |
 | `battleMode` | `"auto"` | `Payload/BattleMode.cs:79-85` |
-| `timeAlwaysFlows` / `shareTimeControl` | `true` | `Payload/TimeFlowPatch.cs:80-98`, `Payload/ShareTimeControl.cs:191-209` |
+| `timeAlwaysFlows` / `shareTimeControl` | `true` | `Payload/TimeFlowPatch.cs:81-100`, `Payload/ShareTimeControl.cs:191-209` |
 | `noSickness` | `true` | `Payload/IllnessDeathGuard.cs:38` |
 | `pregnancySync` / `stashSync` | `true` | `Payload/PregnancySync/PregnancySyncGuard.cs:47`, `Payload/StashSync/StashSyncGuard.cs:64` |
 | `partyTroopsOnCreate` | `true` | `Payload/ClanPartyCreationAdvisor.cs:63` |
@@ -1873,10 +1923,12 @@ file compiles into both the mod and a headless test (§5.5).
   outside 0..16 (`Payload/PregnancySync/BirthPayloadData.cs:103-106`). At parse the cost of rejection
   is a dropped packet. At apply, the same corrupt count reaches `AddToCounts` on a roster you have
   already cleared.
-- **Send only what the receiver cannot deterministically re-derive.** The birth payload carries id,
-  gender, name and appearance and nothing else, because `DeliverOffSpring(mother, father)` reproduces
-  clan, culture and birthday identically on both machines from the same parents
-  (`Payload/PregnancySync/BirthPayloadData.cs:33-38`). This shrinks the wire, deletes whole classes of
+- **Send only what the receiver cannot deterministically re-derive.** The birth payload carries only the
+  fields the receiver cannot reproduce: the parents' ids (`MotherStringId` on the envelope,
+  `FatherStringId` per child) plus each child's id, gender, name and appearance, alongside a format
+  version and a stillborn count (`Payload/PregnancySync/BirthPayloadData.cs:26-29,33-43`). Clan, culture
+  and birthday are *not* sent, because `DeliverOffSpring(mother, father)` reproduces them identically on
+  both machines from the same parents. This shrinks the wire, deletes whole classes of
   serialization problem (types with no round-trippable form), and turns the engine's own determinism
   into part of the protocol. It is also a deliberate divergence from the written spec, which had
   proposed sending clan/culture/birthday (`docs/SPEC-pregnancy-coop-sync.md:25-26`).
@@ -1995,7 +2047,12 @@ Two supporting rules:
 - **Classify with the property that means what you need, not the one that looks similar.** The test is
   `IsCraftedByPlayer`, not a bare `WeaponDesign` check — the latter is also true for ~283 vanilla
   crafted weapons, and using it would have de-synced all of them
-  (`Payload/StashSync/StashSyncGuard.cs:35-44,214-233`).
+  (`Payload/StashSync/StashSyncGuard.cs:35-44,214-233`). The classifier has a **second clause**, and it
+  is the one that catches modded content: an item is also machine-local when
+  `MBObjectManager.Instance.GetObject<ItemObject>(item.StringId)` does not reference-equal the item —
+  i.e. its id does not resolve back to the same object locally (:224 and :228; named in
+  `docs/MODDING-PITFALLS.md:81` as "plus a StringId round-trip as a second clause"). Ship only the first
+  clause and a peer's modded items, whose ids do not resolve on your machine, are silently deleted.
 - **Fail toward preservation.** The classifier's `catch` returns `true` — "unreadable = unexpressible —
   err toward preserving it" (`Payload/StashSync/StashSyncGuard.cs:230-233`). When the two outcomes are
   "this item does not sync" and "this item is deleted", the error direction is not a judgement call.
@@ -2165,10 +2222,14 @@ Four facts, each of which cost a release here (evidence and code in §4.2, §4.3
 1. **`Assembly.Load(byte[])` has no load path**, so its dependency probing falls back to the application
    base. Inside Bannerlord that resolves `0Harmony` to a *different* copy than the one your harness
    patched with, and the interface call across the boundary fails with
-   `TypeLoadException: … does not have an implementation` (`HOTRELOAD.md:10`).
+   `TypeLoadException: … does not have an implementation` (`HOTRELOAD.md:10` for the mechanism;
+   `CHANGELOG.md:219` and `Harness/HotReload.cs:60` for the exception text). In this game the two copies
+   are the game bin's `0Harmony 2.4.2.0` and the `Bannerlord.Harmony` module's `0Harmony 2.3.6.0`
+   (`CHANGELOG.md:215-220`).
 2. **An `AssemblyResolve` handler cannot rescue that**, because the handler fires only when probing
    *fails* — and a byte-load probes successfully, against the wrong copy. Change the load context; do
-   not add a resolver (`CHANGELOG.md:274-278`).
+   not add a resolver (`CHANGELOG.md:213-221`; `Harness/HotReload.cs:281-287`). The resolver pin was
+   shipped first (`CHANGELOG.md:274-278`) and did not fix it.
 3. **The `LoadFrom` context dedups by simple name only.** A freshly built DLL with a new
    `AssemblyVersion` but the same name comes back as the already-loaded assembly — field-proven here as
    `LoadFrom deduped to already-loaded 1.2.7.42191`
@@ -2200,8 +2261,9 @@ possibly on a different thread. Two things follow:
   constructor runs with `RuntimeHelpers.RunClassConstructor`, which caches the type as *successfully*
   initialized for the rest of the process (§2.11). Because a `beforefieldinit` type may be initialized
   at any point up to its first static field access, "before the game touches it" includes "before your
-  own patching makes the CLR prepare it" — which is why the load-time guard is the first statement of
-  `PayloadEntry.Apply` (`Payload/PayloadEntry.cs:38-46`).
+  own patching makes the CLR prepare it" — which is why the load-time guard is the first patch installed
+  by `PayloadEntry.Apply`, before `PatchAll` and every other guard, with only the `safeMode` kill switch
+  ahead of it (`Payload/PayloadEntry.cs:31-46`).
 
 This is also the reason a load-time fix needs a fresh launch rather than a hot reload (§9.3): the
 process-wide cached failure is not something a new generation can undo.
@@ -2262,7 +2324,7 @@ if (now - _last > RetryMs || now < _last) { /* let one call through */ }
 ```
 
 This appears in essentially every timed path here — `Payload/EncounterLoopGuard.cs:96,109,117`;
-`Payload/TraceThrottle.cs:63-65`; `Payload/PayloadEntry.cs:172-176,193-197`;
+`Payload/TraceThrottle.cs:63-65`; `Payload/PayloadEntry.cs:166,194`;
 `Payload/BootstrapWatch.cs:38`; `Payload/SiegeCommandGuard.cs:512-521`;
 `Payload/BackgroundTickBudgetGuard.cs:130`; `Payload/PartyAiCrashGuard.cs:155` — and it is the kind of
 bug that never reproduces in a test session, because you would have to leave the machine on for a month
