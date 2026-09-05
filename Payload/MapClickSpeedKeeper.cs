@@ -90,6 +90,7 @@ namespace BLTDeploymentCrashGuard
                         _logged = true;
                         Log.Info("[CLICK-SPEED] kept UnstoppableFastForward through a map click (vanilla keep-FF option does not recognize the unstoppable variant co-op uses)");
                     }
+                    TimeVeto.Note("CLICK-SPEED"); // lets the [TIME] tracer name which prefix vetoed the write
                     return false;
                 }
             }

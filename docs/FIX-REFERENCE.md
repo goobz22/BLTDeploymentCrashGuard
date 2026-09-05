@@ -1292,7 +1292,7 @@ handler observing its own throws (`:35-36`, `:154-158`), so re-entrant throws on
 thread are dropped. Inner chains are walked to depth 8 (`:205`) and each exception shows at most
 14 frames (`:266`). The whole handler body is wrapped in an empty catch: "a tracer must never
 take the game down" (`:187-191`). Read all of that before concluding "nothing threw" from a
-quiet log. Documentation divergence: `CHANGELOG.md:20-24` (v1.3.2)
+quiet log. Documentation divergence: `CHANGELOG.md` § *v1.3.2* › *Diagnostics* (v1.3.2)
 describes arming the observer "only while a character is being created… capped per
 activation", whereas the shipped code arms it session-wide at `Apply` with one global cap.
 
@@ -1430,7 +1430,7 @@ payload load.
 `EnforcePlaySpeed` retries `UnstoppablePlay` every tick while the time guard blocks the write,
 so the `[TIME]` tracer logged that blocked attempt — with a full stack — roughly 60 times a
 second, filling the 8 MB log in minutes and rotating the real co-op-setup evidence off the end
-(`Payload/TraceThrottle.cs:6-14`; `CHANGELOG.md:5-12`).
+(`Payload/TraceThrottle.cs:6-14`; `CHANGELOG.md` § *v1.3.2* › *Diagnostics*).
 
 **Mechanism.** `Emit(key, message)` logs the first occurrence of a key in full (with its
 stack) and counts identical repeats, flushing at most once per 5000 ms window as
@@ -1779,7 +1779,7 @@ reads "controller/transitions not resolved (game update?)" (`:120-128`).
 `ClanPartyCreationAdvisor` (Diag component `clan-party-advisor`) · **Tag** `[CLAN-PARTY]` ·
 **Config** none for the observability half (always on); `partyTroopsOnCreate` gates the
 auto-open half · **Scope** both/solo — BannerlordTogether does not touch this path
-(`CHANGELOG.md:93`)
+(`CHANGELOG.md` § *v1.2.9*)
 
 **Bug.** Field report 2026-09-01: "I made a party and it didn't allow me to add anyone". The
 clan-parties leader popup greys out cards and disables the button with reasons the player
@@ -1885,7 +1885,7 @@ Requires `Campaign.Current != null` and `mission.Scene != null` (`:45-48`). It r
 or `[SELFTEST]`. It does now call `SelfHealing.RecordFire("player-identity-guard")` on every
 correction (`:89`), so a session's corrections show up in `GUARD ACTIVITY:` as
 `player-identity-guard=<count>` — the point being retirement: a permanently-zero count is
-evidence BannerlordTogether fixed the swap and this net can be removed. `CHANGELOG.md:381`
+evidence BannerlordTogether fixed the swap and this net can be removed. `CHANGELOG.md` § *Known open items*
 records it explicitly as a reactive safety net, not a root fix; the shared-save load case is
 superseded by `CoopHeroIdentityLock`.
 
@@ -1900,7 +1900,7 @@ only (never client)
 **Bug.** A Bannerlord save stores exactly one player identity — whoever was `MainHero` when it
 was saved. When a co-op couple passes one shared save back and forth, the person **loading**
 it to host becomes the previous host's hero (field report 2026-08-30: "when Noah saves as host
-and I load our co-op, it loads me as his hero", `CHANGELOG.md:136-138`). BT's identity registry
+and I load our co-op, it loads me as his hero", `CHANGELOG.md` § *v1.2.7*). BT's identity registry
 (slots, steam/password claims) is only consulted on the client join flow; nothing fixes the
 loader's identity — verified by assembly scan, `SharedSaveMode` is a bare session flag
 (`Payload/CoopHeroIdentityLock.cs:12-21`).
@@ -2619,7 +2619,7 @@ patched: `IsClientFormationCommandApproved`, `AllowedFormationMask`,
 **Limitations.** Known trade-off: only four formations per player while a remote player is in
 the battle — troop preferences beyond the basic four (`Skirmisher`, `HeavyInfantry`,
 `LightCavalry`, `HeavyCavalry`) fold into them (`BasicSlot`, `:151-168`;
-`CHANGELOG.md:47-48`). Player heroes are **never** moved: `agent == Agent.Main`,
+`CHANGELOG.md` § *v1.3.1*). Player heroes are **never** moved: `agent == Agent.Main`,
 `hero == Hero.MainHero`, or hero/character `StringId` equal to the BT ghost-hero id (`:273`,
 `:299-323`); companions travel with their party. Inert unless **both** parties resolve — it
 needs a live BT session with a remote peer, a non-empty `CoopSession` `GhostHeroStringId`, and
@@ -2731,7 +2731,7 @@ is not supported — host authority only (`SPEC:40-42`). If either parent hero c
 on the client, the child is skipped with a log line (`:363-368`). If the broadcast reflection
 fails, the client silently misses that child until a resync (`:265-269`). The two-machine hop is
 the one part no solo test covers — "validated the first time it fires"
-(`CHANGELOG.md:182-185`); `pregnancySync` shipped off and became default-on in v1.2.5, at which
+(`CHANGELOG.md` § *v1.2.5*); `pregnancySync` shipped off and became default-on in v1.2.5, at which
 point only the wire format and loopback were proven. `AlignToHost` failures are logged as
 "partial" and the child is kept anyway (`:422-425`). Replication is live-only — there is no
 backfill for a peer that was absent. `BirthPayloadData.StillbornCount` is written (`:288`) and
@@ -3242,7 +3242,7 @@ loopback self-tests.
 
 **Bug.** BannerlordTogether moved its network classes to `BannerlordTogether.Network.*` — the
 2026-09-01 health line showed pregnancy-sync and stash-sync both "not resolved", i.e. both
-features had silently gone dead after a BT update (`CHANGELOG.md:129-132`).
+features had silently gone dead after a BT update (`CHANGELOG.md` § *v1.2.8*).
 
 **Mechanism.** `HookReceive` iterates four candidate type names in priority order —
 `BannerlordTogether.Network.CoopNetworkBase`, `BannerlordTogether.Network.CoopServer`,
@@ -3374,7 +3374,7 @@ Note the interaction with the `[TIME]` tracer: with `tracing=true` while hosting
 co-op setup menu, BT re-requests `UnstoppablePlay` every tick, this guard blocks the write, the
 mode never changes, and BT retries forever. That is why the `[TIME]` tracer routes through
 `TraceThrottle` — the blocking behaviour itself is unchanged, only the logging is collapsed
-(`CHANGELOG.md:5-12`).
+(`CHANGELOG.md` § *v1.3.2* › *Diagnostics*).
 
 ### Shared time control (auto-grant to the client)
 
@@ -3489,10 +3489,11 @@ type with `AccessTools.TypeByName` and patches every declared non-abstract metho
 stack into `[ThreadStatic]` fields (`:83-104`), plus a **postfix** that reads the actual mode
 afterwards and, when it differs, appends a line that **names the vetoer**:
 `^ change SUPPRESSED/ALTERED by [TIME-GUARD]` / `by [CLICK-SPEED]` / `by another patch (not one
-of ours)`. Three of our prefixes sit on this setter and Harmony runs every one of them even when
-one returns false, so the tracer cannot infer the vetoer from return values — the vetoing prefix
-notes itself in `TimeVeto` and the postfix calls `TimeVeto.Take()` (`:117-124`; see the next
-entry). The dedup key includes the vetoer and deliberately ignores the (identical) stack:
+of ours)`. Three of our prefixes sit on this setter — two bool vetoers and the tracer's own void
+prefix. Harmony skips the remaining **bool** prefixes once one has returned false but still runs
+every **void** prefix, so the tracer never sees a return value and cannot infer the vetoer — the
+vetoing prefix notes itself in `TimeVeto` and the postfix calls `TimeVeto.Take()` (`:117-124`; see
+the next entry). The dedup key includes the vetoer and deliberately ignores the (identical) stack:
 `"TIME " + old + "->" + new + (suppressed ? " SUPPRESSED by " + vetoedBy + "->" + actual : " applied")`
 (`:126-128`), so a veto by a different prefix is a distinct line rather than a collapsed repeat.
 `SetTimeControlModeLock` and `set_TimeControlModeLock` (whichever exists) get a
@@ -3671,7 +3672,7 @@ root (`Harness/HotReload.cs:70-72`); the shadow-copy `LoadFrom` generation loade
 on the player path too, since that is the normal load-once path. See `HOTRELOAD.md` for the
 workflow. `EnsureLoaded` (`:247-263`) is what raises the loud on-screen
 `CRASH GUARD NOT ACTIVE` warning if the payload ever fails to load — a failed payload load used
-to be silent and the player kept playing unguarded (`CHANGELOG.md:309-311`). LoadFrom-dedup
+to be silent and the player kept playing unguarded (`CHANGELOG.md` § *v1.2.x — fixes added on top of the harness/payload split*). LoadFrom-dedup
 detection compares assembly `Location` strings (`:315-324`) and a type-load failure writes a
 one-off `[HOTRELOAD][DIAG]` binding-diagnostics evidence pack including the harness-bound
 `0Harmony` identity (`:194-233`).
@@ -3739,7 +3740,7 @@ about 48 MB of history (`:13-15`, `:88-120`). The whole body is in a swallowing 
 worth before rotating. This is a harness change, so it takes effect on the next game launch,
 not by hot-reload. About 48 MB of history is still a finite window. It replaced the v1.1.0
 single-file rotation (`CrashGuard.log` → `.1` overwrite), under which a log burst could discard
-the very evidence being chased (`CHANGELOG.md:346-348`).
+the very evidence being chased (`CHANGELOG.md` § *v1.1.0*).
 
 **Self-test.** None registered.
 
@@ -4141,15 +4142,19 @@ build (harness only, not repeated by the payload build). It uses
 which MSBuild also stamps both assemblies' `AssemblyVersion`/`FileVersion` and which `Diag`
 reads back at runtime for the log banner (`:3-7`).
 
-The same target now also copies the freshly stamped `SubModule.xml` into `dist/`, conditional on
-that folder existing (`Directory.Build.props:19-24`). Before v1.3.2 **nothing** ever wrote
+The target stamps only the repo-root `SubModule.xml`; **the build never touches `dist/`.** A
+build-time copy into `dist/` was added and then removed during v1.3.2 (review, 2026-09-04): it let
+an ordinary local build rewrite `dist/SubModule.xml` out from under `dist/manifest.txt`, which
+`install.cmd` treats as a fatal mismatch for every player. Before v1.3.2 **nothing** ever wrote
 `dist/SubModule.xml`, so the file players download could carry a version older than the DLLs
-beside it. The two DLLs and `dist/manifest.txt` are produced by `tools/release.sh`.
+beside it; now `dist/SubModule.xml`, the two DLLs and `dist/manifest.txt` are all placed by
+`tools/release.sh` from one build, as one atomic set, and `tools/lint-scripts.sh` fails if `dist/`
+disagrees with its manifest.
 
-**Limitations.** The copy is unconditional on content: it overwrites `dist/SubModule.xml` on
-every harness build, including a local dev build that is never released — `tools/release.sh` is
-what makes a `dist/` set coherent and hash-verified. Nothing stamps the payload build if the
-harness is not rebuilt.
+**Limitations.** Only a harness build re-stamps `SubModule.xml`, so a version bump needs a full
+`tools/release.sh` run, not `--no-build` — the script refuses to continue while the repo
+`SubModule.xml` is not stamped `v<Version>`. A payload-only build carries the new assembly version
+but leaves the launcher-visible XML untouched.
 
 **Self-test.** `Directory.Build.props:3-7` asserts the contract in prose: "THE single source of
 truth for the mod version. Everything derives from it … Never write a version number anywhere
@@ -4386,7 +4391,7 @@ hand before committing a script or a release (`:7`).
 
 ## Known open items
 
-Tracked in `CHANGELOG.md:376-381` as unfixed:
+Tracked in `CHANGELOG.md` § *Known open items* as unfixed:
 
 1. The dedicated-server role drops to player-host on an in-game save load. A tracer is in place
    (`Payload/RoleTrace.cs`); no fix.

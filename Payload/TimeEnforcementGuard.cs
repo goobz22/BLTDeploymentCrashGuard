@@ -7,28 +7,42 @@ namespace BLTDeploymentCrashGuard
 {
     /// <summary>
     /// Records which of OUR prefixes vetoed the current Campaign.set_TimeControlMode write.
-    /// Three of our prefixes sit on that setter (TimeEnforcementGuard's solo neutralizer,
-    /// MapClickSpeedKeeper, and TimeTrace when tracing) and Harmony runs every one of them even
-    /// when another returns false — so without this note the [TIME] tracer could only say
-    /// "suppressed by another patch", never which (audit 2026-09-04). A vetoing prefix calls
-    /// Note(name); the tracer's postfix calls Take(). [ThreadStatic] because time writes happen
-    /// on the game thread but the tracer must never mix two threads' vetoes.
+    /// Three of our prefixes sit on that setter: two bool-returning vetoers (TimeEnforcementGuard's
+    /// solo neutralizer, MapClickSpeedKeeper) and the void log-only TimeTrace prefix. Harmony
+    /// skips the remaining BOOL prefixes once one has returned false — so at most one of our two
+    /// vetoers fires per write — but runs every VOID prefix regardless, so the tracer always sees
+    /// the call yet cannot tell which vetoer won (audit 2026-09-04). A vetoing prefix calls
+    /// Note(name) — only for set_TimeControlMode, the setter the tracer observes; the tracer's
+    /// postfix calls Take() on EVERY observed write so a note never outlives the call that set it.
+    /// A note older than StaleMs (possible only while tracing is off and nothing consumes) is
+    /// discarded. [ThreadStatic] because the tracer must never mix two threads' vetoes.
     /// </summary>
     internal static class TimeVeto
     {
+        private const int StaleMs = 200;
+
         [ThreadStatic]
         private static string _lastVetoedBy;
+        [ThreadStatic]
+        private static int _vetoTick;
 
         internal static void Note(string who)
         {
             _lastVetoedBy = who;
+            _vetoTick = Environment.TickCount;
         }
 
         internal static string Take()
         {
             string who = _lastVetoedBy;
+            int tick = _vetoTick;
             _lastVetoedBy = null;
-            return who;
+            if (who == null)
+            {
+                return null;
+            }
+            int age = Environment.TickCount - tick;
+            return age >= 0 && age <= StaleMs ? who : null;
         }
     }
 
@@ -210,11 +224,17 @@ namespace BLTDeploymentCrashGuard
             return __exception;
         }
 
-        private static bool BlockSoloEnforceWritePrefix()
+        private static bool BlockSoloEnforceWritePrefix(MethodBase __originalMethod)
         {
             if (_inSoloEnforce)
             {
-                TimeVeto.Note("TIME-GUARD"); // lets the [TIME] tracer name which prefix vetoed the write
+                // Note the veto only for set_TimeControlMode — the one setter the [TIME] tracer
+                // observes and therefore consumes the note on. A note from the two lock setters
+                // would outlive its call and be misattributed to a later write (review 2026-09-04).
+                if (__originalMethod != null && __originalMethod.Name == "set_TimeControlMode")
+                {
+                    TimeVeto.Note("TIME-GUARD");
+                }
                 return false;
             }
             return true;

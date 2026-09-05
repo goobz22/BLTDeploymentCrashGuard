@@ -1180,8 +1180,9 @@ The how-it-works-so-we-don't-re-derive-it docs:
 - **`docs/MODDING-PITFALLS.md`** — the companion: what bit us, which attempts were reverted, and
   the Harmony / .NET / engine / BT gotchas behind them.
 - **`docs/FIX-REFERENCE.md`** — the per-fix developer table: file, class, tag, config key, scope,
-  patched members, limitations and self-test, with five indexes — co-op scope, log tag → file (the
-  complete log-tag index), config key → file, patched member → fix, and on-screen message → file.
+  patched members, limitations and self-test, with six indexes — co-op scope, log tag → file (the
+  complete log-tag index), config key → file, patched member → fix, on-screen message → file, and
+  `MOD HEALTH` / `SELFTEST` component id → file.
 - **`HOTRELOAD.md`** — the payload hot-reload workflow and its dev-only caveats.
 - **`tools/il-probes/README.md`** — the standalone tools that read the installed game assemblies
   (`NameSearch`, `Inspect`, `IlDump`, `Callers`, `VerCheck`).

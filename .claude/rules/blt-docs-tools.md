@@ -19,7 +19,8 @@ documents summarise code, the code does not summarise them — when they disagre
 | `docs/DIAGNOSTICS.md` | How to investigate: probes, tracing, first-chance capture, log tags, rotation | Engine facts themselves |
 | `docs/ENGINE-NOTES.md` | Bannerlord engine facts **proven** from IL, per subsystem, with evidence + date | Speculation, BT internals |
 | `docs/BT-INTERNALS.md` | BannerlordTogether internals as observed from IL — unofficial, version-pinned | Vanilla engine facts |
-| `docs/FIX-REFERENCE.md` | Developer per-fix entries + the **five** indexes (co-op scope · log tag → file · config key → file · patched member → fix · on-screen message → file) | Player-facing prose |
+| `docs/FIX-REFERENCE.md` | Developer per-fix entries + the **six** indexes (0 co-op scope · 1 log tag → file · 2 config key → file · 3 patched member → fix · 4 on-screen message → file · 5 `MOD HEALTH` / `SELFTEST` component id → file) | Player-facing prose |
+| `docs/RELEASE.md` | THE release checklist: bump → `tools/release.sh` → hand-edited version literals → CHANGELOG → `tools/lint-scripts.sh` → fresh-launch gate → commit → push (== release); "Known doc-sync items" | Per-fix detail, engine facts |
 | `docs/MODDING-GUIDE.md` | Reusable public techniques, each in production here | What went wrong |
 | `docs/MODDING-PITFALLS.md` | What bit us: mistakes, reverted attempts, gotchas, where each rule is now enforced | Techniques that just work |
 | `docs/SPEC-pregnancy-coop-sync.md` | The design spec for the co-op pregnancy/birth sync feature: problem, goal, wire format, host-authoritative flow | Per-fix reference rows; BT internals beyond what the spec needs |
@@ -45,24 +46,28 @@ decompilation; never a web result (`docs/ENGINE-NOTES.md:8-23`, `docs/DIAGNOSTIC
 instead, which is pinned to BT v0.5.0.1 on game 1.4.8.119303 (`docs/BT-INTERNALS.md:13-16`); note the
 pin if a finding is version-specific.
 
-## Every new fix touches five places
+## Every new fix touches six places
 
-1. `README.md` — a numbered item under Crash fixes (`README.md:77`), Co-op & gameplay fixes
-   (`README.md:172`) or Diagnostics & robustness (`README.md:444`).
-2. The guard's `[TAG]` — README's grep-tag legend (`README.md:461-490`) and the log-tag index in
-   `docs/FIX-REFERENCE.md:4059`. `[GATE]` and `[IDENTITY]` are already shared by two components
-   each (`README.md:468-472`); a new fix takes its own tag rather than joining either.
-3. `README.md` `## Config` table **and** `GuardConfig.DefaultJson` — a row and a documented key,
-   if the fix adds one.
+Cite these documents by **section heading**, never by line number — README.md and HOTRELOAD.md
+line anchors drifted three times in one day (2026-09-04).
+
+1. `README.md` — a numbered item under § *Crash fixes*, § *Co-op & gameplay fixes* or
+   § *Diagnostics & robustness*.
+2. The guard's `[TAG]` — README's grep-tag legend (§ *Diagnostics & robustness*, the tag legend
+   item) and `docs/FIX-REFERENCE.md` § *Index 1: log tag → file*. `[GATE]` and `[IDENTITY]` are
+   already shared by two components each; a new fix takes its own tag rather than joining either.
+3. `README.md` § *Config* table **and** `GuardConfig.DefaultJson` — a row and a documented key with
+   its `_key` explanation, if the fix adds one.
 4. `docs/FIX-REFERENCE.md` — a full entry: the header fields (README item · Source · Class · Tag ·
-   Config · Scope) then Mechanism, Patched members, Limitations, Self-test
-   (`docs/FIX-REFERENCE.md:10-25`), plus a row in each of the **five** indexes that applies:
-   Index 0 co-op scope (`:4044`), Index 1 log tag → file (`:4059`), Index 2 config key → file
-   (`:4118`), Index 3 patched member → fix (`:4149`), Index 4 on-screen message → file (`:4266`).
-   That document's own preamble (`docs/FIX-REFERENCE.md:4`) still says "three lookup indexes" and is
-   wrong; its table of contents (`docs/FIX-REFERENCE.md:53-56`) lists all five — trust the headings.
+   Config · Scope) then Mechanism, Patched members, Limitations, Self-test, plus a row in each of
+   the **six** indexes that applies: Index 0 co-op scope, Index 1 log tag → file, Index 2 config
+   key → file, Index 3 patched member → fix, Index 4 on-screen message → file, Index 5
+   `MOD HEALTH` / `SELFTEST` component id → file (every `Diag.Report` component id,
+   `SelfHealing.RecordFire` id and `RegisterTest` name gets a row).
 5. `CHANGELOG.md` — an entry under the version being released, saying the symptom, the proven cause
    and the fix.
+6. `docs/RELEASE.md` — nothing per fix, but the release itself follows that checklist; a fix that
+   adds a hand-maintained version literal or a new shipped file adds a line there.
 
 Newly proven behaviour discovered on the way → ENGINE-NOTES / BT-INTERNALS; a reverted attempt or a
 trap → MODDING-PITFALLS; a technique worth reusing → MODDING-GUIDE.
@@ -75,8 +80,10 @@ Standalone net472 console exes that read the **installed** assemblies without a 
 (`tools/il-probes/Inspect/Inspect.cs:9-10`) and install an `AssemblyResolve` handler that probes the
 game `bin` + module folders (`Inspect.cs:20-25`). `VerCheck` is the exception: five lines that read
 assembly identity only, with no game path and no resolver (`tools/il-probes/VerCheck/VerCheck.cs:1-5`),
-which is why it works on any DLL. `tools/il-probes/README.md:5-6,15` states the "each" form and
-carries the same over-broad wording — fix it there too when that file is next touched.
+which is why it works on any DLL. `tools/il-probes/README.md` says the same, and also records
+where each game DLL actually lives (module folders, not `<Game>/bin`) and that a probe's
+`NOT FOUND` is inconclusive until the target's dependency closure resolves — read it before
+concluding a member is gone.
 
 ```
 cd tools/il-probes/<Tool> && dotnet build -c Release

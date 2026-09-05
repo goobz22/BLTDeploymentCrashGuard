@@ -122,12 +122,12 @@ running?)` and left alone — then into `dist/`, writes `dist/manifest.txt` (`ve
 the module. "release-ready" means only that; anything else prints `NOT release-ready` and exits
 non-zero (`tools/release.sh:8-13,28-78`). Do not push on a non-zero exit.
 
-`install.cmd` downloads from `<repo>/dist/` on branch `main` (`install.cmd:9,58-60`), so **pushing
+`install.cmd` downloads from `<repo>/dist/` on branch `main` (`install.cmd:63-65`), so **pushing
 `dist/` is releasing**. Never push mid-investigation (`CLAUDE.md` § *Working discipline*). The
 half-updated-`dist/` hole is closed at both ends: after downloading the three files `install.cmd`
 fetches `dist/manifest.txt` and re-verifies each SHA256 with `certutil`, refusing a mismatched set
 ("The release may be mid-update on GitHub. Run this again in a minute") and skipping the check with a
-notice if there is no manifest or no `certutil` (`install.cmd:67-90,108-112`). That is the
+notice if there is no manifest or no `certutil` (`install.cmd:67-104,121-130`). That is the
 harness↔payload pairing check the old md5-by-hand step never had.
 
 `install.cmd`, `share-log.cmd` and `collect-diagnostics.cmd` are served live from the repo root of
@@ -141,4 +141,4 @@ of the three and before every release. Edit all three together.
 shadow copy and logs `[HOTRELOAD] gen2 applied` (`HOTRELOAD.md` § *A) Build-and-drop (default,
 bulletproof, zero extra deps)*). Harness changes and load-time fixes need a **fresh launch**, not a
 reload; the four cases are `HOTRELOAD.md` § *What a reload cannot do (fresh launch required)*.
-`install.cmd` renames a locked DLL to `.prev` rather than failing (`install.cmd:51-56`).
+`install.cmd` renames a locked DLL to `.prev` rather than failing (`install.cmd:58-59`).

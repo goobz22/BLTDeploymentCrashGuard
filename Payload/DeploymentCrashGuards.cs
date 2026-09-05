@@ -144,8 +144,12 @@ namespace BLTDeploymentCrashGuard
                             Log.Info(DeploymentCrashGuardHealth.Tag + " recovery (player agent handover): " + exPlayer);
                         }
                     }
-                    mission.AllowAiTicking = true;
-                    mission.DisableDying = false;
+                    // Each tail step in its own try/catch so one failing step cannot abort the rest
+                    // (the rule docs/MODDING-GUIDE.md teaches from this very file).
+                    try { mission.AllowAiTicking = true; }
+                    catch (Exception exAi) { Log.Info(DeploymentCrashGuardHealth.Tag + " recovery AllowAiTicking: " + exAi.Message); }
+                    try { mission.DisableDying = false; }
+                    catch (Exception exDying) { Log.Info(DeploymentCrashGuardHealth.Tag + " recovery DisableDying: " + exDying.Message); }
                     try { mission.SetFallAvoidSystemActive(false); } catch { }
                     try { mission.OnAfterDeploymentFinished(); }
                     catch (Exception ex2) { Log.Info(DeploymentCrashGuardHealth.Tag + " recovery OnAfterDeploymentFinished: " + ex2); }

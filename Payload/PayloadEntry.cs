@@ -122,6 +122,7 @@ namespace BLTDeploymentCrashGuard
             BackgroundTickBudgetGuard.Apply(Harmony); // same late-BT-assembly retry (latched once applied)
             SiegeCommandGuard.RetryBt(Harmony); // hook BT's host player-down releases if BT loaded after us
             TimeEnforcementGuard.Apply(Harmony);
+            BattleMode.Apply(Harmony); // retry the always-on chokepoint hooks (latched; no-op once installed)
             BattleMode.DecideAndApply(Harmony, "module-screen");
         }
 
@@ -129,6 +130,7 @@ namespace BLTDeploymentCrashGuard
         {
             TimeEnforcementGuard.Apply(Harmony);
             EncounterLoopGuard.Apply(Harmony);
+            BattleMode.Apply(Harmony); // retry the always-on chokepoint hooks (latched; no-op once installed)
             BattleMode.DecideAndApply(Harmony, "game-start");
             PregnancySync.PregnancySyncGuard.OnGameStart(); // per-campaign host birth listener
             CoopHeroIdentityLock.OnGameStart(); // arm the this-machine's-hero claim for the loaded campaign

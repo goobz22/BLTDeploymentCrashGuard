@@ -77,6 +77,7 @@ namespace BLTDeploymentCrashGuard
                         continue; // this abort was already handled on a previous pass
                     }
                     WriteHandledOffset(name, abortOffset);
+                    SelfHealing.RecordFire("bootstrap-watch"); // feeds GUARD ACTIVITY (retirable once BT regenerates its cache itself)
                     int cleared = ClearStaleCache();
                     _warned = !startup;
                     Log.Info("[BOOTSTRAP-WATCH] co-op mod reported BootstrapAborted in " + name +

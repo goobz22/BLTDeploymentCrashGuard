@@ -13,7 +13,11 @@ namespace BLTDeploymentCrashGuard
 {
     /// <summary>
     /// Log-only diagnostic tracer. Never changes behavior — every hook is a void
-    /// prefix/postfix that appends a [TRACE] line to CrashGuard.log. Purpose: when a
+    /// prefix/postfix that appends a [TRACE] line to CrashGuard.log. (Literally true since
+    /// v1.3.2: the battle-mode decisions and the encounter-finish stamp that used to ride on
+    /// these hooks moved to BattleMode.Apply and EncounterLoopGuard, so turning tracing on no
+    /// longer changes WHEN battle mode is decided or whether the loop breaker can trip —
+    /// audit 2026-09-04.) Purpose: when a
     /// mission scene opens or a map menu switches unexpectedly (e.g. a village raid
     /// dropping into a 3D scene), the log shows WHICH method fired and WHO called it,
     /// including Harmony-patched callers (they appear as DMD&lt;...&gt; frames naming the
@@ -85,8 +89,7 @@ namespace BLTDeploymentCrashGuard
 
         private static void MissionOpenNewPrefix(object[] __args)
         {
-            // Last-chance mode decision before the mission is built.
-            BattleMode.DecideAndApply(PayloadEntry.Harmony, "mission-open");
+            // Log only — the mission-open battle-mode decision lives in BattleMode.Apply (always-on).
             Log.Info("[TRACE] >>> MissionState.OpenNew " + FormatArgs(__args) + CallStack());
         }
 
@@ -178,13 +181,13 @@ namespace BLTDeploymentCrashGuard
 
         private static void EncounterStartBattlePrefix()
         {
-            BattleMode.DecideAndApply(PayloadEntry.Harmony, "start-battle");
+            // Log only — the start-battle battle-mode decision lives in BattleMode.Apply (always-on).
             Log.Info("[TRACE] PlayerEncounter.StartBattle" + CallStack());
         }
 
         private static void EncounterFinishPrefix(object[] __args)
         {
-            EncounterLoopGuard.NoteEncounterFinish();
+            // Log only — the loop breaker stamps local finishes itself (EncounterLoopGuard, always-on).
             Log.Info("[TRACE] PlayerEncounter.Finish " + FormatArgs(__args) + CallStack());
         }
 

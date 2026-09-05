@@ -29,7 +29,7 @@ namespace BLTDeploymentCrashGuard
     /// patches AFTER our game-start decision, and the pre-mission half of them
     /// (MapEventSide.MakeReadyForMission, the troop-supplier model, Order of Battle) runs
     /// BEFORE mission init. Field evidence 2026-09-04: across every log segment the only
-    /// decision that ever lifted the 24 patches was "start-battle" — which until v1.3.3
+    /// decision that ever lifted the 24 patches was "start-battle" — which until v1.3.2
     /// lived in the tracer and therefore existed only with tracing=true. With tracing off
     /// (the default) the first solo battle of a session ran with the player side stripped.
     ///

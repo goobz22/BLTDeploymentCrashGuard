@@ -75,16 +75,20 @@ namespace BLTDeploymentCrashGuard
         {
             try
             {
-                Process p = Process.GetCurrentProcess();
-                long ws = p.WorkingSet64;
-                long priv = p.PrivateMemorySize64;
-                long managed = GC.GetTotalMemory(false);
-                if (ws > _peakWorkingSet) _peakWorkingSet = ws;
-                if (managed > _peakManaged) _peakManaged = managed;
-                return "mem WS=" + Mb(ws) + " priv=" + Mb(priv) + " managed=" + Mb(managed) +
-                       " peakWS=" + Mb(_peakWorkingSet) + " gc0/1/2=" +
-                       GC.CollectionCount(0) + "/" + GC.CollectionCount(1) + "/" + GC.CollectionCount(2) +
-                       " handles=" + SafeHandles(p) + " threads=" + SafeThreads(p);
+                // Process is IDisposable and this runs on every heartbeat, Mark and captured
+                // exception — dispose it (review 2026-09-04).
+                using (Process p = Process.GetCurrentProcess())
+                {
+                    long ws = p.WorkingSet64;
+                    long priv = p.PrivateMemorySize64;
+                    long managed = GC.GetTotalMemory(false);
+                    if (ws > _peakWorkingSet) _peakWorkingSet = ws;
+                    if (managed > _peakManaged) _peakManaged = managed;
+                    return "mem WS=" + Mb(ws) + " priv=" + Mb(priv) + " managed=" + Mb(managed) +
+                           " peakWS=" + Mb(_peakWorkingSet) + " gc0/1/2=" +
+                           GC.CollectionCount(0) + "/" + GC.CollectionCount(1) + "/" + GC.CollectionCount(2) +
+                           " handles=" + SafeHandles(p) + " threads=" + SafeThreads(p);
+                }
             }
             catch (Exception ex)
             {

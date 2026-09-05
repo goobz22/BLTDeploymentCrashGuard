@@ -36,7 +36,7 @@ so **absence is not a pass**: 25 payload files register a test (every crash guar
 `ShareTimeControl`, `PlayerIdentityGuard` and `BootstrapWatch` register none, and no tracer does —
 the roster is `docs/FIX-REFERENCE.md` § *Index 5*. The tracing flag is read **fresh from disk** on each
 payload apply, so with hot-reload on you can flip it and drop a rebuilt payload to trace mid-session
-without losing the repro (`Payload/PayloadEntry.cs:211-232`). Log:
+without losing the repro (`PayloadEntry.FreshTracingFlag`, `Payload/PayloadEntry.cs:219`). Log:
 `<Game>/Modules/BLTDeploymentCrashGuard/CrashGuard.log` (history in `.log.1` … `.log.6`).
 
 ## 2. Read the log by tag
@@ -55,8 +55,9 @@ per-fix tags — `[SIEGE-CMD]`, `[COOP-CMD]`, `[IDENTITY]`, `[TIME-GUARD]`, `[MO
   not apply (`docs/DIAGNOSTICS.md` § 2 *What `MOD HEALTH:` does not cover*).
 - `[PEER-DETECT]` — a BannerlordTogether type lookup that failed; the README calls it the earliest
   warning of a BT update (`README.md` § *Diagnostics & robustness*, the `[PEER-DETECT]` legend row). It is logged only when `PeerDetection.FindCoopType`
-  **throws** (`Payload/BattleMode.cs:486-489`); a type that is simply absent returns `null` with no
-  line at all (`BattleMode.cs:483,490`), so a quiet `[PEER-DETECT]` does not clear a rename either.
+  **throws** (`PeerDetection.FindCoopType`, `Payload/BattleMode.cs:737`); a type that is simply
+  absent returns `null` with no line at all (`:732,739`), so a quiet `[PEER-DETECT]` does not clear
+  a rename either.
 - `[DIAG]` — memory + engine-state heartbeat every ~15 s and at each mission transition; shows a
   leak or state change building *before* the symptom.
 - `[repeat] key ×N in Ys` — `TraceThrottle` coalescing; the full line with its stack is the first

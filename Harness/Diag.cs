@@ -90,7 +90,7 @@ namespace BLTDeploymentCrashGuard
             if (_degraded.Count > 0)
             {
                 summary += ", " + _degraded.Count + " NOT resolved -> " + string.Join("; ", _degraded.ToArray()) +
-                           "  (likely a BannerlordTogether update renamed a method — check for a mod update)";
+                           "  (read each detail: a BannerlordTogether OR game update may have renamed a member; a detail saying 'inert', 'not loaded' or 'older game build' is on purpose)";
                 if (_criticalMissing)
                 {
                     Log.Screen("WARNING: a core BLT-guard fix did not load (BT may have updated) — see CrashGuard.log");

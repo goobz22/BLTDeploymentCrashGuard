@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using HarmonyLib;
 using TaleWorlds.CampaignSystem;
 using TaleWorlds.CampaignSystem.GameComponents;
@@ -25,26 +26,39 @@ namespace BLTDeploymentCrashGuard
     /// </summary>
     internal static class ClientHeroCreationGuard
     {
+        internal const string Component = "hero-creation-guard";
+        private const string Tag = "[HEROCREATE-GUARD]";
+        private static bool _applied;
+
         internal static void Apply(Harmony harmony)
         {
+            if (_applied || harmony == null)
+            {
+                return;
+            }
+            _applied = true;
             try
             {
-                var method = AccessTools.Method(typeof(DefaultSettlementValueModel), "FindMostSuitableHomeSettlement", new[] { typeof(Clan) });
+                SelfHealing.RegisterTest(SelfTest);
+                MethodInfo method = AccessTools.Method(typeof(DefaultSettlementValueModel), "FindMostSuitableHomeSettlement", new[] { typeof(Clan) });
                 if (method == null)
                 {
-                    Log.Info("[HEROCREATE-GUARD] FindMostSuitableHomeSettlement not found — guard inactive");
+                    Diag.Report(Component, false, "FindMostSuitableHomeSettlement(Clan) not found");
+                    Log.Info(Tag + " FindMostSuitableHomeSettlement not found — guard inactive (game update?)");
                     return;
                 }
                 harmony.Patch(method, null, null, null, new HarmonyMethod(typeof(ClientHeroCreationGuard), nameof(HomeSettlementFinalizer)));
-                Log.Info("[HEROCREATE-GUARD] home-settlement crash guard active");
+                Diag.Report(Component, true, "");
+                Log.Info(Tag + " home-settlement crash guard active");
             }
             catch (Exception ex)
             {
-                Log.Info("[HEROCREATE-GUARD] apply failed: " + ex.Message);
+                Diag.Report(Component, false, ex.Message);
+                Log.Info(Tag + " apply failed: " + ex.Message);
             }
         }
 
-        private static Exception HomeSettlementFinalizer(Exception __exception, Clan clan, ref Settlement __result)
+        internal static Exception HomeSettlementFinalizer(Exception __exception, Clan clan, ref Settlement __result)
         {
             if (__exception == null)
             {
@@ -52,7 +66,7 @@ namespace BLTDeploymentCrashGuard
             }
             try
             {
-                SelfHealing.RecordFire("hero-creation-guard");
+                SelfHealing.RecordFire(Component);
                 Settlement fallback = null;
                 if (clan != null)
                 {
@@ -63,16 +77,26 @@ namespace BLTDeploymentCrashGuard
                     fallback = Settlement.All[0];
                 }
                 __result = fallback;
-                Log.Info("[HEROCREATE-GUARD] SUPPRESSED crash in FindMostSuitableHomeSettlement (half-synced clan/faction) — returned fallback home=" +
+                Log.Info(Tag + " SUPPRESSED crash in FindMostSuitableHomeSettlement (half-synced clan/faction) — returned fallback home=" +
                          (fallback != null ? fallback.Name.ToString() : "null") + "; detail: " + __exception.Message);
                 Log.Screen("prevented a hero-creation crash (half-synced world) — continuing");
             }
             catch (Exception exRecovery)
             {
-                Log.Info("[HEROCREATE-GUARD] recovery failed: " + exRecovery.Message);
+                Log.Info(Tag + " recovery failed: " + exRecovery.Message);
                 __result = null;
             }
             return null;
+        }
+
+        private static SelfHealing.TestResult SelfTest()
+        {
+            bool resolved = AccessTools.Method(typeof(DefaultSettlementValueModel), "FindMostSuitableHomeSettlement", new[] { typeof(Clan) }) != null;
+            Settlement result = null;
+            bool inert = HomeSettlementFinalizer(null, null, ref result) == null && result == null;
+            bool pass = resolved && inert;
+            return SelfHealing.TestResult.Of("hero-creation-guard.contract", pass,
+                pass ? "target re-resolved; finalizer inert on null exception" : "resolved=" + resolved + " inert=" + inert);
         }
     }
 }

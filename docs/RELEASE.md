@@ -226,30 +226,15 @@ mod writes and renames*).
 ## Known doc-sync items
 
 Documents that still contradict what shipped. Correct each the next time that file is touched; this
-list exists so the next reader does not re-derive a problem that is already fixed.
+list exists so the next reader does not re-derive a problem that is already fixed. A resolved item
+is removed, not struck through — the release's CHANGELOG entry records what was corrected.
 
-- `docs/FIX-REFERENCE.md` § *Single-version-source enforcement (`StampSubModuleVersion`)* — its
-  *Limitations* say `dist/SubModule.xml` "must be copied by hand as part of deploy". The
-  `StampSubModuleVersion` target now copies the stamped XML into `dist/` on every harness build.
-- `.claude/rules/blt-harness.md` § *Deploy = the release* — still describes a manual `md5sum`
-  cross-check and states that nothing cross-checks the harness/payload pair. `tools/release.sh` does
-  the SHA256 cross-check, and `dist/manifest.txt` plus `install.cmd` carry it through to the player.
-  The same section also still says `collect-diagnostics.cmd` searches only 6 Steam-library paths;
-  all three scripts now carry the same 11, enforced by `tools/lint-scripts.sh`. Its line anchors
-  have drifted too: `install.cmd:9,58-60` for the download (the repo URL is `install.cmd:12`, the
-  three `curl` lines are `install.cmd:63-65`), `install.cmd:51-56` for the `.prev` rename (it is
-  `install.cmd:56-61`), `collect-diagnostics.cmd:14-19` for the path list (it is
-  `collect-diagnostics.cmd:22-33`), and `HOTRELOAD.md:139-147` for the reload-cannot-do list — cite
-  that one as `HOTRELOAD.md` § *What a reload cannot do (fresh launch required)*, since its line
-  anchors have drifted before.
-- `docs/BT-INTERNALS.md` § *14. BT behaviours a companion mod's fixes are built on* and
-  `docs/FIX-REFERENCE.md` § *Illness death guard* still say the `noSickness` guard "stands down"
-  when the third-party NoSickness mod is present. It never did — it coexists, and
-  `Harness/GuardConfig.cs:92` now says so. The false claim was removed from the generated
-  `guardconfig.json` text in this release and corrected inline in `CHANGELOG.md` § *v1.2.x — fixes
-  added on top of the harness/payload split*; `docs/MODDING-PITFALLS.md` already flags it as live
-  drift.
-- Every `CHANGELOG.md:<line>` anchor in `docs/BT-INTERNALS.md`, `docs/ENGINE-NOTES.md`,
-  `docs/FIX-REFERENCE.md`, `docs/MODDING-GUIDE.md` and `docs/MODDING-PITFALLS.md` predates the
-  rewritten v1.3.2 entry and now lands on unrelated prose. Re-anchor each to its version heading per
-  § *4. Write the changelog entry*, whose `grep` enumerates them.
+- *None open as of 2026-09-04.* The four items this list carried during v1.3.2 — the
+  `StampSubModuleVersion` limitations (the build now deliberately never writes `dist/`), the
+  `blt-harness` rule's manual-`md5sum` deploy and its stale script anchors, the `noSickness`
+  "stands down" claim, and the 126 `CHANGELOG.md:<line>` anchors across the five `docs/` references
+  — were all corrected before the release; the anchors are version-heading citations now, per
+  § *4. Write the changelog entry*.
+
+The one standing check that replaces most of this list: after any change to `CHANGELOG.md`, run the
+`grep` in § *4* — it must print nothing.

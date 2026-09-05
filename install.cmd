@@ -76,11 +76,25 @@ for /f "usebackq tokens=1,2" %%A in ("%MANIFEST%") do (
   if /i "%%B"=="BLTDeploymentCrashGuard.dll" call :verify "%DLLDIR%\BLTDeploymentCrashGuard.dll" %%A
   if /i "%%B"=="BLTDeploymentCrashGuard.Payload.dll" call :verify "%DLLDIR%\BLTDeploymentCrashGuard.Payload.dll" %%A
 )
+rem An incomplete or truncated manifest must not pass as "verified": all THREE downloaded files
+rem (the two DLLs + SubModule.xml) must have been covered.
+if not "%CHECKED%"=="3" (
+  echo.
+  echo ERROR: the release manifest covered only %CHECKED% of 3 files - it is incomplete.
+  set "BAD=%BAD% (manifest incomplete)"
+)
 if defined BAD (
   echo.
   echo ERROR: downloaded files do not match the release manifest:%BAD%
   echo The release may be mid-update on GitHub. Run this again in a minute; if it
   echo keeps failing, report it with the exact message above.
+  rem Never leave a mismatched pair installed: remove the downloads and put the previous
+  rem files back so the next launch loads what was there before.
+  for %%F in (BLTDeploymentCrashGuard.dll BLTDeploymentCrashGuard.Payload.dll) do (
+    del /f /q "%DLLDIR%\%%F" >nul 2>&1
+    if exist "%DLLDIR%\%%F.prev" ren "%DLLDIR%\%%F.prev" "%%F" >nul 2>&1
+  )
+  echo Restored the previous files; nothing was changed.
   goto :fail
 )
 echo Verified %CHECKED% file(s) against the release manifest.

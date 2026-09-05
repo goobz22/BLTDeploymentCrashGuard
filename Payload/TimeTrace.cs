@@ -107,16 +107,19 @@ namespace BLTDeploymentCrashGuard
         {
             try
             {
+                // Consume the veto note on EVERY observed write — including the no-op ones we do
+                // not log — so a note can never outlive the call that set it (review 2026-09-04).
+                string vetoedBy = TimeVeto.Take();
                 if (!_pendingLogged || __instance == null)
                 {
                     return;
                 }
                 _pendingLogged = false;
                 bool suppressed = __instance.TimeControlMode != _pendingNewMode;
-                // Three of our prefixes sit on this setter and Harmony runs all of them even when
-                // one returns false; the vetoing prefix notes itself in TimeVeto so this line can
-                // NAME it instead of just saying "another patch" (audit 2026-09-04).
-                string vetoedBy = TimeVeto.Take();
+                // Two of our bool prefixes can veto this setter (TIME-GUARD, CLICK-SPEED); Harmony
+                // skips the remaining bool prefixes once one has vetoed, so at most one fires per
+                // write, and it notes itself in TimeVeto so this line can NAME it instead of just
+                // saying "another patch" (audit 2026-09-04).
                 string message = "[TIME] TimeControlMode " + _pendingOldMode + " -> " + _pendingNewMode + _pendingStack;
                 if (suppressed)
                 {

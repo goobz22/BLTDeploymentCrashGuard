@@ -89,7 +89,7 @@ namespace BLTDeploymentCrashGuard
   ""timeAlwaysFlows"": true,    ""_timeAlwaysFlows"": ""true = campaign time does not auto-pause when your party idles"",
   ""shareTimeControl"": true,   ""_shareTimeControl"": ""host auto-grants the client time control so either player can pause/play/fast-forward"",
 
-  ""noSickness"": true,         ""_noSickness"": ""true blocks the vanilla die-of-illness outcome for the local player's hero (each machine protects its own player). Stands down automatically if the third-party NoSickness mod is installed"",
+  ""noSickness"": true,         ""_noSickness"": ""true blocks the vanilla die-of-illness outcome for the local player's hero (each machine protects its own player). Coexists with the third-party NoSickness mod (this guard only ever cures and never increments ill days, so that mod's own check sees a healthy hero and passes through)"",
 
   ""pregnancySync"": true,      ""_pregnancySync"": ""CO-OP: replicate host births to clients so both games share the same child (BT disables pregnancy for the client, host rolls run normally). Host-authoritative; self-disables outside a BT session"",
 

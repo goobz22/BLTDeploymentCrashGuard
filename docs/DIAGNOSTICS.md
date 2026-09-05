@@ -26,14 +26,22 @@ Work down the list; do not skip to a fix.
    | newest `*crash*.html` | `%USERPROFILE%\Documents` | `:75-77` |
 
    `guardconfig.json` and `SubModule.xml` are part of the evidence, not padding: they say which
-   config produced the log and which version wrote it. What the bundle still does **not** carry:
+   config produced the log and which version wrote it. Read the config as a *partial* record: a
+   file written by an older build can be a two-key stub (`BattleMode` carried its own two-key
+   writer until v1.3.2 — `CHANGELOG.md` v1.3.2 § *Battles*; the harness `GuardConfig` template is
+   now the only writer), and every key **absent** from the file silently takes its
+   `DefaultJson` value (`Harness/GuardConfig.cs:82-115`). A short file is not a minimal config;
+   read the missing keys as defaults, not as "off". What the bundle still does **not** carry:
    the memory dump inside the crash folder, and any segment already rotated out past `.6`.
 2. **Identify the build that produced the log.** The banner line carries the mod version, harness
    build time and session id; `[HOTRELOAD] genN applied` says which payload generation was live at
    the moment of the crash (health and tracer lines are re-printed per generation).
 3. **Read the mod's own verdict before the exception.** `MOD HEALTH:`, `[SELFTEST]`,
    `GUARD ACTIVITY:`, `[BATTLE-MODE]`, `[DEPLOY-GUARD]` — but see § *What `MOD HEALTH:` does not
-   cover* below: absence is not health.
+   cover* below: absence is not health. `[SELFTEST]` in particular is **off in the shipped config**
+   (`"selfTest": false`, `Harness/GuardConfig.cs:107`; the block runs only under
+   `GuardConfig.Bool("selfTest", false)`, `Payload/PayloadEntry.cs:105-108`), so a log with no
+   `[SELFTEST]` block is a default-config log, not a mod that skipped its tests.
 4. **Turn tracing on and reproduce** (§2). Then check the tracer load lines: a tracer that hooked
    0 methods produces silence that is easy to misread as "the bug did not happen".
 5. **Find the first-chance exception, not the last log line** (§2): inner-exception chain,
@@ -52,17 +60,27 @@ A hang produces no exception, so **every piece of exception tooling in this repo
 construction** — the session-wide first-chance capture only fires on a throw, the finalizer guards
 only run on an escaping exception, and `GUARD ACTIVITY:` stays at "none fired this session". That
 silence is the expected output of a hang, not evidence of health. Do not read it as "the mod was
-fine". One of our own layers can also change behaviour with no exception in sight and therefore
-nothing to log: `PartyAiCrashGuard`'s layer 1 is a **prefix** that skips a party's tick in a
-proven-inconsistent state (`Payload/PartyAiCrashGuard.cs:22-25`), not a finalizer.
+fine". One of our own layers can also change behaviour with no exception in sight:
+`PartyAiCrashGuard`'s layer 1 is a **prefix** that skips a party's tick in a proven-inconsistent
+state (`Payload/PartyAiCrashGuard.cs:22-25`), not a finalizer, so it never reaches
+`GUARD ACTIVITY:` — it does not call `SelfHealing.RecordFire`, which only the two finalizers do
+(`:126,155`). It is **not** silent, though: grep
+`[AI-GUARD] skipping AI tick for half-synced party` (`Payload/PartyAiCrashGuard.cs:107,165-183`),
+throttled to one line per 5 s and carrying the skip count since the last report.
 
-1. **Read the `[DIAG]` heartbeat.** It is emitted on a timer regardless of whether anything throws,
-   so it is the one signal a hang still produces. Compare consecutive lines for build-up in
-   `WS=` / `priv=` / `managed=`, in `handles=` and in `threads=`; the `Mission=` / `GameState=` /
-   `Campaign=` fields say what the engine believed it was doing. **The last heartbeat is the time of
-   death** — everything after it is post-mortem.
+1. **Read the `[DIAG]` heartbeat — it exists only when `"tracing": true`.** The heartbeat is gated
+   on `RuntimeDiagnostics.Enabled` (`Payload/RuntimeDiagnostics.cs:33,37-40`), which is set only
+   inside the tracing branch of `PayloadEntry.Apply` (`:83-95`, assignment at `:93`), and the
+   shipped config is `"tracing": false` (`Harness/GuardConfig.cs:106`). A log with no `[DIAG]`
+   line was produced with the default config — get a tracing-on reproduction rather than treating
+   that silence as evidence. With tracing on it is emitted on a timer regardless of whether
+   anything throws, so it is the one signal a hang still produces. Compare consecutive lines for
+   build-up in `WS=` / `priv=` / `managed=`, in `handles=` and in `threads=`; the `Mission=` /
+   `GameState=` / `Campaign=` fields say what the engine believed it was doing. **The last heartbeat
+   is the time of death** — everything after it is post-mortem.
 2. **Read the last `[TRACE]` and `[BATTLE-MODE]` lines before the heartbeat stops.** They are the
-   last decision the mod made, and they name the chokepoint it was standing on.
+   last decision the mod made, and they name the chokepoint it was standing on. `[TRACE]` is
+   tracing-only like the heartbeat; `[BATTLE-MODE]` is always on from v1.3.2.
 3. **Attach a debugger to the live process.** A hang is the one symptom you can still inspect
    directly — the game has not exited.
    - Visual Studio → **Debug > Attach to Process** → `Bannerlord.exe`, attach to **Managed** code,
@@ -81,13 +99,20 @@ What a log alone **can** settle:
 
 - **Which build produced it** — the banner line (mod version, harness build time, session id) and
   `payload build <time> applying on <harmony id>` (which payload generation was live).
-- **Whether the mod resolved its targets on that machine** — `MOD HEALTH:` plus the `[SELFTEST]`
-  block. A `FAIL` names the component; a resolution failure names the member that moved.
+- **Whether the mod resolved its targets on that machine** — `MOD HEALTH:`, and the `[SELFTEST]`
+  block *if they had `"selfTest": true`*; the shipped default is `false`
+  (`Harness/GuardConfig.cs:107`), so most stranger logs carry `MOD HEALTH:` and nothing else. A
+  `FAIL` names the component; a resolution failure names the member that moved.
 - **Which guards actually fired** — `GUARD ACTIVITY:`, with a count per guard id. A non-zero count
-  is proof a guarded path was hit on their machine.
+  is proof a guarded path was hit on their machine. `battle-mode=N` is the most useful entry for a
+  "my troops were missing" report: it proves BT's battle patches were actually lifted or restored
+  N times this session (`Payload/BattleMode.cs:283,332`), which `MOD HEALTH:` can never show.
 - **What was thrown, and by whom** — the first-chance block (§2): exception type, the full
   `<- INNER:` chain, the `CONTEXT:` engine state and the `LIVE …` trigger stack.
-- **What the mod decided** — the last `[BATTLE-MODE]`, `[TIME]`, `[ENCOUNTER-GUARD]` lines.
+- **What the mod decided** — the last `[BATTLE-MODE]`, `[TIME]`, `[ENCOUNTER-GUARD]` lines. Pin the
+  version first: on v1.3.1 and earlier — still what `origin` ships — a missing
+  `[BATTLE-MODE] … start-battle` line is that build's expected broken state, not a failed
+  chokepoint (§2 *Runtime tracing*, the tracing-and-behaviour paragraph).
 
 What it **cannot** settle: a **root cause on a build you do not have**. Member names, IL offsets and
 patch counts are per-build facts; a count that looks wrong may be a different game or BT version
@@ -136,9 +161,21 @@ Turn tracing on in `guardconfig.json` (module root):
 { "tracing": true, "selfTest": true }
 ```
 
-With hot-reload on, flipping `tracing` and dropping a rebuilt payload turns tracers on mid-session
-(the flag is read fresh from disk on each apply). Log lives at
+Both keys ship as `false` (`Harness/GuardConfig.cs:106-107`), so a player's log carries neither the
+`[DIAG]` heartbeat nor the `[SELFTEST]` block — absence of either says "default config", not
+"broken". With hot-reload on, flipping `tracing` and dropping a rebuilt payload turns tracers on
+mid-session (the flag is read fresh from disk on each apply). Log lives at
 `Modules/BLTDeploymentCrashGuard/CrashGuard.log`.
+
+**A tracing-on reproduction is representative of default play — as of v1.3.2, and not before.**
+`TracePatches` is now log-only (`Payload/TracePatches.cs:88`) and every decision point is hooked by
+the guard that owns it, so tracing adds lines and changes nothing else. In v1.3.1 and earlier —
+still what `origin` ships — it changed behaviour: `BattleMode`'s `StartBattle` / `OpenNew` decisions
+and `EncounterLoopGuard`'s `Finish` stamp existed only while the tracer was loaded, so with the
+shipped `"tracing": false` they never ran at all (`CHANGELOG.md` v1.3.2 § *Battles*, § *Crash
+guards: health and self-tests*). Two consequences: a tracing-on repro of an older build can behave
+*better* than the player's tracing-off session did, and on a v1.3.1 log the missing
+`[BATTLE-MODE] … start-battle` line is the expected broken state, not a failed chokepoint.
 
 ### Log tags (grep targets)
 
@@ -150,10 +187,10 @@ Diagnostics added in the 2026-09-04 investigation:
 | Tag | What it gives you |
 |---|---|
 | `[CHARGEN]` | Character-creation lifecycle + a **session-wide first-chance exception capture** with the full inner-exception chain and the throwing frames. |
-| `[MO-PROBE]` | (dev) logs the **first 12** `MovementOrder` constructions + `Mission.Current` state, and any throw out of the ctor at the instant it is thrown (`Payload/MovementOrderInitProbe.cs:27,56,73-92`). After the 12th it is silent except on a throw — an origin probe for the type-init crash, not a census. |
+| `[MO-PROBE]` | (dev) logs the **first 12** `MovementOrder` constructions + `Mission.Current` state, and any throw out of the ctor at the instant it is thrown (`Payload/MovementOrderInitProbe.cs:27-28,56,73-92`; the cap is the `LogFirst` constant at `:28`). After the 12th it is silent except on a throw — an origin probe for the type-init crash, not a census. |
 | `[MO-INIT]` | The `MovementOrder` type-init guard's result at load: "initialized safely" or "already poisoned". |
-| `[DIAG]` | Memory + engine-state heartbeat (WS/private/managed, GC counts, handles, threads; Mission/GameState/Campaign) every ~15 s and at every mission transition. Use it to see a leak/balloon build up before a symptom — and it is the only signal a freeze still produces (§0 *Branch: freeze / hang*). |
-| `[DEPLOY-GUARD]` | The two deployment finalizers (README fix #1) and their health check. `deployment crash guards active — SetupTeams=guarded FinishDeployment=guarded` at load (`Payload/DeploymentCrashGuards.cs:43`), `SUPPRESSED crash in DeploymentMissionController.SetupTeams: …` when one fires (`:107,128`), and one line per recovery step that itself failed (`:144-159`). Every line in that file now carries the tag; before 2026-09-04 they were untagged and ungreppable. |
+| `[DIAG]` | Memory + engine-state heartbeat (WS/private/managed, GC counts, handles, threads; Mission/GameState/Campaign) every ~15 s and at every mission transition. **Only emitted when `"tracing": true`** — gated on `RuntimeDiagnostics.Enabled` (`Payload/RuntimeDiagnostics.cs:33,37-40,60-63`), which only the tracing branch sets. Use it to see a leak/balloon build up before a symptom; with tracing on it is the only signal a freeze still produces (§0 *Branch: freeze / hang*). |
+| `[DEPLOY-GUARD]` | The two deployment finalizers (README fix #1) and their health check. `deployment crash guards active — SetupTeams=guarded FinishDeployment=guarded` at load (`Payload/DeploymentCrashGuards.cs:43`), `SUPPRESSED crash in DeploymentMissionController.SetupTeams: …` when one fires (`:107,128`), and one line per recovery step that itself failed (`:144-159`). Every line in that file now carries the tag; before 2026-09-04 they were untagged and ungreppable. **A `SUPPRESSED` line is not "the battle was fine"** — the player still went into an empty-sided battle; chase `[BATTLE-MODE]`, not this guard (see the `deployment-guards` row in § *What `MOD HEALTH:` does not cover*). |
 | `[TIME] … change SUPPRESSED/ALTERED by [X]` | Names **which** of our three prefixes on `Campaign.set_TimeControlMode` vetoed a write — `[TIME-GUARD]`, `[CLICK-SPEED]`, or `another patch (not one of ours)` when the vetoer was not ours (`Payload/TimeTrace.cs:118-124`). The vetoing prefix notes itself (`Payload/TimeEnforcementGuard.cs:217`, `Payload/MapClickSpeedKeeper.cs:93`) and the `[repeat]` dedup key includes the vetoer (`Payload/TimeTrace.cs:127-128`), so a collapsed burst still says who won. |
 | `[repeat] … ×N` | A high-frequency line coalesced by `TraceThrottle` (see below). |
 
@@ -191,38 +228,45 @@ zero:
 
 ### What `MOD HEALTH:` does not cover
 
-`MOD HEALTH:` is built from the components that called `Diag.Report`. It is printed from
-`PayloadEntry.Apply` (`Payload/PayloadEntry.cs:104`, with `[SELFTEST]` following when
-`"selfTest": true`) **and again inside the `[HOTRELOAD] genN applied` line**
-(`Harness/HotReload.cs:381`) — so a reloaded generation produces two copies and a fresh launch one;
-do not count `MOD HEALTH:` lines as generations. A component that never reports is **absent**, not
-healthy.
+`MOD HEALTH:` is built from the components that called `Diag.Report`, and it prints a **count**, not
+a roster: names appear only for *degraded* entries (`Harness/Diag.cs:87-103`), so an all-resolved
+line is `MOD HEALTH: N active, all resolved` and nothing else. A component that never reports is
+**absent**, not healthy.
 
-The 2026-09-04 pass closed the worst of those holes. Six components that previously reported nothing
+It is printed from `PayloadEntry.Apply` (`Payload/PayloadEntry.cs:104`, with `[SELFTEST]` following
+when `"selfTest": true`) **and again inside the `[HOTRELOAD] genN applied` line**
+(`Harness/HotReload.cs:380-381`, appended unconditionally) — so **every** generation, a fresh launch
+included, produces two copies. The copy count never tells you whether this was a launch or a reload;
+read `genN` and the `(initial)` / `(reload)` reason instead.
+
+The 2026-09-04 pass closed the worst of those absences. Six components that previously reported nothing
 now report health and register a self-test, so a rename under them now degrades the health line
 instead of passing silently:
 
 | Component id | Self-test | Critical? | Notes |
 |---|---|---|---|
-| `battle-mode` | `battle-mode.contract` | critical only when a chokepoint hook is missing | Detail carries `chokepoints StartBattle=… OpenNew=…; lift targets N/M method(s)` and names any unresolved one (`Payload/BattleMode.cs:119-130`). An unresolved lift target degrades but is not critical — it costs one lifted method, not the player side. |
-| `encounter-loop-guard` | `encounter-loop-guard.contract` | no | Reports healthy with detail `inert — BannerlordTogether not loaded` when BT is absent, and degraded when BT is present but `BattleSyncBehavior` / `ApplyEncounterRequestNow` is missing (`Payload/EncounterLoopGuard.cs:83,114-121`). |
-| `deployment-guards` | `deployment-guards.contract` | **yes** | Verifies after `PatchAll` that our finalizers really sit on `SetupTeams` and `FinishDeployment` (`Payload/DeploymentCrashGuards.cs:35-43`). |
-| `party-ai-guard` | `party-ai-guard.contract` | no | |
+| `battle-mode` | `battle-mode.contract` | when a chokepoint hook is missing, **or** when `Apply` throws | Two critical paths, not one: `critical: !(startBattle && missionOpen)` (`Payload/BattleMode.cs:130`) and the catch, which is `critical: true` unconditionally (`:136`). Detail carries `chokepoints StartBattle=… OpenNew=…; lift targets N/M method(s)` and names any unresolved one (`:119-130`); an unresolved lift target degrades but is not critical — it costs one lifted method, not the player side. Fires into `GUARD ACTIVITY:` whenever patches are lifted or restored (`:283,332`). |
+| `encounter-loop-guard` | `encounter-loop-guard.contract` | no | Reports **healthy** when BT is absent, degraded when BT is present but `BattleSyncBehavior` / `ApplyEncounterRequestNow` is missing (`Payload/EncounterLoopGuard.cs:83,114-121`). Its `inert — BannerlordTogether not loaded` detail is on the healthy path, so it is discarded and never printed — read the stand-down off the *missing* `[ENCOUNTER-GUARD] … loop breaker active` load line (`:116`) instead. Fires into `GUARD ACTIVITY:` when the breaker trips (`:219`). |
+| `deployment-guards` | `deployment-guards.contract` | **yes** | Verifies after `PatchAll` that our finalizers really sit on `SetupTeams` and `FinishDeployment` (`Payload/DeploymentCrashGuards.cs:35-43`). Documented limitation, restated in the load line itself (`:43-44`): the finalizers suppress the CTD, they do **not** restore the missing player-side troops — auto battle mode is what prevents an empty player side (`:14-18`). |
+| `party-ai-guard` | `party-ai-guard.contract` | no | Only the two finalizers reach `GUARD ACTIVITY:` (`Payload/PartyAiCrashGuard.cs:126,155`); layer 1's skip prefix logs `[AI-GUARD] skipping AI tick …` instead (`:107,165-183`). |
 | `hero-creation-guard` | `hero-creation-guard.contract` | no | Previously `RecordFire` only. |
-| `movementorder-typeinit` | `movementorder-typeinit.contract` | **yes** | The self-test pins the premise: struct + `beforefieldinit`, the ctor, exactly one transpiled site, and the null-safe helper (`Payload/MovementOrderTypeInitGuard.cs:65-92`). A **load-time** fix — a fresh launch, never hot-reload. |
+| `movementorder-typeinit` | `movementorder-typeinit.contract` | **yes** | The self-test pins the premise: struct + `beforefieldinit`, the ctor, exactly one transpiled site, and the null-safe helper (`Payload/MovementOrderTypeInitGuard.cs:152-166`). A **load-time** fix — a fresh launch, never hot-reload. |
 
 Self-test names follow `<component>.contract`; the three exceptions are `pregnancy-sync.loopback`,
 `stash-sync.loopback` and `client-bootstrap-fix.wiring`, which prove a pipeline rather than a
 decision table.
 
-What still never reaches `MOD HEALTH:`:
+What does not reliably reach `MOD HEALTH:` — never for the first three rows, and **conditionally**
+for the rest, where a silent `Apply` return removes the component from the line entirely:
 
 | Component | What it reports | Where it does show up |
 |---|---|---|
 | `PlayerIdentityGuard`, `BootstrapWatch` | no `Diag.Report`, no self-test — but each now calls `SelfHealing.RecordFire` on every correction / handled abort (`Payload/PlayerIdentityGuard.cs:89`, `Payload/BootstrapWatch.cs:80`) | `GUARD ACTIVITY:` — `player-identity-guard`, `bootstrap-watch` — and their own tags, e.g. `[IDENTITY]` |
 | `TimeEnforcementGuard`, `MapClickSpeedKeeper`, `TimeFlowPatch`, `ShareTimeControl` | nothing | their own tags only: `[TIME-GUARD]`, `[CLICK-SPEED]`, `[TIME-FLOW]`, `[SHARE-TIME]` |
 | `PeerDetection`, `PayloadEntry` | nothing of their own | `PeerDetection.Snapshot()` embedded in other components' lines |
-| `StealthHideoutAdvisor` | returns before reporting when `HideoutAmbushMissionController` is missing — older game build (`Payload/StealthHideoutAdvisor.cs:37-40`) | nothing — it is simply absent |
+| `StealthHideoutAdvisor` | **conditional** — reports normally on a current game build (`Payload/StealthHideoutAdvisor.cs:59`, `[STEALTH] … advisor active on N method(s)`); absent only on an older build without `HideoutAmbushMissionController`, where `Apply` returns first (`:37-40`) | normally `MOD HEALTH:` + `stealth-hideout-advisor.contract`; on an older build, nothing |
+| `BackgroundTickBudgetGuard` | **conditional** — returns before any `Diag.Report` when `BannerlordTogether.CoopSubModule` is absent (`Payload/BackgroundTickBudgetGuard.cs:57-61`), so on a no-BT launch the component vanishes *including* its `critical: true` path (`:66`) | its tag `[TICK-GUARD]`, and `bg-tick-budget-guard` in `GUARD ACTIVITY:` |
+| `JoinSyncPauseEscape` | **conditional** — returns when `CoopSubModule` cannot be resolved (`Payload/JoinSyncPauseEscape.cs:69-73`) | its tag `[JOIN-ESCAPE]` |
 
 The two deployment finalizers keep their **own** fire ids, `setup-teams-guard` and
 `finish-deployment-guard` (`Payload/DeploymentCrashGuards.cs:106,127`), under the single
@@ -244,14 +288,24 @@ Practical consequences when reading a log:
 - Read the `MOD HEALTH:` suffix rather than reacting to the count: when something is unresolved the
   line appends *"(read each detail: a BannerlordTogether OR game update may have renamed a member; a
   detail saying 'inert', 'not loaded' or 'older game build' is on purpose)"* (`Harness/Diag.cs:93`).
-  A degraded entry whose detail says `inert` or `not loaded` is a deliberate stand-down, not damage.
+  **That suffix promises something the line cannot deliver, so do not grep a degraded entry for
+  those words** — none will ever carry one. `Diag.Report` keeps `detail` only on the failing branch
+  and discards it on the `ok` branch (`Harness/Diag.cs:71-85`), and every stand-down in the payload
+  is a *healthy* report: `inert — BannerlordTogether not loaded`
+  (`Payload/EncounterLoopGuard.cs:83`), `no BT present` (`Payload/ClientBootstrapFix.cs:65`),
+  `disabled by config` (`Payload/IllnessDeathGuard.cs:50` and four more). A stand-down therefore
+  shows only inside the `active` count; confirm it from the component's own tag line.
 - `GUARD ACTIVITY:` counts accumulate across hot-reload generations while `MOD HEALTH:` is reset per
   generation (`HOTRELOAD.md`), so the two lines answer different questions.
 
 ### Reading a first-chance exception line
 
 `CharacterCreationTrace` arms an `AppDomain.FirstChanceException` observer for the whole session.
-Every exception in game code is logged **even if the game swallows it**, with:
+Every exception with a game frame is logged **even if the game swallows it** — up to **400 per
+session**, after which the observer returns silently, with no line and not even a `[repeat]` rollup
+(`Payload/CharacterCreationTrace.cs:33,172-175`; the counter increments at `:176`, ahead of
+`TraceThrottle.Emit` at `:186`, so collapsed repeats spend the budget too). Treat a long session's
+later quiet as *budget exhausted*, not as clean. Each logged line carries:
 
 - the full **inner-exception chain** (`<- INNER:` lines) — a `TypeInitializationException`'s real
   cause is always its inner exception;
@@ -270,8 +324,9 @@ manifested frame.
 
 ### A real log, annotated
 
-Verbatim from `Modules/BLTDeploymentCrashGuard/CrashGuard.log`, 2026-09-04. Every line below was
-copied out of that file unmodified; the excerpts come from two sessions on the same day.
+From `Modules/BLTDeploymentCrashGuard/CrashGuard.log`, 2026-09-04. Every line below is verbatim;
+unrelated lines between them have been elided and the cuts are marked `…`. The excerpts come from
+three sessions on the same day, each with its own banner in the live log.
 
 **The bracket after the timestamp is the session role**, set from the payload tick:
 `[?]` = not computed yet (everything logged before the first tick, i.e. the whole startup block),
@@ -283,16 +338,23 @@ line that says `[S]` is authoritative that no peer was connected when it was wri
 
 ```
 2026-09-04 15:11:27.462 [?] ===== BLT Deployment Crash Guard v1.3.2 (harness build 2026-09-04 13:30) session=1265ffd7 =====
+2026-09-04 15:11:27.467 [?] [HOTRELOAD] engine start — hotReload=True roslyn=False prebuilt=True sourceDir=(none)
 2026-09-04 15:11:27.485 [?] payload build 15:07:49 applying on bltogether.crashguard.gen1
 2026-09-04 15:11:27.513 [?] [MO-INIT] MovementOrder constructed with no active mission — returned time 0 instead of crashing (this is the fix firing)
 2026-09-04 15:11:27.515 [?] [MO-INIT] MovementOrder initialized safely (patched 1 site(s)) — the beforefieldinit type-init battle crash is prevented for this session
+…                                    (38 per-guard and per-tracer load lines, then [BATTLE-MODE] config: battleMode=auto)
 2026-09-04 15:11:29.475 [?] [BATTLE-MODE] VANILLA battles active (auto: confidently no session, apply) — removed 0 foreign patch(es)
+…                                    (patches applied; battleMode=auto tracing=true)
 2026-09-04 15:11:29.476 [?] MOD HEALTH: 20 active, all resolved
 2026-09-04 15:11:29.477 [?] [SELFTEST] running 20 guard decision-logic test(s)…
+…                                    (11 earlier [SELFTEST] PASS lines)
 2026-09-04 15:11:29.504 [?] [SELFTEST] PASS siege-command-guard.contract — members re-resolved (incl. vanilla's siege AI-on default); hand-off decision table verified
+…                                    (5 more [SELFTEST] PASS lines)
 2026-09-04 15:11:29.520 [?] [SELFTEST] FAIL pregnancy-sync.loopback — threw: Object reference not set to an instance of an object.
+…                                    (2 more [SELFTEST] PASS lines)
 2026-09-04 15:11:29.531 [?] [SELFTEST] 19 passed, 1 failed
 2026-09-04 15:11:29.532 [?] [HOTRELOAD] gen1 applied (initial) | MOD HEALTH: 20 active, all resolved
+…                                    (hot-reload watch, time-guard, role and stream lines)
 2026-09-04 15:11:30.926 [S] [DIAG] mem WS=3150MB priv=3592MB managed=87MB peakWS=3150MB gc0/1/2=246/49/11 handles=1864 threads=123 | Mission=null GameState=none Campaign=null
 2026-09-04 15:11:30.928 [S] GUARD ACTIVITY: none fired this session (nothing crashed on a guarded path)
 ```
@@ -300,16 +362,17 @@ line that says `[S]` is authoritative that no peer was connected when it was wri
 | Line | What it settles |
 |---|---|
 | `===== … v1.3.2 (harness build 2026-09-04 13:30) session=1265ffd7 =====` | The build that produced everything below, and the session id that separates this launch from the next one in the same file. The **harness** build time is stamped here; it does not move when only the payload is redeployed. |
+| `[HOTRELOAD] engine start — hotReload=True roslyn=False prebuilt=True sourceDir=(none)` | The harness's own first line: whether hot-reload is armed on this machine and in which mode. `hotReload=True` is a dev box; a player's log says `False` and no `gen2` can follow. |
 | `payload build 15:07:49 applying on bltogether.crashguard.gen1` | The payload half — the pair that matters. The harness is 13:30 and the payload 15:07, which is normal during iteration and is exactly the pair `dist/manifest.txt` exists to keep honest when shipping. `gen1` = a fresh launch; `gen2`, `gen3`… are hot-reloads. |
 | `[MO-INIT] MovementOrder constructed with no active mission — returned time 0 instead of crashing (this is the fix firing)` | The guard **firing**, at load, before any mission — the type would otherwise have been poisoned here and every later `Formation.ResetAux` would re-throw the cached failure (see the next excerpt). |
 | `[MO-INIT] MovementOrder initialized safely (patched 1 site(s))` | The transpiler found exactly the one site it expects. A count other than 1 is the signal that the game build moved. |
 | `[BATTLE-MODE] VANILLA battles active (auto: confidently no session, apply) — removed 0 foreign patch(es)` | The decision, its **reason** (`apply` — the payload-load decision point), the confidence (`confidently no session`, from `PeerDetection`), and what it did: 0 patches removed, because BT has not installed its battle patches yet at load. Contrast with the `start-battle` line below. |
-| `MOD HEALTH: 20 active, all resolved` | Only the components that called `Diag.Report`. **This capture predates the 2026-09-04 health wiring** — a log from the current build lists `battle-mode`, `encounter-loop-guard`, `deployment-guards`, `party-ai-guard`, `hero-creation-guard` and `movementorder-typeinit` too, and the count rises accordingly. Never compare a count across builds; compare the named entries. |
+| `MOD HEALTH: 20 active, all resolved` | Only the components that called `Diag.Report`, as a bare **count** — an all-resolved line names nothing (`Harness/Diag.cs:87-103`). **This capture predates the 2026-09-04 health wiring**, so the current build *counts* `battle-mode`, `encounter-loop-guard`, `deployment-guards`, `party-ai-guard`, `hero-creation-guard` and `movementorder-typeinit` too and the number rises. Never read a count across builds as a regression. To compare rosters, use the `[SELFTEST]` block — one named line per registered component — plus each guard's own load tag. |
 | `[SELFTEST] running 20 guard decision-logic test(s)…` | The denominator. Fewer tests than components means a component registered no test — read the count, not just the pass line. |
 | `[SELFTEST] PASS siege-command-guard.contract — members re-resolved …` | A pass is a **re-resolution** of the members plus a check of the decision table, run against the live game — not a compile-time assertion. This is what tells you a rename has *not* happened. |
 | `[SELFTEST] FAIL pregnancy-sync.loopback — threw: …` | A real failure, kept visible: the wire loopback threw an NRE. It names the component (`pregnancy-sync`) and the suite (`.loopback`, a pipeline test rather than a `.contract` decision table). |
 | `[SELFTEST] 19 passed, 1 failed` | The summary to grep. `1 failed` with a healthy `MOD HEALTH:` line is normal and important: health says *resolved*, the self-test says *still behaves correctly*. |
-| `[HOTRELOAD] gen1 applied (initial) \| MOD HEALTH: …` | The same health text a second time. **Do not count `MOD HEALTH:` lines as generations** — a fresh launch prints one, a reload prints two. |
+| `[HOTRELOAD] gen1 applied (initial) \| MOD HEALTH: …` | The same health text a second time — the suffix is appended unconditionally (`Harness/HotReload.cs:380-381`), so **every** generation prints two copies, this fresh launch included. **Do not count `MOD HEALTH:` lines as generations**; read `gen1` and the `(initial)` / `(reload)` reason. |
 | `[DIAG] mem WS=3150MB … handles=1864 threads=123 \| Mission=null GameState=none Campaign=null` | The heartbeat. On its own it is a baseline; its value is the *series* (§0 *Branch: freeze / hang*). Note the role flipped to `[S]` here — the first tick has run. |
 | `GUARD ACTIVITY: none fired this session (nothing crashed on a guarded path)` | Nothing has fired **yet**. It is throttled to one line per 120 s and only reprinted when the text changes, so this line's absence later means "unchanged", not "not running". |
 
@@ -320,7 +383,12 @@ Later in that same session, guards had fired and the line carries counts:
 ```
 
 Each entry is a `SelfHealing.RecordFire` id with the number of times it fired this session — proof
-a guarded path was actually hit, which `MOD HEALTH:` can never tell you.
+a guarded path was actually hit, which `MOD HEALTH:` can never tell you. Two ids joined this line in
+the 2026-09-04 pass and are not in the capture above: `battle-mode`, counted every time BT's battle
+patches are actually lifted or restored (`Payload/BattleMode.cs:283,332`), and
+`encounter-loop-guard`, counted when the breaker trips (`Payload/EncounterLoopGuard.cs:219`).
+`battle-mode=N` is the entry to look for on a "my troops were missing" report — it settles whether
+the mode ever switched, which neither `MOD HEALTH:` nor a single `[BATTLE-MODE]` line does.
 
 #### The battle chokepoint doing its job (session `13be0322`)
 
@@ -333,6 +401,11 @@ then BT **has** installed its battle patches — all 24 of them are lifted for t
 is the line that matters when reading a "my troops were missing" report: `removed 0` at `apply` is
 expected, `removed 24` at `start-battle` is the fix working, and no `start-battle` line at all means
 the chokepoint never ran.
+
+**That last reading holds on v1.3.2+ only.** On v1.3.1 and earlier the decision points lived on the
+`[TRACE]` tracer, so with the shipped `"tracing": false` no session on any machine produced a
+`start-battle` line — that absence is the bug itself, not a symptom of another
+(§2 *Runtime tracing*, the tracing-and-behaviour paragraph).
 
 #### A first-chance exception, in full (session `13ec180d`)
 
@@ -421,8 +494,9 @@ the script as the authority on that list, not any prose copy of it — including
   not a diagnosis. Prove it in *these* logs/IL.
 - **The manifested frame is not the root cause.** `Formation.ResetAux` was where the crash
   surfaced; the cause was a `beforefieldinit` struct initialized while `Mission.Current` was null.
-- **A quiet fix attempt built on a wrong theory is worse than none.** Revert speculative changes
-  the moment the evidence contradicts them; keep the diagnostics.
+- **A quiet fix attempt built on a wrong theory is worse than none.** Back a speculative change out
+  with a FORWARD commit the moment the evidence contradicts it — never a discard-family git op
+  (`CLAUDE.md` § *Working discipline*); keep the diagnostics.
 - **Instrument to catch the class, not the instance.** When two failures rhyme (an
   AccessViolation in a finalizer, a null-at-transition), suspect one shared class and add telemetry
   that would reveal it (here: session-wide first-chance + memory heartbeat).

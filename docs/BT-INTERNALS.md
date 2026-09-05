@@ -20,7 +20,7 @@ method or moves a type does not crash this mod — it silently *unhooks* the fea
 it. That failure mode has already happened once: BT moved its network classes to the
 `BannerlordTogether.Network.*` namespace and both sync features went dead with no crash and no
 in-game signal, visible only as "NOT resolved" entries in the `MOD HEALTH` line
-(`CHANGELOG.md:130-132`; the health text itself annotates degraded components
+(`CHANGELOG.md` § *v1.2.8*; the health text itself annotates degraded components
 "likely a BannerlordTogether update renamed a method — check for a mod update",
 `Harness/Diag.cs:92-96`). **Read the health line first whenever a co-op feature stops working after a
 BT update.** Treat every name below as a snapshot, not a contract.
@@ -49,7 +49,7 @@ BT update.** Treat every name below as a snapshot, not a contract.
 | Partial-load tolerance | `assembly.GetTypes()` is wrapped: on `ReflectionTypeLoadException` the partial `loadEx.Types` array is used anyway (it contains nulls — they are skipped), so a partially-loadable BT build still resolves. | `Payload/BattleMode.cs:467-482` |
 | Failure logging | Lookup failures log under `[PEER-DETECT]`. A null return means "BT absent or unreadable" and every BT-facing guard/tracer goes inert. | `Payload/BattleMode.cs:486-490` |
 | Fully-qualified lookups | Some types are resolved with `AccessTools.TypeByName` on a full name instead — e.g. `BannerlordTogether.CoopSubModule` and `BannerlordTogether.SpNativeBattle.SpNativeBattleHostMissionBehavior`. Those are namespace-sensitive and therefore the first to break on a reorganisation. | `Payload/BackgroundTickBudgetGuard.cs:57`; `Payload/SiegeCommandGuard.cs:173` |
-| Namespace churn (2026-09-01) | BT relocated its network types from `BannerlordTogether.CoopNetworkBase` / `.CoopServer` to `BannerlordTogether.Network.*`. Both sync features now try the new namespace **first** and keep the old names as fallbacks. Resolve by a candidate list, never one fully-qualified name. | `CHANGELOG.md:130-132`; `Payload/PregnancySync/PregnancySyncGuard.cs:228`; `Payload/StashSync/StashSyncGuard.cs:120` |
+| Namespace churn (2026-09-01) | BT relocated its network types from `BannerlordTogether.CoopNetworkBase` / `.CoopServer` to `BannerlordTogether.Network.*`. Both sync features now try the new namespace **first** and keep the old names as fallbacks. Resolve by a candidate list, never one fully-qualified name. | `CHANGELOG.md` § *v1.2.8*; `Payload/PregnancySync/PregnancySyncGuard.cs:228`; `Payload/StashSync/StashSyncGuard.cs:120` |
 | Member shape is unstable | A `CoopSession` static may be a **property** in one build and a **field** in another. Every read resolves the property first (`Public\|NonPublic\|Static`) and falls back to the field; any failure is swallowed to `null`. | `Payload/BattleMode.cs:586-602` |
 | Member visibility | `BattleSyncBehavior`'s members are enumerated with `Public\|NonPublic\|Static\|Instance\|DeclaredOnly` — several are non-public and `ApplyEncounterRequestNow` may have multiple overloads. | `Payload/EncounterLoopGuard.cs:55-76` |
 | Obfuscation | Parts of BT are obfuscated. The clan-mode enum is type `af`; the pause-coordinator's `IsActive` query and the save-transfer coordinator's declaring type have machine names and must be found **by signature/fingerprint**, not by name. | `Payload/ClanModeSoloFix.cs:12-13,19-20`; `Payload/JoinSyncPauseEscape.cs:22-26,140-157` |
@@ -94,7 +94,7 @@ unreadable" (`Payload/BattleMode.cs:493-504`).
 | `Client` | static property → `BannerlordTogether.Network.CoopClient` | The client-side network object (the raw-send counterpart of `Server`). | `Payload/StashSync/StashSyncGuard.cs:440-447`; IL: `CoopSession::get_Client` |
 | `AllowClientTimeControl` | static bool | Shipped shared-time-control permission. **Defaults off.** | `Payload/ShareTimeControl.cs:12-21` |
 | `GhostHeroStringId` | static string | The remote player's ghost hero id. | `Payload/CoopCommandSplit.cs:351`; accessor `Payload/BattleMode.cs:564-573` |
-| `SharedSaveMode` | static | A **bare flag** — verified by assembly scan; it carries no identity logic of its own. | `Payload/CoopHeroIdentityLock.cs:16-18`; `CHANGELOG.md:139-140` |
+| `SharedSaveMode` | static | A **bare flag** — verified by assembly scan; it carries no identity logic of its own. | `Payload/CoopHeroIdentityLock.cs:16-18`; `CHANGELOG.md` § *v1.2.7* |
 | `InSpNativeBattle`, `SpNativeBattleId` | static | Battle topology snapshot used by the co-op battle tracer. | `Payload/CoopBattleTrace.cs:151-193` |
 
 A wider role surface is snapshotted (property-then-field, `Public|NonPublic|Static`) around save
@@ -206,7 +206,7 @@ transport facts above:
   `Payload/PregnancySync/PregnancySyncGuard.cs:21-24`; `Payload/StashSync/StashSyncGuard.cs:27-31`.
 
 A new custom frame must be proven non-colliding against **the other custom frame and all 255 BT
-packet types** before it ships (`CHANGELOG.md:195-199`) — but note `docs/MODDING-PITFALLS.md` §S5
+packet types** before it ships (`CHANGELOG.md` § *v1.2.4*) — but note `docs/MODDING-PITFALLS.md` §S5
 (`:1668-1678`): the naive 1..255 loop **cannot fail**, because `IsOurPacket` short-circuits on
 `data[0] != Marker` and every iteration exits at byte 0. The case that actually has to be proven is a
 real BT packet that starts `0x00` followed by one of the magics.
@@ -221,12 +221,12 @@ vanilla's formation layout simply cannot satisfy them.
 | Member / artifact | What it does | Evidence |
 |---|---|---|
 | `BannerlordTogether.SpNativeBattle.SpNativeBattleHostMissionBehavior` | The host-side SP-native-battle behaviour that owns command approval and the player-down releases. Resolved with `AccessTools.TypeByName`; absent type = BT not installed and every hook no-ops. | `Payload/SiegeCommandGuard.cs:173-177` |
-| `IsClientFormationCommandApproved` | The host approves a formation for the client **only** when it holds the client's troops alone — `FormationHasClientOwnedUnit && !FormationHasHostOwnedUnit` — or when the client is that formation's `PlayerOwner`/`Captain`. | `Payload/CoopCommandSplit.cs:21-25`; `CHANGELOG.md:31-34` |
+| `IsClientFormationCommandApproved` | The host approves a formation for the client **only** when it holds the client's troops alone — `FormationHasClientOwnedUnit && !FormationHasHostOwnedUnit` — or when the client is that formation's `PlayerOwner`/`Captain`. | `Payload/CoopCommandSplit.cs:21-25`; `CHANGELOG.md` § *v1.3.1* |
 | `FormationHasClientOwnedUnit` / `FormationHasHostOwnedUnit` | The two predicates inside the approval rule that make a **mixed** formation un-approvable for the client. | `Payload/CoopCommandSplit.cs:22` |
-| `AllowedFormationMask` | The client's set of approved formations. A non-empty mask makes the client a **sergeant** over exactly those inside an army, or their **general** otherwise. An empty mask means the client commands nothing. | `Payload/CoopCommandSplit.cs:23-24,30-31`; `CHANGELOG.md:34-38` |
-| `[SPNATIVE ORDER-GUARD] blocked local …` | BT's own log line when the client issues an order for a formation outside its mask — the observable symptom of an empty mask. | `Payload/CoopCommandSplit.cs:31`; `CHANGELOG.md:38` |
-| `SendFormationMembershipSnapshot` | Client → host report of its own troops' formations, sent **once a second**: host agent index + `FormationClass`. | `Payload/CoopCommandSplit.cs:25-27`; `CHANGELOG.md:35-36` |
-| `ApplyClientFormationMembership` → `ResolveFormationByClass` | Host-side application of that snapshot when the claim is allowed; the target formation is resolved **by class**, which is why a class-based block split works identically on both machines. | `Payload/CoopCommandSplit.cs:27-28`; `CHANGELOG.md:36` |
+| `AllowedFormationMask` | The client's set of approved formations. A non-empty mask makes the client a **sergeant** over exactly those inside an army, or their **general** otherwise. An empty mask means the client commands nothing. | `Payload/CoopCommandSplit.cs:23-24,30-31`; `CHANGELOG.md` § *v1.3.1* |
+| `[SPNATIVE ORDER-GUARD] blocked local …` | BT's own log line when the client issues an order for a formation outside its mask — the observable symptom of an empty mask. | `Payload/CoopCommandSplit.cs:31`; `CHANGELOG.md` § *v1.3.1* |
+| `SendFormationMembershipSnapshot` | Client → host report of its own troops' formations, sent **once a second**: host agent index + `FormationClass`. | `Payload/CoopCommandSplit.cs:25-27`; `CHANGELOG.md` § *v1.3.1* |
+| `ApplyClientFormationMembership` → `ResolveFormationByClass` | Host-side application of that snapshot when the claim is allowed; the target formation is resolved **by class**, which is why a class-based block split works identically on both machines. | `Payload/CoopCommandSplit.cs:27-28`; `CHANGELOG.md` § *v1.3.1* |
 | Order forwarding | With clean, unmixed blocks BT forwards the client's orders to the host by itself — no further intervention is needed. | `Payload/CoopCommandSplit.cs:40-42` |
 | `BattleCommandAssignmentPacket` | The host's command assignment, re-applied by the client every few seconds. It is **authoritative**: a client-side command fix cannot win against it. | `README.md:419-421` |
 | `ReleaseHostMainFormationsToAi` | Host-side "a player went down" release of the host's own main formations to the AI. | `Payload/SiegeCommandGuard.cs:178` |
@@ -271,7 +271,7 @@ line.
 
 On a dedicated server with two gameplay clients, the observed outcome is **separate** battles
 (per-client-ghost encounters); the shared-battle lease formation is an open, unfixed item
-(`CHANGELOG.md:378-380`).
+(`CHANGELOG.md` § *Known open items*).
 
 ---
 
@@ -280,7 +280,7 @@ On a dedicated server with two gameplay clients, the observed outcome is **separ
 | Member | What it does | Evidence |
 |---|---|---|
 | `CoopCampaignBehavior.EnforcePlaySpeed` | Runs **every** tick. Per IL: if host and not paused, it forces `UnstoppablePlay` / `UnstoppableFastForward` by calling `Campaign.SetTimeControlModeLock(0)` then `set_TimeControlMode`. This is what stomps a solo host's chosen speed after a mid-session save load. | `Payload/TimeEnforcementGuard.cs:9-12,62-80`; `docs/ENGINE-NOTES.md` §4 ("Campaign time control") |
-| The retry loop | Because BT re-requests the mode every tick and only stops when the mode changes, **blocking the write means BT retries forever** — the ~60/second source of the 2026-09-04 log flood that `TraceThrottle` exists to absorb. | `Payload/TraceThrottle.cs:9-14`; `CHANGELOG.md:5-12` |
+| The retry loop | Because BT re-requests the mode every tick and only stops when the mode changes, **blocking the write means BT retries forever** — the ~60/second source of the 2026-09-04 log flood that `TraceThrottle` exists to absorb. | `Payload/TraceThrottle.cs:9-14`; `CHANGELOG.md` § *v1.3.2* › *Diagnostics* |
 | The unstoppable variant | BT enforces `UnstoppableFastForward`, not vanilla's `StoppableFastForward` — which is precisely why vanilla's keep-speed-on-click option (mode == 4) does not recognize a co-op session's speed and every map click downgrades it. | `Payload/MapClickSpeedKeeper.cs:11-18`; `docs/ENGINE-NOTES.md` §4 ("Time control in co-op") |
 | `CoopSubModule.SetPaused(bool paused, string source, bool notify, string reason)` | BT's shared-pause entry point. **Static** (invoked with a null target); signature proven by this mod's own invocation `SetPaused(false, "Host", true, "join-escape")`. | `Payload/JoinSyncPauseEscape.cs:49,78,325`; `Payload/TimeEnforcementGuard.cs:119` |
 | `CoopSubModule.ApplyTimeState` | Applies a received/derived shared time state. Fires during network time sync **and once during a solo game load** (`OnGameLoaded → SetPaused → ApplyTimeState`, log 2026-08-18 23:49) — so neither method firing is proof of a live session on its own. Names recovered from **runtime stack traces**, not a decompile. | `Payload/TimeEnforcementGuard.cs:22-25,119,228-231` |
@@ -326,7 +326,7 @@ by assembly scan: `SharedSaveMode` is a bare session flag with no identity logic
 Bannerlord save stores exactly one player identity (whoever was `MainHero` when it was saved), so the
 second person to host a shared save becomes the previous host's hero. That gap is what
 `CoopHeroIdentityLock` fills, and it deliberately never runs as a client, whose hero BT assigns.
-`Payload/CoopHeroIdentityLock.cs:11-24`; `CHANGELOG.md:139-146`.
+`Payload/CoopHeroIdentityLock.cs:11-24`; `CHANGELOG.md` § *v1.2.7*.
 
 ### Ghost hero
 
@@ -469,8 +469,8 @@ serialization (`UPSTREAM_BUG_REPORT.md:173-176`).
 
 | Member / behaviour | What it does | Evidence |
 |---|---|---|
-| `MarriageFinalBarterApplyPatch` | Suppresses the native marriage inside a barter and routes it to host validation — but does **not** suppress the sibling barterables in the same `BarterManager.ApplyAndFinalizePlayerBarter` loop. The gold dowry therefore applies **natively** even when BT's host-side gate later rejects the marriage: money gone, no marriage. | `Payload/MarriageBarterGuard.cs:11-16`; `CHANGELOG.md:296-297` |
-| The clan-mode gate | BT's host-side validator rejects a routed marriage with `[BT] Marriage is blocked until clan mode is synchronized` whenever clan mode reads Unknown — and clan mode never leaves Unknown when hosting alone (§7), so marriage is blocked for a solo host. | `Payload/MarriageBarterGuard.cs:16-21,84`; `Payload/ClanModeSoloFix.cs:9-14`; `CHANGELOG.md:294-295` |
+| `MarriageFinalBarterApplyPatch` | Suppresses the native marriage inside a barter and routes it to host validation — but does **not** suppress the sibling barterables in the same `BarterManager.ApplyAndFinalizePlayerBarter` loop. The gold dowry therefore applies **natively** even when BT's host-side gate later rejects the marriage: money gone, no marriage. | `Payload/MarriageBarterGuard.cs:11-16`; `CHANGELOG.md` § *v1.2.x — fixes added on top of the harness/payload split* |
+| The clan-mode gate | BT's host-side validator rejects a routed marriage with `[BT] Marriage is blocked until clan mode is synchronized` whenever clan mode reads Unknown — and clan mode never leaves Unknown when hosting alone (§7), so marriage is blocked for a solo host. | `Payload/MarriageBarterGuard.cs:16-21,84`; `Payload/ClanModeSoloFix.cs:9-14`; `CHANGELOG.md` § *v1.2.x — fixes added on top of the harness/payload split* |
 | `MarriageSyncBehavior.TryCommitOwnerMarriageCompletionPersistence` | On 0.5.0.1 the message *"Marriage could not be safely completed by host-owned sync"* is this host-side persistence commit failing **after** the marriage itself validated. The cause prints on the host in `bt-sync-host.txt` as `[MARRIAGE] CompletionApply … reason=`. | `README.md:377` |
 
 The general shape worth naming: **one mod suppressing a single leg of a multi-leg transaction** cannot
@@ -483,7 +483,7 @@ prefix, before anything applies (`Payload/MarriageBarterGuard.cs:18-23`).
 literally `return !CoopSession.IsClient`. Two consequences follow: the **client never simulates
 pregnancy**, and the **host's vanilla rolls run completely untouched** — so what is missing is not
 behaviour but **replication** of births host → client.
-`docs/SPEC-pregnancy-coop-sync.md:5-8`; `CHANGELOG.md:180-181`; `Harness/GuardConfig.cs:94`.
+`docs/SPEC-pregnancy-coop-sync.md:5-8`; `CHANGELOG.md` § *v1.2.5*; `Harness/GuardConfig.cs:94`.
 
 BT's own release note is explicit: *"Pregnancy, children, succession, inheritance, and broad family
 lifecycle state are blocked for this release."* BT has no family/hero replication among its hand-rolled
@@ -500,24 +500,30 @@ BT installs prefixes, postfixes, finalizers and transpilers — with priorities 
 ordering constraints — over native battle/deployment/spawn methods. They are visible through
 `Harmony.GetPatchInfo(method)`, and a patch is identified as **foreign** by any owner id that does not
 start with `"bltogether"` (this mod's own owner ids are `bltogether.crashguard.gen{N}`, one per
-hot-reload generation). `Payload/BattleMode.cs:91-97,249-319`; `HOTRELOAD.md:11`.
+hot-reload generation — the test is `BattleMode.IsOwnOwner`, `Payload/BattleMode.cs:194-197`, which
+is also what the deployment health check uses to recognise its own finalizers). Stash and removal:
+`Payload/BattleMode.cs:426-497`; restore under the original owner/priority: `:289-337`;
+`HOTRELOAD.md` § *Trade-offs and known gaps*.
 
 **Why this mod lifts them.** With no remote peer, BT's synced-battle pipeline strips the player side
 out of missions — empty formations plus a `SetupTeams` NRE, proven 2026-08-18. `battleMode=solo` means
 "vanilla, BT battle patches lifted"; `battleMode=coop` means nothing is lifted; `auto` decides from
-peer state at game start and at every battle chokepoint. Lifted patches are **stashed** with their
-owner, kind, priority and before/after lists and restored verbatim when a peer connects.
-`Payload/BattleMode.cs:10-31,249-319`; `HOTRELOAD.md:65-68`; `Harness/GuardConfig.cs:88`.
+peer state, re-deciding at payload apply, the module screen, game start, mission init and both battle
+chokepoints — all six always-on, tracing or not. Lifted patches are **stashed** with their owner,
+kind, priority and before/after lists and restored verbatim when a peer connects.
+`Payload/BattleMode.cs:10-41,270-337`; `HOTRELOAD.md` § *Trade-offs and known gaps*;
+`Harness/GuardConfig.cs:88`.
 Caveat: the foreign-patch stash does **not** survive a payload hot-reload, so reloading while in
-`battleMode=solo` can leave BT's battle patches lifted (`CHANGELOG.md:330-331`; `HOTRELOAD.md:65-68`).
+`battleMode=solo` can leave BT's battle patches lifted (`HOTRELOAD.md` § *Trade-offs and known gaps*).
 The `ISharedState` doc comment still *names* the stash among the objects the harness keeps across a
 reload (`Harness/Contracts.cs:25-30`, the stash on `:28`), but the payload never writes it there — the
 only payload references to that bag are the interface handle at `Payload/PayloadEntry.cs:17,23`, and
-`Stash` is a plain payload static (`Payload/BattleMode.cs:75`) that a reload resets. **Restart the game
+`Stash` is a plain payload static (`Payload/BattleMode.cs:90`) that a reload resets. **Restart the game
 after hot-reloading in `battleMode=solo`.**
 
 **The native methods whose foreign patches are lifted** (battle-mission scope only; campaign/map co-op
-machinery is deliberately not listed) — `Payload/BattleMode.cs:39-63`:
+machinery is deliberately not listed) — 24 methods across 11 declaring types,
+`Payload/BattleMode.cs:51-75`:
 
 | Declaring type | Methods |
 |---|---|
@@ -576,7 +582,7 @@ hooks*.
   co-op battle mission.** Verified by IL dump of both methods in the pinned build.
 - **`ClanPartiesVM` / `CreateNewClanParty`** — untouched. Greyed-out leader cards and leader-only
   parties are **pure vanilla** behaviour; only the *provisionality* of a client's new party is
-  BT-caused. `CHANGELOG.md:93,98-100`.
+  BT-caused. `CHANGELOG.md` § *v1.2.9*,98-100`.
 - **No stash code** — see §11.
 
 ---
@@ -596,15 +602,15 @@ Every row below is reproduced and evidenced locally; the full write-ups are in
 | 6 | **Army-siege attach gap.** A peer's `MainParty` rides in a besieging army without being attached to the army's `BesiegerCamp`, so every `PlayerSiege`-derived path reads null on that peer while the siege is **live** — vanilla's incident consequence then NREs (CTD, crashreport1.html 2026-08-30 15:04). The `[INCIDENT-GUARD] REPAIRED … (co-op army attach gap)` log lines are the field evidence. | `UPSTREAM_BUG_REPORT.md:117-125`; `Payload/MapIncidentCrashGuard.cs:23-28` |
 | 7 | **Map incidents are not synced.** They spawn and resolve locally per peer; an incident's world effects (e.g. siege progress) apply only in the confirming peer's process. Needs a sync/authority decision like other campaign actions. | `UPSTREAM_BUG_REPORT.md:126-128` |
 | 8 | **Party fields sync piecemeal on a client join.** A `MobileParty` can sit for a few ticks in a state vanilla can never produce (`DefaultBehavior == DefendSettlement` with `TargetSettlement`, `TargetParty` and `ShortTermTargetParty` all null) → NRE in `MobilePartyAi.GetBehaviors` via `Campaign.PartiesThink`. It self-heals when the rest of the state arrives, so skipping a tick beats repairing the state. | `Payload/PartyAiCrashGuard.cs:10-25,86-93` |
-| 9 | **Marriage dowry lost on a rejected marriage** — the suppressed-leg / native-sibling barter problem (§11). | `CHANGELOG.md:296-297` |
-| 10 | **Clan mode never synchronizes when hosting alone**, blocking marriage (and every other clan-mode-gated action) for a solo host. | `CHANGELOG.md:294-295`; `Payload/ClanModeSoloFix.cs:9-15` |
-| 11 | **Join hold freezes the host** and the host's unpause is silently swallowed (§10). | `CHANGELOG.md:298-302` |
-| 12 | **`AllowClientTimeControl` ships off**, although many players expect either-player time control as in 2-player mode. | `docs/UPSTREAM_CONTRIBUTION.md:64-67`; `CHANGELOG.md:371-373` |
+| 9 | **Marriage dowry lost on a rejected marriage** — the suppressed-leg / native-sibling barter problem (§11). | `CHANGELOG.md` § *v1.2.x — fixes added on top of the harness/payload split* |
+| 10 | **Clan mode never synchronizes when hosting alone**, blocking marriage (and every other clan-mode-gated action) for a solo host. | `CHANGELOG.md` § *v1.2.x — fixes added on top of the harness/payload split*; `Payload/ClanModeSoloFix.cs:9-15` |
+| 11 | **Join hold freezes the host** and the host's unpause is silently swallowed (§10). | `CHANGELOG.md` § *v1.2.x — fixes added on top of the harness/payload split* |
+| 12 | **`AllowClientTimeControl` ships off**, although many players expect either-player time control as in 2-player mode. | `docs/UPSTREAM_CONTRIBUTION.md:64-67`; `CHANGELOG.md` § *v1.0.x* |
 | 13 | **No settlement-stash sync** (§11). | `UPSTREAM_BUG_REPORT.md:165-176` |
-| 14 | **Shared-save identity is unfixed for the loading host** (§7). | `CHANGELOG.md:137-142` |
+| 14 | **Shared-save identity is unfixed for the loading host** (§7). | `CHANGELOG.md` § *v1.2.7* |
 | 15 | **Dedicated server: port 47770 self-contention** — the owner window binds it, the spawned authority instance then fails five bind attempts and self-destructs. | `UPSTREAM_BUG_REPORT.md:34-38` |
-| 16 | **Dedicated server: role drops to player-host on an in-game save load**, and **two clients form separate battles** (per-client-ghost encounters) — the shared-battle lease formation is an open item. | `CHANGELOG.md:378-380`; `Payload/RoleTrace.cs:9-15` |
-| 17 | **Client formation command is unusable with vanilla formations** — mixed formations empty the `AllowedFormationMask` (§5). | `CHANGELOG.md:31-38` |
+| 16 | **Dedicated server: role drops to player-host on an in-game save load**, and **two clients form separate battles** (per-client-ghost encounters) — the shared-battle lease formation is an open item. | `CHANGELOG.md` § *Known open items*; `Payload/RoleTrace.cs:9-15` |
+| 17 | **Client formation command is unusable with vanilla formations** — mixed formations empty the `AllowedFormationMask` (§5). | `CHANGELOG.md` § *v1.3.1* |
 
 ### Corroboration from the public tracker (audited 2026-09-01)
 
@@ -669,7 +675,7 @@ fixes and tracers (`Harness/GuardConfig.cs:86`).
 2. **Prefer a postfix over a prefix where BT already prefixes** — you then record the value BT's prefix
    actually produced (`Payload/TracePatches.cs:28-30`).
 3. **Never force-pass a by-name lookup.** Report "not resolved" into the health line and stand down;
-   the 2026-09-01 namespace move is the reason (`CHANGELOG.md:130-132`).
+   the 2026-09-01 namespace move is the reason (`CHANGELOG.md` § *v1.2.8*).
 4. **Unknown is not "no".** Every session read is tri-state; a confident negative from an unreadable
    state is what produced the mid-session false-alone (`Payload/BattleMode.cs:529-539`).
 5. **A hard-coded constant against an obfuscated BT enum needs re-dumping on every BT version bump** —

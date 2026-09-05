@@ -110,6 +110,7 @@ namespace BLTDeploymentCrashGuard
             {
             }
             Log.Info("[CHARGEN] stage -> " + stage);
+            RuntimeDiagnostics.Mark("chargen-stage:" + stage); // memory + native-scene state per stage (folded-model hunt)
         }
 
         private static Exception LifecycleFinalizer(Exception __exception, MethodBase __originalMethod)
@@ -174,7 +175,14 @@ namespace BLTDeploymentCrashGuard
                 }
                 _firstChanceEmitted++;
                 string key = "CHARGEN-FC " + ex.GetType().Name + " @ " + frame;
-                string message = "[CHARGEN] first-chance " + FormatChain(ex);
+                // Live stack = who is ACTUALLY executing right now (shows the trigger the
+                // exception's own truncated stack hides); plus the engine-state + memory
+                // snapshot at the instant of the throw, to test the null-at-transition /
+                // memory-pressure class hypothesis.
+                string message = "[CHARGEN] first-chance " + FormatChain(ex)
+                    + "\n   CONTEXT: " + RuntimeDiagnostics.StateContext()
+                    + "\n   " + RuntimeDiagnostics.MemoryLine()
+                    + RuntimeDiagnostics.LiveGameStack(2);
                 TraceThrottle.Emit(key, message);
             }
             catch

@@ -73,21 +73,21 @@ evidence; each row cost a session.
 |---|---|---|
 | Encounter loop breaker as a **pure rate limiter** (N applications in a window) | Would eat a partner's legitimate join storm — join requests look like a burst | Signature gate: only applications within 4 s of a local `PlayerEncounter.Finish` count (`Payload/EncounterLoopGuard.cs:37-41,109-112`) |
 | Suppress `FinishDeployment`'s exception and stop there | Battle permanently frozen: `AllowAiTicking` still false, `DisableDying` still true, player agent non-detachable | Finalizer that replays the method's tail step by step (`Payload/DeploymentCrashGuards.cs:29-33,45-77`) |
-| Replace `ClanPartiesVM.GetNewPartyLeaderCandidates`'s `__result` with a non-generic `ArrayList` | Installs cleanly, then crashes the leader popup on the caller's generic `foreach` — a crash guard introducing a crash | Enumerate for logging only; the result is **never** replaced (`Payload/ClanPartyCreationAdvisor.cs:119-121`; CHANGELOG.md:101-103) |
+| Replace `ClanPartiesVM.GetNewPartyLeaderCandidates`'s `__result` with a non-generic `ArrayList` | Installs cleanly, then crashes the leader popup on the caller's generic `foreach` — a crash guard introducing a crash | Enumerate for logging only; the result is **never** replaced (`Payload/ClanPartyCreationAdvisor.cs:119-121`; `CHANGELOG.md` § *v1.2.9*) |
 | Time enforcement v1: **prefix-skip** BT's `EnforcePlaySpeed` (`return false`) | BT's internal time state machine went stale; plausibly produced the stuck shared pause seen 2026-08-19 00:32–00:35 | Run-but-neutralize: let it run, block only its setter writes inside its own execution window (`Payload/TimeEnforcementGuard.cs:14-21`) |
 | Scope the solo time neutralizer to the campaign map (2026-09-04 hypothesis for the sideways/folded character) | Did not move the symptom at all; the sideways character is a separate, likely GPU-side vanilla issue | Reverted. `docs/ENGINE-NOTES.md` §4 "Time control in co-op (pre-2026-09-04)" records it as a dead end |
 | Three quieter Harmony approaches (postfix among them) to rewrite `ClanModeSyncBehavior.CurrentMode` | All installed cleanly and did **nothing** — a postfix cannot rewrite a value-typed result of a foreign *internal* enum | Transpiler injecting a preamble, proven in a purpose-built rig (`scratchpad/HarmonyEnumTest`); see `Payload/ClanModeSoloFix.cs:22-26` |
 | Naive full-roster snapshot apply for stash sync (`Clear()` then re-add what the payload names) | Silently deleted items the sender structurally could not mention — a player-crafted sword, irrecoverably, with no log line | Preserve-then-clear-then-reapply, keyed against a `HashSet` of ids the payload names (`Payload/StashSync/StashSyncGuard.cs:324-345,362-365`) |
 | `item.WeaponDesign != null` as the "player-crafted" test | True for **every** `<CraftedItem>` definition — ~283 ordinary vanilla weapons on Native v1.4.8 stopped syncing, permanently, with a log line worded as if that were expected | `ItemObject.IsCraftedByPlayer`, plus a StringId round-trip as a second clause (`Payload/StashSync/StashSyncGuard.cs:213-234`) |
-| Defeat `Assembly.LoadFrom` dedup with a unique **AssemblyVersion** (shipped in v1.2.3) | LoadFrom dedups by simple **name** only; the version never mattered. Field-proven 2026-09-01 17:37: `LoadFrom deduped to already-loaded 1.2.7.42191` | A unique assembly **name** per build (`Payload/BLTDeploymentCrashGuard.Payload.csproj:11-18`; CHANGELOG.md:119-124) |
-| Fix the split 0Harmony identity with an `AssemblyResolve` pin (2026-08-30) | `Assembly.Load(bytes)` resolved via default-context probing, which **succeeded** against the game's own 0Harmony 2.4.2.0 — so the resolver never fired | Change the load **context**: LoadFrom a shadow copy in the module directory (`Harness/HotReload.cs:279-287`; CHANGELOG.md:213-220) |
+| Defeat `Assembly.LoadFrom` dedup with a unique **AssemblyVersion** (shipped in v1.2.3) | LoadFrom dedups by simple **name** only; the version never mattered. Field-proven 2026-09-01 17:37: `LoadFrom deduped to already-loaded 1.2.7.42191` | A unique assembly **name** per build (`Payload/BLTDeploymentCrashGuard.Payload.csproj:11-18`; `CHANGELOG.md` § *v1.2.8*) |
+| Fix the split 0Harmony identity with an `AssemblyResolve` pin (2026-08-30) | `Assembly.Load(bytes)` resolved via default-context probing, which **succeeded** against the game's own 0Harmony 2.4.2.0 — so the resolver never fired | Change the load **context**: LoadFrom a shadow copy in the module directory (`Harness/HotReload.cs:279-287`; `CHANGELOG.md` § *v1.2.3*) |
 | Re-using a per-**generation** shadow path (`.genN`) after a failed attempt | LoadFrom caches path → assembly, so the retry returned the first attempt's assembly without reading the new file. Field-proven 2026-09-01 17:43 | Unique path per **attempt**: pid + gen + `UtcNow.Ticks` (`Harness/HotReload.cs:307-312`) |
 | Clearing BT's `RuntimeDataCache` as the cure for `BootstrapAborted` | Reproduces identically with the `.rdc` present (2026-08-19 20:46) and removed (21:41) — `diskLoad=False`, all-`(-1)` sentinels both ways, and no cache is ever written | `BootstrapWatch` is a detector plus hygiene; the root fix is `ClientBootstrapFix` priming the static mirrors (`UPSTREAM_BUG_REPORT.md:16-22` vs `Payload/BootstrapWatch.cs:97-99`) |
 | Guard the perk/character-development code where the issue-quest NRE manifests | The defect is that a **dead hero is reactivated and re-added to the party at all**; guarding `HeroDeveloper` would hide it forever | Block `dead → Active` in `Hero.ChangeState` and fix the `IsAlive`-less loop in `IssueManager` (`Payload/DeadHeroReactivationFix.cs:9-27,108-147`) |
-| "Fix" the hideout sneak-in spawn so you are not a soldier | IL decode proved it is vanilla design — your own hero re-dressed in `Hero.StealthEquipment` with enemy colours, orders withheld until the stealth→battle transition. Changing it would break the designed mission | An on-screen explainer plus a command-ownership repair (`Payload/StealthHideoutAdvisor.cs:8-26`; CHANGELOG.md:107-116) |
-| Load every verbose tracer unconditionally (v1.0.x) | Mission / menu / control / time / coop-battle / role tracers on in normal play | All gated behind `"tracing": true` (CHANGELOG.md:342-344) |
-| Single-slot log rotation (`log` → `.1` overwrite) | One burst discarded the exact session being chased (2026-09-04) | Rolling window of segments (`Harness/Log.cs:78-87`; CHANGELOG.md:13-16) |
-| Check the log size once per launch | The check ran while the file was still small; `CrashGuard.log` reached **283 MB**. The earlier, milder case had already shown the second cost: at 12 MB it broke log streaming, not just evidence retention (CHANGELOG.md:347-348) | Amortised re-check every N writes — rotation has to be **periodic**, re-checked during the session, not once per launch (`Harness/Log.cs:84-93`; CHANGELOG.md:310-311) |
+| "Fix" the hideout sneak-in spawn so you are not a soldier | IL decode proved it is vanilla design — your own hero re-dressed in `Hero.StealthEquipment` with enemy colours, orders withheld until the stealth→battle transition. Changing it would break the designed mission | An on-screen explainer plus a command-ownership repair (`Payload/StealthHideoutAdvisor.cs:8-26`; `CHANGELOG.md` § *v1.2.8*) |
+| Load every verbose tracer unconditionally (v1.0.x) | Mission / menu / control / time / coop-battle / role tracers on in normal play | All gated behind `"tracing": true` (`CHANGELOG.md` § *v1.1.0*) |
+| Single-slot log rotation (`log` → `.1` overwrite) | One burst discarded the exact session being chased (2026-09-04) | Rolling window of segments (`Harness/Log.cs:78-87`; `CHANGELOG.md` § *v1.3.2* › *Diagnostics*) |
+| Check the log size once per launch | The check ran while the file was still small; `CrashGuard.log` reached **283 MB**. The earlier, milder case had already shown the second cost: at 12 MB it broke log streaming, not just evidence retention (`CHANGELOG.md` § *v1.1.0*) | Amortised re-check every N writes — rotation has to be **periodic**, re-checked during the session, not once per launch (`Harness/Log.cs:84-93`; `CHANGELOG.md` § *v1.2.x — fixes added on top of the harness/payload split*) |
 
 ---
 
@@ -129,7 +129,7 @@ evidence; each row cost a session.
 - **Lesson** — Select the lambda by what its IL actually **calls**. Here only
   `<SiegeProgressChange>b__N` methods returning `List<TextObject>` whose IL calls
   `PlayerSiege.get_PlayerSiegeEvent` are patched; the preview-text lambda is deliberately left alone.
-- **Now** — `Payload/MapIncidentCrashGuard.cs:33-35,66-80,120-158`; CHANGELOG.md:255-257.
+- **Now** — `Payload/MapIncidentCrashGuard.cs:33-35,66-80,120-158`; `CHANGELOG.md` § *v1.2.1*.
 
 ### H5 · A naive IL byte scan misreads operand bytes as opcodes
 
@@ -163,7 +163,7 @@ evidence; each row cost a session.
 - **Now** — `Payload/ClanPartyCreationAdvisor.cs:119-155` (the current safe form documents "the result
   is NEVER replaced"); `.git/commit-review-cache.json:282,285` holds the BLOCK verdict (`:282`) and
   the finding text (`:285`) — that cache lives inside `.git/`, so it is machine-local and absent from
-  a clone; the distributed record of the same finding is CHANGELOG.md:101-103.
+  a clone; the distributed record of the same finding is `CHANGELOG.md` § *v1.2.9*.
 
 ### H7 · `AccessTools.Field` returns null for an auto-property
 
@@ -462,7 +462,7 @@ runtime plus the way the game loads modules.
 - **Lesson** — Vary the assembly **name**, not the version. "A unique name per build is the only
   identity LoadFrom cannot collapse."
 - **Now** — `Payload/BLTDeploymentCrashGuard.Payload.csproj:11-18`; `HOTRELOAD.md:10`;
-  CHANGELOG.md:119-124. Detected at runtime by comparing the returned assembly's `Location` against
+  `CHANGELOG.md` § *v1.2.8*. Detected at runtime by comparing the returned assembly's `Location` against
   `Path.GetFullPath` of the requested path, `OrdinalIgnoreCase` (`Harness/HotReload.cs:315-324`).
 
 ### N4 · `LoadFrom` also caches **path → assembly**
@@ -492,7 +492,7 @@ runtime plus the way the game loads modules.
 - **Lesson** — When the wrong assembly is reachable by normal probing, no resolver can save you.
   Change the load **context** (LoadFrom, from the module directory). A byte-loaded assembly has no
   load path at all, so its probing falls back to the app base by construction.
-- **Now** — `Harness/HotReload.cs:279-287`; CHANGELOG.md:213-220; `HOTRELOAD.md:10`.
+- **Now** — `Harness/HotReload.cs:279-287`; `CHANGELOG.md` § *v1.2.3*; `HOTRELOAD.md:10`.
 
 ### N7 · A Bannerlord process holds **two** copies of 0Harmony
 
@@ -512,7 +512,7 @@ runtime plus the way the game loads modules.
   different copies of the same assembly.
 - **Lesson** — Recognise the message. Then look at which assembly copy each side bound to, and dump
   an evidence pack rather than guessing.
-- **Now** — `Harness/HotReload.cs:59-62,149-150,285-286`; CHANGELOG.md:216-221,272-278.
+- **Now** — `Harness/HotReload.cs:59-62,149-150,285-286`; `CHANGELOG.md` § *v1.2.3*,272-278.
 
 > **Good to know — the evidence pack for a type-load failure.**
 > On failure, log: the exception, the host's identity and location, the boundary assembly's identity
@@ -544,7 +544,7 @@ runtime plus the way the game loads modules.
   0Harmony 2.3.6.0; only gen2+ went through the byte-load path.
 - **Lesson** — A path that works by accident on the first iteration hides the defect until iteration
   N. When only later generations fail, suspect the **load context**, not the code.
-- **Now** — CHANGELOG.md:220-221.
+- **Now** — `CHANGELOG.md` § *v1.2.3*.
 
 ### N11 · `[assembly: InternalsVisibleTo]` is matched by **exact** assembly name
 
@@ -553,7 +553,7 @@ runtime plus the way the game loads modules.
 - **Lesson** — A name-varying reload scheme forces the shared surface (`Log`, `Diag`, `GuardConfig`,
   `SelfHealing`) to be **public**. The attribute survives only for the fixed-name (Roslyn) case.
 - **Now** — `Harness/AssemblyInfo.cs:1-9` with `Payload/BLTDeploymentCrashGuard.Payload.csproj:19-24`;
-  CHANGELOG.md:126-128.
+  `CHANGELOG.md` § *v1.2.8*.
 
 ### N12 · Statics are fresh in every hot-reload generation
 
@@ -568,7 +568,7 @@ runtime plus the way the game loads modules.
   instance, never a captured one.
 - **Now** — `Payload/PayloadEntry.cs:8-11,14-21` vs `Payload/BattleMode.cs:75`;
   `Payload/ClanPartyCreationAdvisor.cs:53-57`; `Payload/IllnessDeathGuard.cs:31-32`;
-  CHANGELOG.md:322-325; the bag itself at `Harness/SharedState.cs:6-48`, `Harness/Contracts.cs:25-37`,
+  `CHANGELOG.md` § *v1.2.0*; the bag itself at `Harness/SharedState.cs:6-48`, `Harness/Contracts.cs:25-37`,
   passed into each generation at `Harness/HotReload.cs:36,367`.
 
 ### N13 · A hot-reload leaves the previous generation's `AppDomain` event handlers attached
@@ -741,7 +741,7 @@ runtime plus the way the game loads modules.
 - **Lesson** — Ship the guard **and** file the root cause upstream. "The crash is gone" is not "the
   bug is fixed"; verify the gameplay outcome, not the absence of an exception.
 - **Now** — `Payload/DeploymentCrashGuards.cs:8-12`; `UPSTREAM_BUG_REPORT.md:85-93,104-108`;
-  CHANGELOG.md:355-357,291-293.
+  `CHANGELOG.md` § *v1.0.x*,291-293.
 
 ### E3 · Correcting player control during the deployment phase
 
@@ -761,7 +761,7 @@ runtime plus the way the game loads modules.
 - **Lesson** — Let vanilla's auto-deploy position the formations, then take **control** at
   `OnDeploymentFinished` with a move order to the position vanilla already chose. Minimal surface, no
   re-implementation of deployment.
-- **Now** — `Payload/SiegeCommandGuard.cs:51,427-432`; CHANGELOG.md:75-76.
+- **Now** — `Payload/SiegeCommandGuard.cs:51,427-432`; `CHANGELOG.md` § *v1.3.0*.
 
 ### E5 · An unguarded state dump becomes the crash it was meant to explain
 
@@ -812,7 +812,7 @@ runtime plus the way the game loads modules.
   `SetOrder(IsSiegeBattle || IsSallyOutBattle ? AIControlOn : AIControlOff)`.
 - **Lesson** — Command ownership in Bannerlord is **re-derived continuously**. You must refuse the
   hand-off with a standing prefix on `SetControlledByAI`, not assign ownership once.
-- **Now** — `Payload/SiegeCommandGuard.cs:26-33,280-307,389-451`; CHANGELOG.md:64-72;
+- **Now** — `Payload/SiegeCommandGuard.cs:26-33,280-307,389-451`; `CHANGELOG.md` § *v1.3.0*;
   `docs/ENGINE-NOTES.md` §3 "Siege defense: vanilla's default is AI control ON (IL-proven,
   2026-09-03)".
 
@@ -824,7 +824,7 @@ runtime plus the way the game loads modules.
 - **Lesson** — Role is decided from **army membership**, not settlement ownership. Re-derive
   ownership campaign-side (`MapEventSettlement.OwnerClan == Clan.PlayerClan`) and assert the general
   role explicitly, only for the player's own settlement.
-- **Now** — `Payload/SiegeCommandGuard.cs:34-36,245-265,337-363`; CHANGELOG.md:65-67,72-73.
+- **Now** — `Payload/SiegeCommandGuard.cs:34-36,245-265,337-363`; `CHANGELOG.md` § *v1.3.0*,72-73.
 
 ### E10 · Patching only the first of two authorities over the same flag
 
@@ -919,7 +919,7 @@ runtime plus the way the game loads modules.
   tracer on that path must coalesce from day one (first line in full, repeats collapsed into a
   windowed rollup), and the log needs a rolling window rather than a single `.1` overwrite. The
   coalescing emitter belongs in the **hot-reloadable** payload so the fix can land without a restart.
-- **Now** — `Payload/TraceThrottle.cs:6-21`; `Payload/TimeTrace.cs:92-95,121-123`; CHANGELOG.md:5-16;
+- **Now** — `Payload/TraceThrottle.cs:6-21`; `Payload/TimeTrace.cs:92-95,121-123`; `CHANGELOG.md` § *v1.3.2* › *Diagnostics*;
   `docs/ENGINE-NOTES.md` §4 "Time control in co-op (pre-2026-09-04)"; the convention is stated in
   `CLAUDE.md` "Conventions for guards/fixes".
 
@@ -1220,9 +1220,9 @@ runtime plus the way the game loads modules.
 - **Lesson** — The safe composition is for one of them to be strictly **state-reducing**: because this
   guard only ever cures and never increments ill days, NoSickness's prefix always sees a healthy hero
   and passes through. That reasoning has to be written down, or the next change breaks it. (Note the
-  documentation drift here: CHANGELOG.md:303-304 describes a *stand-down*; what shipped is
+  documentation drift here: `CHANGELOG.md` § *v1.2.x — fixes added on top of the harness/payload split* describes a *stand-down*; what shipped is
   coexistence — say which of the two you built.)
-- **Now** — `Payload/IllnessDeathGuard.cs:25-27`; CHANGELOG.md:303-304 and `Harness/GuardConfig.cs:92`
+- **Now** — `Payload/IllnessDeathGuard.cs:25-27`; `CHANGELOG.md` § *v1.2.x — fixes added on top of the harness/payload split* and `Harness/GuardConfig.cs:92`
   (both still say *stand-down*).
 
 > **Good to know — the vanilla old-age illness machine, and identity switching.**
@@ -1250,7 +1250,7 @@ runtime plus the way the game loads modules.
   animation or float parameter. Correct only inside a narrow at-rest band (`[0.98, 1.0)`), leaving
   genuinely mid-swing (`< 0.98`) and already-correct (`>= 1.0`) cases to vanilla, so the fix cannot
   mask real motion.
-- **Now** — `Payload/SiegeGatePromptFix.cs:13-27,32,88-91,134`; CHANGELOG.md:151-157.
+- **Now** — `Payload/SiegeGatePromptFix.cs:13-27,32,88-91,134`; `CHANGELOG.md` § *v1.2.6*.
 
 ### E48 · Unlocking one of several independent locks
 
@@ -1262,7 +1262,7 @@ runtime plus the way the game loads modules.
 - **Lesson** — Enumerate **all** the gates on a capability from IL before writing the fix; unlocking
   one does nothing. All three here are deliberate "gates are scenery in town" design, not an oversight.
   `MissionObject.IsDisabled` has no public setter — use `AccessTools.PropertySetter` + `Invoke`.
-- **Now** — `Payload/CivilianGateCloseFix.cs:11-25,41,82-87`; CHANGELOG.md:161-169.
+- **Now** — `Payload/CivilianGateCloseFix.cs:11-25,41,82-87`; `CHANGELOG.md` § *v1.2.6*.
 
 ### E49 · Making previously-dead code run
 
@@ -1272,7 +1272,7 @@ runtime plus the way the game loads modules.
 - **Lesson** — When a fix activates a dormant code path, add self-disabling insurance in the **same
   change** — here a tick finalizer that swallows and logs — even when no failure is known ("none
   known; self-disabling insurance").
-- **Now** — `Payload/CivilianGateCloseFix.cs:27-28,98-114`; CHANGELOG.md:170-171.
+- **Now** — `Payload/CivilianGateCloseFix.cs:27-28,98-114`; `CHANGELOG.md` § *v1.2.6*.
 
 ### E50 · Overriding a deliberate scenario decision
 
@@ -1298,7 +1298,7 @@ runtime plus the way the game loads modules.
 - **Lesson** — Restore only what blocks the capability you are restoring. An open civilian gate then
   behaves identically to before, and closing goes through vanilla's own `CloseDoor` — animation,
   `SetGateNavMeshState`, colliders — instead of a reimplementation.
-- **Now** — `Payload/CivilianGateCloseFix.cs:22-25`; CHANGELOG.md:169-170.
+- **Now** — `Payload/CivilianGateCloseFix.cs:22-25`; `CHANGELOG.md` § *v1.2.6*.
 
 ### E53 · Enabling an interaction with nobody local to use it
 
@@ -1315,7 +1315,7 @@ runtime plus the way the game loads modules.
 
 See **H6** for the mechanism. The rule in one line: enumerate a vanilla `yield` iterator for
 **logging only**; the result is never replaced (`Payload/ClanPartyCreationAdvisor.cs:119-155`;
-CHANGELOG.md:101-103).
+`CHANGELOG.md` § *v1.2.9*).
 
 ### E55 · Reading view-model members with `AccessTools.Field` alone
 
@@ -1340,7 +1340,7 @@ each of `Title` / `IsDisabled` / `DisabledReason`
   its behaviour and its preconditions (it expects the map state). The same principle covers
   `CastleGate.CloseDoor`/`OpenDoor`, `ChangePlayerCharacterAction`, and `SetProgress` with vanilla's
   own report text.
-- **Now** — `Payload/ClanPartyCreationAdvisor.cs:32-38,256,337`; CHANGELOG.md:95-98,142-144,169-170,251-253.
+- **Now** — `Payload/ClanPartyCreationAdvisor.cs:32-38,256,337`; `CHANGELOG.md` § *v1.2.9*,142-144,169-170,251-253.
 
 ### E58 · Applying a peer's data update under an open screen
 
@@ -1457,7 +1457,7 @@ between two mods rather than about the engine.
   "the feature stopped working".
 - **Now** — `Payload/PregnancySync/PregnancySyncGuard.cs:225-239`;
   `Payload/StashSync/StashSyncGuard.cs:117-131`; `Payload/ClientBootstrapFix.cs:105-138`;
-  `Payload/BattleMode.cs:457-491`; CHANGELOG.md:129-132.
+  `Payload/BattleMode.cs:457-491`; `CHANGELOG.md` § *v1.2.8*.
 
 ### B8 · Latching the **attempt** instead of the **success** when the peer loads late
 
@@ -1584,7 +1584,7 @@ between two mods rather than about the engine.
   the very bug being fixed. Only follow the record **forward** when the recorded hero is gone or dead;
   a living mismatch is never overwritten, and switching to a dead or missing recorded hero would be
   worse than doing nothing.
-- **Now** — `Payload/CoopHeroIdentityLock.cs:11-33,117-125,167,176-178,199-209`; CHANGELOG.md:137-141.
+- **Now** — `Payload/CoopHeroIdentityLock.cs:11-33,117-125,167,176-178,199-209`; `CHANGELOG.md` § *v1.2.7*.
 
 ### B17 · A hand-rolled JSON writer for a persisted map
 
@@ -1698,7 +1698,7 @@ player items**, which is why most of this section is about the failure direction
   if the sender was capable of mentioning it. Enumerate what your wire format cannot express, and
   preserve exactly that across an apply: read the machine-local stacks out **before** the clear, then
   re-add them after.
-- **Now** — `Payload/StashSync/StashSyncGuard.cs:36-45,324-345,362-365`; CHANGELOG.md:204-209.
+- **Now** — `Payload/StashSync/StashSyncGuard.cs:36-45,324-345,362-365`; `CHANGELOG.md` § *v1.2.4*.
 
 ### S2 · Re-adding every preserved stack after the apply
 
@@ -1842,7 +1842,7 @@ player items**, which is why most of this section is about the failure direction
 - **Lesson** — Before accepting a destructive edge as inherent, ask whether the sender actually lacks
   the information or merely lacks the vocabulary. Only the first is inherent.
 - **Now** — `Payload/StashSync/StashSyncGuard.cs:36-45`; both findings recorded against
-  CHANGELOG.md:204-209.
+  `CHANGELOG.md` § *v1.2.4*.
 
 ### S15 · Shipping the data-destructive feature default-on
 
@@ -1930,8 +1930,8 @@ behind most of this section.
   All three files (both DLLs and `SubModule.xml`) move together and are hash-verified across build
   output, the live game module and `dist/`. The corollary every contributor has to internalise: do not
   push mid-investigation, because a push ships to players.
-- **Now** — `install.cmd:9,58-60`; `.gitignore:1-3` (only `bin/`, `obj/`, `.runner/` are ignored, so
-  `dist/` is tracked); CHANGELOG.md:265-271; the deploy checklist in `CLAUDE.md`.
+- **Now** — `install.cmd:63-65`; `.gitignore:1-3` (only `bin/`, `obj/`, `.runner/` are ignored, so
+  `dist/` is tracked); `CHANGELOG.md` § *v1.2.x — installer + hot-reload fixes*; the deploy checklist in `CLAUDE.md`.
 
 ### T2 · The build stamps only one of the two `SubModule.xml` files
 
@@ -1940,8 +1940,13 @@ behind most of this section.
   `dist/SubModule.xml`, so copying it across is a manual step, and it is the easiest of the three
   artefacts to forget.
 - **Lesson** — Know which artefacts your build actually stamps, and treat the rest as an explicit,
-  checklisted copy.
-- **Now** — `Directory.Build.props:12-19`.
+  checklisted copy. The obvious fix — make the build copy it — was tried and reverted the same day
+  (2026-09-04): a build-time copy let an ordinary local build rewrite `dist/SubModule.xml` out from
+  under `dist/manifest.txt`, which `install.cmd` reports as a corrupt release. The copy belongs to
+  the release step, which writes the manifest from the same files.
+- **Now** — `tools/release.sh` places all three files plus the manifest as one set;
+  `tools/lint-scripts.sh` fails if `dist/` disagrees with its manifest; `Directory.Build.props`
+  § `StampSubModuleVersion` stamps the repo-root XML only and says why it never touches `dist/`.
 
 ### T3 · Writing the version number anywhere but the single source
 
@@ -1951,7 +1956,7 @@ behind most of this section.
   poked into `SubModule.xml` by the build, and **read back from the assembly identity** at runtime for
   the log banner. A log or crash report then cannot lie about which build produced it — which is the
   prerequisite for any field report being usable.
-- **Now** — `Directory.Build.props:3-9`; `Harness/Diag.cs:15-30,58-61`; CHANGELOG.md:260-263.
+- **Now** — `Directory.Build.props:3-9`; `Harness/Diag.cs:15-30,58-61`; `CHANGELOG.md` § *v1.2.1*.
 
 ### T4 · Installing or deploying one of the two assemblies
 
@@ -2062,7 +2067,7 @@ behind most of this section.
 - **Lesson** — Any component that stashes **foreign** state must serialize that stash across
   generations or refuse to reload. Until it does, the honest instruction is "restart if battle mode
   misbehaves after a reload".
-- **Now** — `HOTRELOAD.md:65-68`; `Payload/BattleMode.cs:75`; CHANGELOG.md:329-331; the cross-generation
+- **Now** — `HOTRELOAD.md:65-68`; `Payload/BattleMode.cs:75`; `CHANGELOG.md` § *v1.2.0*; the cross-generation
   bag that should hold it at `Harness/SharedState.cs:6-48`.
 
 ### T15 · Testing a harness or load-time change in a stale process
@@ -2223,7 +2228,7 @@ at least one session.
   root fixes, so nobody mistakes a suppressed symptom for a solved bug. Track suppressions as debt
   with the root cause named — a working suppression must not close the investigation.
 - **Now** — `UPSTREAM_BUG_REPORT.md:86-92,104-108`; `Payload/PlayerIdentityGuard.cs:16-23`;
-  CHANGELOG.md:381.
+  `CHANGELOG.md` § *Known open items*.
 
 ### P2 · Fixing a report before investigating it
 
@@ -2234,7 +2239,7 @@ at least one session.
 - **Lesson** — Prove what the behaviour **is** before deciding it is wrong. The correct ship for a
   discoverability failure is an on-screen explainer plus a guarantee for the part that genuinely is
   fragile — not a behaviour change.
-- **Now** — `Payload/StealthHideoutAdvisor.cs:8-26`; CHANGELOG.md:106-118,180-183. `Agent.Main` is
+- **Now** — `Payload/StealthHideoutAdvisor.cs:8-26`; `CHANGELOG.md` § *v1.2.8*,180-183. `Agent.Main` is
   still your hero throughout; `ChangeHideoutMissionModeToBattle`,
   `StartBossFightBattleModeInternal` and `StartBossFightDuelModeInternal` are where the order
   controller is selected, which is what the command-ownership repair hooks instead.
@@ -2247,7 +2252,7 @@ at least one session.
   live debugger attach and **repeated managed stack samples of the main thread** — which found the
   budget-free background tick in one session — and the fix is a **time** budget, not a guard.
 - **Now** — `UPSTREAM_BUG_REPORT.md:134-138,152-154`; `Payload/BackgroundTickBudgetGuard.cs:8-30`;
-  CHANGELOG.md:229-233.
+  `CHANGELOG.md` § *v1.2.2*.
 
 ### P4 · Treating a public bug tracker as a diagnosis
 
@@ -2278,7 +2283,7 @@ at least one session.
   `docs/SPEC-pregnancy-coop-sync.md` § *Files* and § *Proof strategy*, checked against
   `Payload/PregnancySync/PregnancySyncGuard.cs:28-30,47` and `Harness/GuardConfig.cs:94`. Two copies
   of the same claim are still open and are the standing example of why one fact needs one home:
-  CHANGELOG.md:20-24 against `Payload/CharacterCreationTrace.cs:19-27,38-49,133-150`, and the guard's
+  `CHANGELOG.md` § *v1.3.2* › *Diagnostics* against `Payload/CharacterCreationTrace.cs:19-27,38-49,133-150`, and the guard's
   own header still reading "Default OFF until validated live" beside
   `GuardConfig.Bool("pregnancySync", true)` (`Payload/PregnancySync/PregnancySyncGuard.cs:28,47`).
 
@@ -2363,7 +2368,7 @@ at least one session.
 - **Lesson** — Data-destructive and UI-substituting paths need an adversarial read by someone who is
   not the author, before they ship. And when a review finds a bug, check whether a test is certifying
   it.
-- **Now** — CHANGELOG.md:101-103,204-209; `.git/commit-review-cache.json:248,254,285` (machine-local,
+- **Now** — `CHANGELOG.md` § *v1.2.9*,204-209; `.git/commit-review-cache.json:248,254,285` (machine-local,
   not in a clone — see **H6**); `tests/StashPayloadTest/Program.cs:37-53`.
 
 ### P11 · Shipping a trade-off without naming its cost
@@ -2375,7 +2380,7 @@ at least one session.
 - **Lesson** — State the capability cost in the changelog and the README **at the moment you ship it**,
   and pin the folding rule in a self-test so it cannot drift silently. An accepted limit that is
   written down is a decision; one that is not is a bug report waiting to happen.
-- **Now** — `Payload/CoopCommandSplit.cs:151-168,430-436`; CHANGELOG.md:47-49.
+- **Now** — `Payload/CoopCommandSplit.cs:151-168,430-436`; `CHANGELOG.md` § *v1.3.1*.
 
 ### P12 · Retrying a dead end because nobody wrote it down
 

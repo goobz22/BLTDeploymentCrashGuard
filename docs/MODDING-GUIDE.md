@@ -60,7 +60,7 @@ Reference paths that catch people out:
   `StoryMode.*`).
 - **Do not reference the game bin's Harmony.** The process holds *two* copies: the game bin ships
   `0Harmony 2.4.2.0`, and the `Bannerlord.Harmony` module ships `0Harmony 2.3.6.0`
-  (`CHANGELOG.md:215-220`; `Harness/HotReload.cs:146-151`). Mods bind the **module's** copy:
+  (`CHANGELOG.md` § *v1.2.3*; `Harness/HotReload.cs:146-151`). Mods bind the **module's** copy:
   `<Game>/Modules/Bannerlord.Harmony/bin/Win64_Shipping_Client/0Harmony.dll`
   (`Harness/BLTDeploymentCrashGuard.csproj:31`). That two-copy split is exactly the type-identity
   hazard §4.4 and §10.2 are about.
@@ -378,7 +378,7 @@ exact path it instruments.
 Enumerate for logging and never replace the value. It is also unnecessary: a C# `yield` iterator returns
 a fresh enumerator per `GetEnumerator()` with no side effects
 (`Payload/ClanPartyCreationAdvisor.cs:119-155`). Commit review caught the unsafe draft before it shipped
-(`CHANGELOG.md:101-103`).
+(`CHANGELOG.md` § *v1.2.9*).
 
 ### 2.6 `[ThreadStatic]` depth counters: telling explicit calls from implicit ones
 
@@ -778,7 +778,7 @@ multiply listeners (`Payload/PregnancySync/PregnancySyncGuard.cs:76,84-89`).
 - **Class-level safety nets above a specific fix.** Patching the class-wide entry points
   (`IncidentEffect.Consequence`, `Incident.InvokeOption`) turns any *other* stale-state throw of the same
   family into a logged skip — containing an unknown blast radius without pretending it is fixed. Label
-  each fire a root-fix candidate (`CHANGELOG.md:257-259`).
+  each fire a root-fix candidate (`CHANGELOG.md` § *v1.2.1*).
 - **Pick the API the AI uses, not the one the player uses.** `Formation.TransferUnits` is patched (tactic
   path); `OrderController.TransferUnits` deliberately is not (order-UI path)
   (`Payload/SiegeCommandGuard.cs:48-50,94`). Identifying which of two similar APIs each actor uses lets
@@ -793,7 +793,7 @@ multiply listeners (`Payload/PregnancySync/PregnancySyncGuard.cs:76,84-89`).
 - **Reuse the vanilla entry point rather than reimplementing the flow** —
   `PartyScreenHelper.OpenScreenAsManageTroops`, `CastleGate.CloseDoor`/`OpenDoor`,
   `ChangePlayerCharacterAction`, `SetProgress` with the same report text
-  (`CHANGELOG.md:95-98,169-170,142-144,251-253`). You inherit animation, nav-mesh, colliders,
+  (`CHANGELOG.md` § *v1.2.9*,169-170,142-144,251-253`). You inherit animation, nav-mesh, colliders,
   screen-stack behaviour and report text for free, and stay compatible with whatever else patches that
   path.
 - **Write diff-only.** The gate fix calls `SetIsDeactivatedSynched` only when the value actually changes,
@@ -806,7 +806,7 @@ multiply listeners (`Payload/PregnancySync/PregnancySyncGuard.cs:76,84-89`).
 - **Explain, do not "fix", when the behaviour is intentional.** Where IL proved the reported bug was
   designed behaviour (the hideout "soldier" is the player's own `StealthEquipment` disguise), the
   response was an on-screen explainer plus a guarantee for the part that genuinely is fragile — not a
-  behaviour change (`Payload/StealthHideoutAdvisor.cs:20-26,69-79`; `CHANGELOG.md:106-118,180-181`). A
+  behaviour change (`Payload/StealthHideoutAdvisor.cs:20-26,69-79`; `CHANGELOG.md` § *v1.2.8*,180-181`). A
   large share of "the game is broken" reports are discoverability failures; explaining costs nothing and
   cannot regress.
 - **Coexist deliberately.** The illness guard never increments ill days and only ever cures, so a
@@ -814,7 +814,7 @@ multiply listeners (`Payload/PregnancySync/PregnancySyncGuard.cs:76,84-89`).
   property written into the header (`Payload/IllnessDeathGuard.cs:25-27`). When two mods patch the same
   method, the safe composition is for one to be strictly state-reducing, and that reasoning has to be
   written down or the next change breaks it. Where the other mod owns the behaviour outright, **stand
-  down** (`CHANGELOG.md:303-304`).
+  down** (`CHANGELOG.md` § *v1.2.x — fixes added on top of the harness/payload split*).
 
 ### 2.16 Patches that live in a per-tick hot path
 
@@ -859,7 +859,7 @@ multiply listeners (`Payload/PregnancySync/PregnancySyncGuard.cs:76,84-89`).
   call site for exactly as long as the last call took (capped), so the foreground is guaranteed roughly
   half of wall time no matter how heavy the background work becomes, and the guard is *inert* under
   normal load (`Payload/BackgroundTickBudgetGuard.cs:36-40,85-95`; the BT case at
-  `CHANGELOG.md:236-240`). It degrades proportionally with the pathology and needs no per-scenario tuning
+  `CHANGELOG.md` § *v1.2.2*). It degrades proportionally with the pathology and needs no per-scenario tuning
   constant.
 - **A prefix/postfix timing pair needs a zero sentinel.** The postfix still runs when the prefix skipped
   the call: stamp `_startTimestamp = Stopwatch.GetTimestamp()` only when the call proceeds, return early
@@ -904,11 +904,11 @@ Around that pump:
   helpful mod wedges the UI.
 - **Defer one tick and pop the owning screen** when opening a screen from inside another screen's confirm
   handler, so the screen stack matches what vanilla's equivalent flows produce and back-navigation
-  behaves (`CHANGELOG.md:96-98`).
+  behaves (`CHANGELOG.md` § *v1.2.9*).
 - **Re-apply a derived arrangement on the event *and* on a timer.** A formation layout computed once
   decays: the Order of Battle screen re-sorts by class and reinforcements arrive later, so
   `CoopCommandSplit` re-applies at `OnDeploymentFinished` and then every half second
-  (`CHANGELOG.md:42-44`).
+  (`CHANGELOG.md` § *v1.3.1*).
 
 ---
 
@@ -934,7 +934,7 @@ Scan `AppDomain.CurrentDomain.GetAssemblies()` for the assembly whose `GetName()
   (`Payload/PregnancySync/PregnancySyncGuard.cs:225-239`;
   `Payload/StashSync/StashSyncGuard.cs:117-131`). This is not theoretical: BT moved
   `CoopNetworkBase`/`CoopServer` into `BannerlordTogether.Network.*` and silently killed both sync
-  features until the health line surfaced it (`CHANGELOG.md:129-132`). The same idea applies to engine
+  features until the health line surfaced it (`CHANGELOG.md` § *v1.2.8*). The same idea applies to engine
   types that move between assemblies — `RoleTrace` tries `TaleWorlds.Core.MBSaveLoad` then
   `TaleWorlds.SaveSystem.MBSaveLoad` (`Payload/RoleTrace.cs:44-45`), and `ClientBootstrapFix` walks
   `TaleWorlds.Core` / `.Engine` / `.MountAndBlade` candidates
@@ -1016,7 +1016,7 @@ session. Two details make it safe:
   reads unprimed static `ActionIndexCache` mirrors; filling them from the live catalog makes the audit
   legitimately pass so BT's own deferred patches proceed. Suppressing the abort would have left those
   patches unapplied anyway — that is the difference between a workaround and a root fix
-  (`CHANGELOG.md:358-360`; `docs/UPSTREAM_CONTRIBUTION.md:25-27`).
+  (`CHANGELOG.md` § *v1.0.x*; `docs/UPSTREAM_CONTRIBUTION.md:25-27`).
 - **Reproduce the upstream gate you are bypassing.** Re-implement the foreign code's own preconditions
   (num action codes > 0, num animations > 0, four probe actions resolve, no disk load in flight) and
   remove only the one over-strict requirement, so the safety intent survives
@@ -1084,17 +1084,17 @@ itself swallows everything (`Harness/HotReload.cs:84-87,104-114,265-269`; `Harne
 
 ### 4.2 Loading a generation: `LoadFrom`, a shadow copy, and a unique name
 
-Three facts, each of which cost a release to learn (`CHANGELOG.md:119-128,211-225,272-281`):
+Three facts, each of which cost a release to learn (`CHANGELOG.md` § *v1.2.8*,211-225,272-281`):
 
 1. **Load with `Assembly.LoadFrom` against a shadow copy, never `Assembly.Load(byte[])`.** A byte-loaded
    assembly has no load path, so its dependency probing falls back to the application base — inside
    Bannerlord that resolves `0Harmony` to a *different* copy than the one the harness patched with, the
    two Harmony instances do not see each other's patches, and `IPayload.Apply(Harmony …)` fails with
    `TypeLoadException: Method 'Apply' … does not have an implementation`
-   (`HOTRELOAD.md:10` for the binding mechanism; `CHANGELOG.md:219` and `Harness/HotReload.cs:60` for
+   (`HOTRELOAD.md:10` for the binding mechanism; `CHANGELOG.md` § *v1.2.3* and `Harness/HotReload.cs:60` for
    the exception text; `Payload/BLTDeploymentCrashGuard.Payload.csproj:16-18`). Concretely: probing
    finds the game bin's `0Harmony 2.4.2.0`, while the harness is bound to the module-loaded
-   `0Harmony 2.3.6.0` (`CHANGELOG.md:215-220`).
+   `0Harmony 2.3.6.0` (`CHANGELOG.md` § *v1.2.3*).
 2. **Copy the canonical DLL to a unique sibling path in the *same* directory and load the copy**
    (`Harness/HotReload.cs:276-314`). Same directory keeps `LoadFrom` dependency probing pointed at the
    harness's own module folder; the canonical file stays unlocked so a build can overwrite it and trigger
@@ -1153,12 +1153,12 @@ must never throw into the binder (`Harness/HotReload.cs:63,134-192`).
 
 The two copies that can split here are concrete: the game bin's `0Harmony 2.4.2.0` and the
 `Bannerlord.Harmony` module's `0Harmony 2.3.6.0`, of which the harness is bound to the latter
-(`Harness/HotReload.cs:146-151`; `CHANGELOG.md:215-220`).
+(`Harness/HotReload.cs:146-151`; `CHANGELOG.md` § *v1.2.3*).
 
 **Pinning is necessary but not sufficient.** `AssemblyResolve` only fires when probing *fails*, and
 byte-loading probes successfully (against the wrong copy), so the pin can never run. Change the **load
-context**; do not just add a resolver (`CHANGELOG.md:213-221`; `Harness/HotReload.cs:281-287`). The
-resolver pin was in fact shipped first as the fix (`CHANGELOG.md:274-278`) and did not work, which is
+context**; do not just add a resolver (`CHANGELOG.md` § *v1.2.3*; `Harness/HotReload.cs:281-287`). The
+resolver pin was in fact shipped first as the fix (`CHANGELOG.md` § *v1.2.x — installer + hot-reload fixes*) and did not work, which is
 why it is worth stating this way round. Generation 1 always worked, which masked
 the bug for three releases — a path that works by accident on the first iteration hides the defect until
 iteration N.
@@ -1273,7 +1273,7 @@ testable outside a game are degenerate ones.
    `ClanModeSoloDecider.Decide(null, isHost:true) == false`, `Decide(false, isHost:false) == false`,
    `Decide(false, isHost:true) == true` (`Payload/ClanModeSoloFix.cs:105-119`);
    `ComputeBlockMs` at four boundary values (`Payload/BackgroundTickBudgetGuard.cs:143-156`);
-   `CoopCommandSplit`'s host-I–IV / client-V–VIII block mapping (`CHANGELOG.md:45-46`).
+   `CoopCommandSplit`'s host-I–IV / client-V–VIII block mapping (`CHANGELOG.md` § *v1.3.1*).
 4. **Pin values as well as names** — `(int)OrderType.AIControlOn == 36`
    (`Payload/SiegeCommandGuard.cs:534`).
 5. **Pin the negative half.** The IL discriminator must find ≥1 patched lambda **and** ≥1 deliberately
@@ -1305,7 +1305,7 @@ testable outside a game are degenerate ones.
 on-screen warning when a component marked `critical` is missing (`Harness/Diag.cs:63-104`, printed at
 `Harness/HotReload.cs:380-381`). By-name reflection means an upstream rename produces a silently missing
 fix; this line is the tripwire. It caught BT's `BannerlordTogether.Network.*` namespace move
-(`CHANGELOG.md:130-132`).
+(`CHANGELOG.md` § *v1.2.8*).
 
 Conventions that keep the board honest:
 
@@ -1414,7 +1414,7 @@ computes `headerLength = framed.Length - source.ToBytes().Length` rather than ha
 testing what it claims the day the constant changes.
 
 What headless tests cannot cover is stated plainly in the changelog: the wire format and loopback are
-proven; the two-machine hop is validated live on first fire (`CHANGELOG.md:202-203,306-307`).
+proven; the two-machine hop is validated live on first fire (`CHANGELOG.md` § *v1.2.4*,306-307`).
 
 ---
 
@@ -1448,7 +1448,7 @@ per-day prefix log exactly once with the wording "logged once, active every day"
 
 A guard that blocks a write which a peer mod retries every tick produces a ~60 Hz stack-trace flood that
 fills an 8 MB log in minutes and rotates the real evidence off the end — the tracer destroys the thing it
-exists to capture (`CHANGELOG.md:4-12`). The fix is a keyed throttle
+exists to capture (`CHANGELOG.md` § *v1.3.2* › *Diagnostics*). The fix is a keyed throttle
 (`Payload/TraceThrottle.cs:20-93`):
 
 - The **first** occurrence of a key logs in full, with its stack.
@@ -1630,7 +1630,7 @@ A co-op bug is only diagnosable when host and client logs are read side by side.
 Exception tooling is useless for a hang. Attach a live debugger to the running process and take repeated
 managed stack samples of the main thread; the common frames are the culprit. That is how the 2026-08-30
 whole-game freeze was root-caused — every sample landed inside BT's `TryBackgroundCampaignTick`
-(`UPSTREAM_BUG_REPORT.md:135-146`; `CHANGELOG.md:230-233`).
+(`UPSTREAM_BUG_REPORT.md:135-146`; `CHANGELOG.md` § *v1.2.2*).
 
 For flows rather than freezes, **patch native methods with pure logging patches** to capture the real call
 order and timestamps, and add an external guard that *holds* a step (90 s) to prove an expected event
@@ -2306,13 +2306,13 @@ Four facts, each of which cost a release here (evidence and code in §4.2, §4.3
    base. Inside Bannerlord that resolves `0Harmony` to a *different* copy than the one your harness
    patched with, and the interface call across the boundary fails with
    `TypeLoadException: … does not have an implementation` (`HOTRELOAD.md:10` for the mechanism;
-   `CHANGELOG.md:219` and `Harness/HotReload.cs:60` for the exception text). In this game the two copies
+   `CHANGELOG.md` § *v1.2.3* and `Harness/HotReload.cs:60` for the exception text). In this game the two copies
    are the game bin's `0Harmony 2.4.2.0` and the `Bannerlord.Harmony` module's `0Harmony 2.3.6.0`
-   (`CHANGELOG.md:215-220`).
+   (`CHANGELOG.md` § *v1.2.3*).
 2. **An `AssemblyResolve` handler cannot rescue that**, because the handler fires only when probing
    *fails* — and a byte-load probes successfully, against the wrong copy. Change the load context; do
-   not add a resolver (`CHANGELOG.md:213-221`; `Harness/HotReload.cs:281-287`). The resolver pin was
-   shipped first (`CHANGELOG.md:274-278`) and did not fix it.
+   not add a resolver (`CHANGELOG.md` § *v1.2.3*; `Harness/HotReload.cs:281-287`). The resolver pin was
+   shipped first (`CHANGELOG.md` § *v1.2.x — installer + hot-reload fixes*) and did not fix it.
 3. **The `LoadFrom` context dedups by simple name only.** A freshly built DLL with a new
    `AssemblyVersion` but the same name comes back as the already-loaded assembly — field-proven here as
    `LoadFrom deduped to already-loaded 1.2.7.42191`

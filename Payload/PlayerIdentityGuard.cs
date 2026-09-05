@@ -86,6 +86,7 @@ namespace BLTDeploymentCrashGuard
                 }
 
                 _corrections++;
+                SelfHealing.RecordFire("player-identity-guard"); // feeds GUARD ACTIVITY so the fix is retirable when BT fixes the swap
                 Log.Info("[IDENTITY] player control is on the wrong agent (" + Describe(controlled) + ") — moving control to " + Describe(myAgent) + " (correction " + _corrections + "/" + MaxCorrectionsPerMission + ")");
 
                 try

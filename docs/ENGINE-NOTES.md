@@ -162,7 +162,7 @@ rostering only.
 ### The battle-takeover surface
 
 The native members a co-op mod must hook to take a battle over — and therefore the exact set this
-mod lifts in vanilla mode (`Payload/BattleMode.cs:39-63`):
+mod lifts in vanilla mode (`Payload/BattleMode.cs:51-75`; 24 methods across 11 declaring types):
 
 | Namespace | Members |
 |---|---|
@@ -244,7 +244,7 @@ Vanilla only *assumes* the local player is the team general and owns that contro
 this and [pregnancy](#pregnancy-il-proven-2026-08-30) were both field reports that turned out to be
 UX gaps rather than bugs; the correct ship was an explainer plus a guarantee, not a behaviour change.
 
-Evidence: `Payload/StealthHideoutAdvisor.cs:9-21,:31,:43,:49`; `CHANGELOG.md:106-118`.
+Evidence: `Payload/StealthHideoutAdvisor.cs:9-21,:31,:43,:49`; `CHANGELOG.md` § *v1.2.8*.
 
 ### Module/game lifecycle the mod hangs on
 
@@ -340,20 +340,20 @@ treating it as a property is a silent reflection failure that quietly disables t
   (`Payload/ControlTrace.cs:43,:167-176`; `Payload/SiegeCommandGuard.cs:46,:63-64,:96`).
 - **F6 "delegate command" is literally `OrderController.SetOrder(OrderType.AIControlOn)`**, a
   different path from `Team.DelegateCommandToAI` — both must keep working when suppressing AI
-  hand-offs (`CHANGELOG.md:73-75`).
+  hand-offs (`CHANGELOG.md` § *v1.3.0*).
 - `OrderController.BeforeSetOrder` returns a formation to the player **only when it is AI-controlled
   AND has a `PlayerOwner`** — both conditions, not either (`Payload/SiegeCommandGuard.cs:31-32`;
-  `CHANGELOG.md:63-64`).
+  `CHANGELOG.md` § *v1.3.0*).
 - `Formation.RemoveUnit` hands an **emptied** formation back to the AI, so a formation that is later
   refilled (reinforcements) is the AI's again. A one-time hand-off to the player decays as troops die
-  (`Payload/SiegeCommandGuard.cs:32-33`; `CHANGELOG.md:64-65`).
+  (`Payload/SiegeCommandGuard.cs:32-33`; `CHANGELOG.md` § *v1.3.0*).
 - `Formation.TransferUnits(Formation target, int unitCount)` is the **tactic-only** API — the order UI
   transfers troops through `OrderController.TransferUnits` instead, so patching the former does not
   take re-organization away from the player (`Payload/SiegeCommandGuard.cs:48-49,:94`;
   `Payload/ControlTrace.cs:39-40,:44,:178-189`).
 - `FormationAI.TickOccasionally` runs its behaviours **only while the formation `IsAIControlled`** —
   removing AI control is what actually stops tactic behaviour, not cancelling an order
-  (`Payload/SiegeCommandGuard.cs:26-27`; `CHANGELOG.md:59-60`).
+  (`Payload/SiegeCommandGuard.cs:26-27`; `CHANGELOG.md` § *v1.3.0*).
 - `(int)OrderType.AIControlOn == 36` in the installed build; the self-test asserts it so a game update
   that reshuffles the enum is caught (`Payload/SiegeCommandGuard.cs:534`).
 
@@ -366,7 +366,7 @@ treating it as a property is a silent reflection failure that quietly disables t
   back for `Team.GetFormation(FormationClass)` (`Payload/SiegeCommandGuard.cs:227,:294,:417`;
   `Payload/CoopCommandSplit.cs:284,:289-290`).
 - The four basic classes, in order, are infantry / archers / cavalry / horse archers, occupying
-  formations I–IV; V–VIII repeat the same order (`CHANGELOG.md:40-42`).
+  formations I–IV; V–VIII repeat the same order (`CHANGELOG.md` § *v1.3.1*).
 - `FormationClass` folds into those four roles: `Ranged` → archers;
   `Cavalry` / `LightCavalry` / `HeavyCavalry` → cavalry; `HorseArcher` → horse archers; everything
   else (including `Infantry`, `Skirmisher`, `HeavyInfantry`) → infantry
@@ -388,10 +388,10 @@ formation's order position; `WorldPosition.IsValid` says whether it is usable; a
 ### Co-op: vanilla mixes both parties into the same formations
 
 Vanilla spawns **both** parties' troops into the same class formations, so in co-op every formation
-is mixed host/client troops (`Payload/CoopCommandSplit.cs:29-31`; `CHANGELOG.md:36-38`). Worse, the
+is mixed host/client troops (`Payload/CoopCommandSplit.cs:29-31`; `CHANGELOG.md` § *v1.3.1*). Worse, the
 **Order of Battle screen re-sorts formations by class and reinforcements arrive later**, so any custom
 formation assignment must be re-applied after deployment and on a timer (here: every half second)
-(`Payload/CoopCommandSplit.cs:39-40`; `CHANGELOG.md:42-44`).
+(`Payload/CoopCommandSplit.cs:39-40`; `CHANGELOG.md` § *v1.3.1*).
 
 Identity handles used to decide whose troop is whose: `Agent.Main` / `Agent.IsPlayerControlled` for
 the local player's agent, `Hero.MainHero` for the local hero, and `Hero.StringId` /
@@ -414,7 +414,7 @@ hero id via BT's session ghost-hero string id. Further BT internals: `docs/BT-IN
 
 Evidence: `Payload/CoopCommandSplit.cs:19-31` (the IL decode), `:33-36` (the I–IV / V–VIII split),
 `:324-326,:351` (`GhostHeroStringId` read through `PeerDetection.ReadCoopStaticString`);
-`CHANGELOG.md:29-38`.
+`CHANGELOG.md` § *v1.3.1*.
 Members: `SpNativeBattleHostMissionBehavior.IsClientFormationCommandApproved`,
 `AllowedFormationMask`, `SendFormationMembershipSnapshot`, `ApplyClientFormationMembership`,
 `ResolveFormationByClass`.
@@ -441,13 +441,13 @@ The rest of the hand-off machinery (`FormationAI.TickOccasionally`, `OrderContro
 [§2 Mutators that move command around](#mutators-that-move-command-around). `SiegeCommandGuard`
 counters these so placed formations hold; detail in that file's header.
 
-Evidence: `Payload/SiegeCommandGuard.cs:21-33`; `CHANGELOG.md:54-62`.
+Evidence: `Payload/SiegeCommandGuard.cs:21-33`; `CHANGELOG.md` § *v1.3.0*.
 
 ### Who decides the player's role — and when
 
 - `MapEvent.IsPlayerSergeant` demotes the player purely for sitting inside an army led by someone
   else — **even inside the player's own castle** (`Payload/SiegeCommandGuard.cs:35-36`;
-  `CHANGELOG.md:66-67`). Owning the settlement is not being the general; the role has to be asserted.
+  `CHANGELOG.md` § *v1.3.0*). Owning the settlement is not being the general; the role has to be asserted.
 - The role is decided in **two** places, not one: `Team.SetPlayerRole` and
   `TaleWorlds.MountAndBlade.AssignPlayerRoleInTeamMissionController.AfterStart`. The latter's
   `IsPlayerGeneral` / `IsPlayerSergeant` are **get-only auto-properties** whose compiler-generated
@@ -487,7 +487,7 @@ Siege members used when repairing one: `SiegeEvent.BesiegerCamp` → `.SiegeEngi
 and `SiegeEvent.BesiegedSettlement` with a `Name` `TextObject` for logging which siege was touched.
 
 Evidence: `Payload/MapIncidentCrashGuard.cs:20-22,:189-197,:225-226,:267-277`;
-`UPSTREAM_BUG_REPORT.md:114-117`; `CHANGELOG.md:247-250`. The incident that crashes on this is in
+`UPSTREAM_BUG_REPORT.md:114-117`; `CHANGELOG.md` § *v1.2.1*. The incident that crashes on this is in
 [§5](#map-incidents-il-proven-2026-08-30-game-148).
 
 ### Castle gates: standing points and the two ways they die (IL-proven, 2026-08-30)
@@ -510,7 +510,7 @@ Evidence: `Payload/MapIncidentCrashGuard.cs:20-22,:189-197,:225-226,:267-277`;
 - A **ram-destroyed** gate hangs open and is gone for that battle **by design** — vanilla does not
   allow closing a broken gate, so having no prompt there is correct.
 
-Evidence: `Payload/SiegeGatePromptFix.cs:12-27,:42,:66-101,:116-131`; `CHANGELOG.md:151-160`.
+Evidence: `Payload/SiegeGatePromptFix.cs:12-27,:42,:66-101,:116-131`; `CHANGELOG.md` § *v1.2.6*.
 
 ### Civilian missions lock the gate three independent ways (IL-proven, 2026-08-30)
 
@@ -539,7 +539,7 @@ Reusable class: *when an object is "there but has no prompt", look for an exact-
 an animation/float parameter that vanilla itself never reaches.*
 
 Evidence: `Payload/CivilianGateCloseFix.cs:11-26,:40-57,:73,:82-85,:120`;
-`Payload/SiegeGatePromptFix.cs:27`; `CHANGELOG.md:161-171`.
+`Payload/SiegeGatePromptFix.cs:27`; `CHANGELOG.md` § *v1.2.6*.
 
 ---
 
@@ -691,7 +691,7 @@ frame-starvation hang needs a **time** guard, not an exception guard
   2026-09-04: `NameSearch` on `TaleWorlds.CampaignSystem.dll` returns one row) — the guard
   resolves it by bare name and then **asserts** that return type before patching, so a future build
   that reshapes the method cannot be bound blind. Both are patchable as a family-wide safety net
-  (`Payload/MapIncidentCrashGuard.cs:83-98,:279,:294`; `CHANGELOG.md:257-259`).
+  (`Payload/MapIncidentCrashGuard.cs:83-98,:279,:294`; `CHANGELOG.md` § *v1.2.1*).
 - The incident-popup-vs-dead-siege crash **reproduces in pure vanilla singleplayer**: the popup sits
   open while the siege ends, so on confirm no siege exists anywhere to receive progress
   (`Payload/MapIncidentCrashGuard.cs:29-31`).
@@ -814,7 +814,7 @@ conception, only that the resulting birth never reached the other machine (see `
 
 Evidence: `Payload/PregnancySync/PregnancySyncGuard.cs:129-153,:142,:164,:184-185,:88,:243,:75,:372-377`;
 `Payload/PregnancySync/BirthPayloadData.cs:33-38,:105`; `tests/BirthPayloadTest/Program.cs:33-44`;
-`README.md:123-125`; `CHANGELOG.md:174-181`.
+`README.md:123-125`; `CHANGELOG.md` § *v1.2.5*.
 
 ### `CampaignEvents` must be wired per campaign
 
@@ -844,7 +844,7 @@ The screen that surfaces all of this — and the rules it applies — is in
 `ChangePlayerCharacterAction.Apply(Hero)` is vanilla's supported mechanism for changing **who the
 player is** — the same path death-succession uses — and it works on the campaign map, **outside a
 mission**. Never call it inside one (`Payload/CoopHeroIdentityLock.cs:22-24,:167`, pinned by the
-self-test at `:322`; `CHANGELOG.md:142-144`). Its co-op use is in [§11](#11-saveload).
+self-test at `:322`; `CHANGELOG.md` § *v1.2.7*). Its co-op use is in [§11](#11-saveload).
 
 ---
 
@@ -994,7 +994,7 @@ leader up from `Hero.MainHero` before the party is spawned. The mod sidesteps th
 resolving the method by name only (`Payload/ClanPartyCreationAdvisor.cs:46,:72-88,:103,:171`).
 
 Decoded from the installed build's IL (`Payload/ClanPartyCreationAdvisor.cs:19-28`;
-`CHANGELOG.md:86-98`; `README.md:193-197`):
+`CHANGELOG.md` § *v1.2.9*; `README.md:193-197`):
 
 - The **leader popup** lists `Clan.Heroes` + `Clan.Companions` and **disables a card with a reason**
   when the hero is a prisoner / released / fugitive, a child, in someone else's party, already leading
@@ -1023,7 +1023,7 @@ Two shapes worth pinning:
 point — the same call used by the "manage garrison" menu and the clan-member conversation — and
 expects to be invoked **from the map state**. Opening it deferred one tick with the clan screen popped
 makes it sit on the map exactly like those flows
-(`Payload/ClanPartyCreationAdvisor.cs:32-38,:256,:337`; `CHANGELOG.md:95-98`).
+(`Payload/ClanPartyCreationAdvisor.cs:32-38,:256,:337`; `CHANGELOG.md` § *v1.2.9*).
 
 `Game.Current.GameStateManager` exposes `ActiveState` and `PopState(int)`. The campaign screen states
 involved are `TaleWorlds.CampaignSystem.GameState.PartyState`, `ClanState` and `MapState`, and
@@ -1135,13 +1135,13 @@ A Bannerlord save stores **exactly one** player identity — whoever was `Hero.M
 written. **Nothing in the load path re-derives who the loading player is**, and there is no
 per-machine identity in the save format. That is why passing a shared co-op save around makes the
 loader play the previous host's hero (`Payload/CoopHeroIdentityLock.cs:12-16`, field-proven
-2026-08-30; `CHANGELOG.md:136-138`).
+2026-08-30; `CHANGELOG.md` § *v1.2.7*).
 
 The supported remedy is `ChangePlayerCharacterAction.Apply(Hero)` on the campaign map — see
 [§6 Succession](#succession).
 
 BT side: the identity registry (slot / steam / password claims) is consulted **only on the client join
-flow**, and `SharedSaveMode` is a bare flag with no identity resolution of its own (`CHANGELOG.md:136-146`;
+flow**, and `SharedSaveMode` is a bare flag with no identity resolution of its own (`CHANGELOG.md` § *v1.2.7*;
 detail in `docs/BT-INTERNALS.md`).
 
 ### Campaign identity and persistence keys
@@ -1214,7 +1214,7 @@ into `%USERPROFILE%\Documents` with "crash" in the filename (`collect-diagnostic
   **2.3.6.0** — the module copy is the one this mod references with `Private=false` and the one a
   module actually binds (`Harness/BLTDeploymentCrashGuard.csproj:30-33`;
   `Payload/BLTDeploymentCrashGuard.Payload.csproj:54-57`; `Harness/HotReload.cs:146-148,283-287`;
-  `CHANGELOG.md:216-221,274-278`; both paths and both versions re-verified on disk 2026-09-04;
+  `CHANGELOG.md` § *v1.2.3*,274-278`; both paths and both versions re-verified on disk 2026-09-04;
   field-hit 2026-08-29 22:44).
 - `Assembly.Load(byte[])` resolves references via **default-context probing**, which *succeeds* by
   finding the game's own 0Harmony 2.4.2.0 in the app base and binds it silently.
