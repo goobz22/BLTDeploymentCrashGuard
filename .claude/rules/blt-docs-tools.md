@@ -5,7 +5,7 @@ paths: ["docs/**", "tools/**", "README.md", "CHANGELOG.md", "HOTRELOAD.md", "UPS
 # Docs and tools — which fact goes where
 
 One fact, one home. If a fact already lives in a document, extend that entry and cross-reference;
-do not add a second copy (`docs/ENGINE-NOTES.md:20-23`). Citations are the authority: these
+do not add a second copy (`docs/ENGINE-NOTES.md:27-28`). Citations are the authority: these
 documents summarise code, the code does not summarise them — when they disagree the code is right
 (`docs/MODDING-GUIDE.md:17-18`). Every claim carries a repo-relative `file:line`.
 
@@ -24,17 +24,24 @@ documents summarise code, the code does not summarise them — when they disagre
 | `docs/MODDING-PITFALLS.md` | What bit us: mistakes, reverted attempts, gotchas, where each rule is now enforced | Techniques that just work |
 | `docs/SPEC-pregnancy-coop-sync.md` | The design spec for the co-op pregnancy/birth sync feature: problem, goal, wire format, host-authoritative flow | Per-fix reference rows; BT internals beyond what the spec needs |
 | `docs/UPSTREAM_CONTRIBUTION.md` | Which of our fixes are worth offering to the BT authors, ranked by value and self-containedness | The bug evidence itself |
-| `UPSTREAM_BUG_REPORT.md` (repo root) | The BT-side bug report as sent: symptoms, logs, the pinned environment. It is the environment-of-record other docs cite (`docs/BT-INTERNALS.md:15`) | Our own fix mechanics |
+| `UPSTREAM_BUG_REPORT.md` (repo root) | The BT-side bug report as sent: symptoms, logs, the pinned environment. It is the environment-of-record other docs cite (`docs/BT-INTERNALS.md:15`, `docs/ENGINE-NOTES.md:32`) | Our own fix mechanics |
 | `CHANGELOG.md` | Per-version, user-visible: what changed and why | Ongoing investigation notes |
 | `tools/il-probes/README.md` | How to build and run the probes | Findings the probes produced |
 
+Which rule loads when you edit one of these: `docs/**`, `tools/**`, `README.md`, `CHANGELOG.md`,
+`HOTRELOAD.md` and `UPSTREAM_BUG_REPORT.md` load this file; `Payload/**` and `tests/**` load
+`.claude/rules/blt-payload-guards.md`; `Harness/**`, `Directory.Build.props`, `SubModule.xml`,
+`dist/**` and the three root `.cmd` scripts load `.claude/rules/blt-harness.md`. `CLAUDE.md` needs
+no `paths:` entry — it is always loaded.
+
 ## Every newly proven engine fact goes to ENGINE-NOTES
 
-Shape of an entry (`docs/ENGINE-NOTES.md:20-23`): put it in the subsystem section it belongs to as
+Shape of an entry (`docs/ENGINE-NOTES.md:25-30`): put it in the subsystem section it belongs to as
 a precise statement, the **evidence** (`file:line`, the IL member names, or the trace that captured
 it), the game members involved, and the **date**. "Proven" means IL from the installed build, a live
-tracer, a runtime probe, or a self-test that pins the value — not a web result
-(`docs/ENGINE-NOTES.md:9-18`, `docs/DIAGNOSTICS.md` § 5). BT-side facts go to `docs/BT-INTERNALS.md`
+tracer, a runtime probe, a self-test that pins the value, or — for the few entries that say so —
+decompilation; never a web result (`docs/ENGINE-NOTES.md:8-23`, `docs/DIAGNOSTICS.md` § 5
+*Discipline*). BT-side facts go to `docs/BT-INTERNALS.md`
 instead, which is pinned to BT v0.5.0.1 on game 1.4.8.119303 (`docs/BT-INTERNALS.md:13-16`); note the
 pin if a finding is version-specific.
 
