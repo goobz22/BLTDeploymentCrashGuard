@@ -33,24 +33,37 @@ namespace BLTDeploymentCrashGuard
     ///     is initialized SUCCESSFULLY and cached good for the whole process — nothing can poison
     ///     it afterwards, whatever prepares it or when.
     ///
-    /// The load log states the outcome, which also disambiguates the two open hypotheses:
+    /// Health (component "movementorder-typeinit", critical) and a self-test that pins the
+    /// premise (struct + beforefieldinit), the ctor, the one transpiled site and the helper. The
+    /// load log states the outcome:
     ///  - "initialized safely (patched N site(s))"  -> fix active, crash prevented.
     ///  - "ALREADY poisoned before guard"           -> the failing init happened before our
     ///     payload even loaded; the fix must move earlier (harness SubModule).
+    /// Load-time fix: takes effect on a fresh launch, not on a hot-reload.
     /// </summary>
     internal static class MovementOrderTypeInitGuard
     {
+        internal const string Component = "movementorder-typeinit";
+        private const string Tag = "[MO-INIT]";
         private static int _patchedSites;
         private static bool _nullTimeNoted;
+        private static bool _applied;
 
         internal static void ApplyEarly(Harmony harmony)
         {
+            if (_applied || harmony == null)
+            {
+                return;
+            }
+            _applied = true;
             try
             {
+                SelfHealing.RegisterTest(SelfTest);
                 ConstructorInfo ctor = AccessTools.Constructor(typeof(MovementOrder), new[] { typeof(MovementOrder.MovementOrderEnum) });
                 if (ctor == null)
                 {
-                    Log.Info("[MO-INIT] MovementOrder..ctor(MovementOrderEnum) not found — type-init guard inactive");
+                    Diag.Report(Component, false, "MovementOrder..ctor(MovementOrderEnum) not found", critical: true);
+                    Log.Info(Tag + " MovementOrder..ctor(MovementOrderEnum) not found — type-init guard inactive (game update?)");
                     return;
                 }
 
@@ -60,26 +73,25 @@ namespace BLTDeploymentCrashGuard
                 // so the type is initialized successfully and cached good for the process.
                 try
                 {
-                    RuntimeCompilerServicesRunClassCtor();
-                    Log.Info("[MO-INIT] MovementOrder initialized safely (patched " + _patchedSites +
+                    RuntimeHelpers.RunClassConstructor(typeof(MovementOrder).TypeHandle);
+                    bool ok = _patchedSites == 1;
+                    Diag.Report(Component, ok, ok ? "" : "transpiled " + _patchedSites + " site(s), expected 1", critical: !ok);
+                    Log.Info(Tag + " MovementOrder initialized safely (patched " + _patchedSites +
                              " site(s)) — the beforefieldinit type-init battle crash is prevented for this session");
                 }
                 catch (TypeInitializationException tie)
                 {
-                    Log.Info("[MO-INIT] MovementOrder was ALREADY poisoned before this guard could patch it (origin earlier than payload load): " +
-                             (tie.InnerException != null ? tie.InnerException.GetType().Name + ": " + tie.InnerException.Message : tie.Message) +
-                             " — the fix must move into the harness SubModule (patched " + _patchedSites + " site(s))");
+                    string inner = tie.InnerException != null ? tie.InnerException.GetType().Name + ": " + tie.InnerException.Message : tie.Message;
+                    Diag.Report(Component, false, "already poisoned before payload load: " + inner, critical: true);
+                    Log.Info(Tag + " MovementOrder was ALREADY poisoned before this guard could patch it (origin earlier than payload load): " +
+                             inner + " — the fix must move into the harness SubModule (patched " + _patchedSites + " site(s))");
                 }
             }
             catch (Exception ex)
             {
-                Log.Info("[MO-INIT] apply failed: " + ex.Message);
+                Diag.Report(Component, false, ex.Message, critical: true);
+                Log.Info(Tag + " apply failed: " + ex.Message);
             }
-        }
-
-        private static void RuntimeCompilerServicesRunClassCtor()
-        {
-            RuntimeHelpers.RunClassConstructor(typeof(MovementOrder).TypeHandle);
         }
 
         /// <summary>Replace `call Mission::get_Current; callvirt Mission::get_CurrentTime`
@@ -92,6 +104,13 @@ namespace BLTDeploymentCrashGuard
             MethodInfo getCurrentTime = AccessTools.PropertyGetter(typeof(Mission), "CurrentTime");
             MethodInfo safe = AccessTools.Method(typeof(MovementOrderTypeInitGuard), nameof(SafeCurrentTime));
 
+            // Count per INVOCATION: Harmony re-runs the whole transpiler chain from the original IL
+            // whenever the same method is patched again (the dev origin probe patches this ctor too,
+            // and a hot-reload applies the new generation before unpatching the old one), so a
+            // cumulative static drifted to 2 or 0 and falsely failed health + self-test while the
+            // fix was working (review 2026-09-04). A site already rewritten by a previous
+            // generation's transpiler counts as handled.
+            int sites = 0;
             for (int i = 0; i < list.Count; i++)
             {
                 if (getCurrentTime != null && list[i].Calls(getCurrentTime) &&
@@ -102,12 +121,17 @@ namespace BLTDeploymentCrashGuard
                     list[i - 1].operand = safe;
                     list[i].opcode = OpCodes.Nop;
                     list[i].operand = null;
-                    _patchedSites++;
+                    sites++;
+                }
+                else if (safe != null && list[i].opcode == OpCodes.Call && ReferenceEquals(list[i].operand, safe))
+                {
+                    sites++; // already rewritten by an earlier generation's transpiler
                 }
             }
-            if (_patchedSites == 0)
+            _patchedSites = sites;
+            if (sites == 0)
             {
-                Log.Info("[MO-INIT] transpiler found no Mission.Current.CurrentTime site in MovementOrder..ctor (game changed?) — leaving ctor unmodified");
+                Log.Info(Tag + " transpiler found no Mission.Current.CurrentTime site in MovementOrder..ctor (game changed?) — leaving ctor unmodified");
             }
             return list;
         }
@@ -125,7 +149,7 @@ namespace BLTDeploymentCrashGuard
                     if (!_nullTimeNoted)
                     {
                         _nullTimeNoted = true;
-                        Log.Info("[MO-INIT] MovementOrder constructed with no active mission — returned time 0 instead of crashing (this is the fix firing)");
+                        Log.Info(Tag + " MovementOrder constructed with no active mission — returned time 0 instead of crashing (this is the fix firing)");
                     }
                     return 0f;
                 }
@@ -135,6 +159,22 @@ namespace BLTDeploymentCrashGuard
             {
                 return 0f;
             }
+        }
+
+        private static SelfHealing.TestResult SelfTest()
+        {
+            Type type = typeof(MovementOrder);
+            bool ctor = AccessTools.Constructor(type, new[] { typeof(MovementOrder.MovementOrderEnum) }) != null;
+            // The premise of the fix: a beforefieldinit value type. If a game update changes
+            // either, the hazard may be gone and this guard should be re-evaluated.
+            bool premise = type.IsValueType && (type.Attributes & TypeAttributes.BeforeFieldInit) != 0;
+            bool site = _patchedSites == 1;
+            bool helper;
+            try { SafeCurrentTime(); helper = true; } catch { helper = false; }
+            bool pass = ctor && premise && site && helper;
+            return SelfHealing.TestResult.Of("movementorder-typeinit.contract", pass,
+                pass ? "ctor re-resolved; struct+beforefieldinit premise holds; 1 site transpiled; null-safe helper callable"
+                     : "ctor=" + ctor + " premise=" + premise + " sites=" + _patchedSites + " helper=" + helper);
         }
     }
 }

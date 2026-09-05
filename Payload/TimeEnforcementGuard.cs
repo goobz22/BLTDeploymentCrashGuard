@@ -6,6 +6,33 @@ using HarmonyLib;
 namespace BLTDeploymentCrashGuard
 {
     /// <summary>
+    /// Records which of OUR prefixes vetoed the current Campaign.set_TimeControlMode write.
+    /// Three of our prefixes sit on that setter (TimeEnforcementGuard's solo neutralizer,
+    /// MapClickSpeedKeeper, and TimeTrace when tracing) and Harmony runs every one of them even
+    /// when another returns false — so without this note the [TIME] tracer could only say
+    /// "suppressed by another patch", never which (audit 2026-09-04). A vetoing prefix calls
+    /// Note(name); the tracer's postfix calls Take(). [ThreadStatic] because time writes happen
+    /// on the game thread but the tracer must never mix two threads' vetoes.
+    /// </summary>
+    internal static class TimeVeto
+    {
+        [ThreadStatic]
+        private static string _lastVetoedBy;
+
+        internal static void Note(string who)
+        {
+            _lastVetoedBy = who;
+        }
+
+        internal static string Take()
+        {
+            string who = _lastVetoedBy;
+            _lastVetoedBy = null;
+            return who;
+        }
+    }
+
+    /// <summary>
     /// Fixes: after loading a save mid-session while hosting alone, fast-forward stops
     /// working until relaunch — the co-op mod's CoopCampaignBehavior.EnforcePlaySpeed
     /// runs every campaign tick and forces UnstoppablePlay, stomping the player's
@@ -185,7 +212,12 @@ namespace BLTDeploymentCrashGuard
 
         private static bool BlockSoloEnforceWritePrefix()
         {
-            return !_inSoloEnforce;
+            if (_inSoloEnforce)
+            {
+                TimeVeto.Note("TIME-GUARD"); // lets the [TIME] tracer name which prefix vetoed the write
+                return false;
+            }
+            return true;
         }
 
         private static bool CalledFromPacketHandler()
