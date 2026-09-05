@@ -8,8 +8,8 @@ description: Use for any Bannerlord or BannerlordTogether crash, freeze, or wron
 The rule this enforces: **prove the root cause from IL and logs before changing code.** Where a
 symptom manifests is almost never the root-cause location — find both (`docs/DIAGNOSTICS.md:3-5`).
 A vanilla symptom found on the web is a lead, not a diagnosis (`docs/DIAGNOSTICS.md` § 5
-*Discipline*). `docs/DIAGNOSTICS.md` is edited often, so this skill cites its section headings
-rather than line numbers.
+*Discipline*). That playbook grows with every investigation, so the citations below name its
+section headings rather than line numbers.
 
 ## 0. Read before deriving
 
