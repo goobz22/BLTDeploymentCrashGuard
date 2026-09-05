@@ -11,8 +11,8 @@ In build-and-drop mode a generation loads via `Assembly.LoadFrom` on a shadow co
 reload **attempt**, not per generation (`Harness/HotReload.cs:294,307-314`). LoadFrom-context
 binding is required — byte-loading binds 0Harmony to the wrong copy via app-base probing — but a
 byte load (`Assembly.Load(bytes)`, `HotReload.cs:331-339`) remains the fallback when the shadow
-load fails or dedups, and it is the *only* path under `"hotReloadRoslyn": true` (see
-*Mode (B) is not a superset of mode (A)* below).
+load fails or dedups, and it is the *only* path under `"hotReloadRoslyn": true` **on a harness built
+with `-p:Roslyn=true`** (see *Mode (B) is not a superset of mode (A)* below).
 
 Each payload build compiles under a unique assembly NAME (`BLTDeploymentCrashGuard.Payload.b<stamp>`,
 published under the fixed file name) because the LoadFrom context dedups simple-named assemblies by
@@ -73,9 +73,14 @@ CAVEAT: Roslyn on .NET Framework 4.8 inside Bannerlord can bind-conflict with Bu
 `System.Collections.Immutable` / `System.Reflection.Metadata`. If the runtime compile fails, the
 engine logs it and falls back to the prebuilt DLL, so you can always switch to (A).
 
-**Mode (B) is not a superset of mode (A).** With `"hotReloadRoslyn": true` the engine skips the
-shadow-copy `LoadFrom` branch entirely (the branch is guarded by `!_useRoslyn`) and byte-loads the
-compiled bytes — and when the Roslyn compile fails, the prebuilt-DLL *fallback is byte-loaded too*.
+**Mode (B) is not a superset of mode (A).** The config key alone does not switch paths: `_useRoslyn`
+is `hotReload && hotReloadRoslyn && PayloadCompiler.CompiledIn` (`Harness/HotReload.cs:71`), and
+`CompiledIn` is a build-time constant, true only under `-p:Roslyn=true`
+(`Harness/PayloadCompiler.cs:27-36`, `Harness/BLTDeploymentCrashGuard.csproj:17-18`) — on a stock
+harness the key is inert and mode (A) still applies. Once `_useRoslyn` is true the engine skips the
+shadow-copy `LoadFrom` branch entirely (it is guarded by `!_useRoslyn`, `Harness/HotReload.cs:294`)
+and byte-loads the compiled bytes — and when the Roslyn compile fails, the prebuilt-DLL *fallback is
+byte-loaded too*.
 Byte-loading is the path that was field-proven on 2026-08-30 to bind the game's own
 `0Harmony 2.4.2.0` from the app base and produce `Method 'Apply' in PayloadEntry does not have an
 implementation`; no resolver pin prevents it, because probing succeeds. If mode (B) misbehaves, set
@@ -103,16 +108,19 @@ clean):
 - Rate/limit state: the encounter-loop breaker's trip flag and its recent-call ring buffer; the
   background-tick guard's block window, worst-ms and throttled-call counters. **Do not reload in the
   middle of reproducing a rate-based bug — you erase the state you are measuring.**
-- One-shot log latches: the illness/old-age guard's "blocking the daily death roll" line prints
-  again; shared time control will try to grant again (`_grantedLogged`), the `[CLICK-SPEED]` /
-  `[TIME-FLOW]` once-only lines reappear and the join-escape arm window restarts; the siege
-  take-over's once-per-mission screen note can appear a second time in one battle,
-  and its refused-hand-off / stopped-shuffle counters restart at zero. Those counters are per
-  **battle** anyway — `SiegeCommandGuard.OnMissionInit` zeroes them
-  (`Payload/SiegeCommandGuard.cs:157-162`, called from `Payload/PayloadEntry.cs:138`) and the line
+- One-shot log latches: the illness/old-age guard's `[NOSICK] blocking the daily old-age/illness
+  death roll` line prints again (`Payload/IllnessDeathGuard.cs:91`); shared time control will try to
+  grant again (`_grantedLogged`), the `[CLICK-SPEED]` / `[TIME-FLOW]` once-only lines reappear and
+  the join-escape arm window restarts; the siege take-over's once-per-mission screen note can appear
+  a second time in one battle, and its refused-hand-off / stopped-shuffle counters restart at zero.
+  Those counters are per **battle** anyway — `SiegeCommandGuard.OnMissionInit` zeroes them
+  (`Payload/SiegeCommandGuard.cs:157-162`, called from `Payload/PayloadEntry.cs:140`) and the line
   itself reads "this battle: …" (`:520`); a reload just zeroes them mid-battle as well.
   `CoopCommandSplit` re-resolves both players' parties and re-announces the I–IV / V–VIII
-  split, and the BT release hooks are re-scanned with their one retry.
+  split, and the BT release hooks are re-scanned with their one retry. `BattleMode`'s once-per-target
+  unresolved-lift-target warnings reprint too (`WarnedUnresolved`, `Payload/BattleMode.cs:91,347,364`)
+  — a repeated `[BATTLE-MODE] lift target … not found` after a reload is the latch resetting, not a
+  new resolution failure.
 - In-flight deferred work. A reload while `ClanPartyCreationAdvisor` is waiting for a new clan party
   to settle silently drops the pending troop-screen open — the pending-timeout path never runs,
   because the state it would have timed out is gone. Reproduce deferred behaviour *after* a reload,
@@ -129,11 +137,17 @@ read through it is a **launch-time snapshot** and cannot be changed by a reload.
 matter in practice:
 
 - `tracing` is re-read **fresh from disk on every apply** (`PayloadEntry.FreshTracingFlag`), exactly
-  so that editing `guardconfig.json` + dropping a rebuilt payload turns the tracers on mid-session
-  without losing a live repro. That is also what makes the encounter-loop breaker's Finish stamp and
-  the `[TIME]` tracer go live mid-session.
+  so that editing `guardconfig.json` + dropping a rebuilt payload turns the `[TRACE]` / `[TIME]`
+  tracers on mid-session without losing a live repro. It gates nothing but the tracers: the
+  encounter-loop breaker hooks `PlayerEncounter.Finish` itself, always-on
+  (`Payload/EncounterLoopGuard.cs:70-73,171-174`), so its Finish stamp is live with `tracing=false`;
+  the tracer's own `Finish` hook is log-only (`Payload/TracePatches.cs:188-191`).
 - Knobs the payload reads into its own statics (e.g. `timeAlwaysFlows`, `shareTimeControl`) are
-  re-read simply because those statics are recreated — a reload picks up the edited value.
+  re-read simply because those statics are recreated — a reload picks up the edited value **on the
+  build-and-drop (LoadFrom) path**. Both of those readers derive the config path from the *payload*
+  assembly's `Location` (`Payload/TimeFlowPatch.cs:85-86`, `Payload/ShareTimeControl.cs:194-195`),
+  which is empty for a byte-loaded generation, so under mode (B) or a byte-load fallback the read
+  falls into its empty catch and returns the hard-coded default rather than the edited value.
 
 Any *new* knob that must flip mid-session has to read from `GuardConfig.Path` itself, the way
 `FreshTracingFlag()` does; say so in its `_<key>` doc string.
@@ -154,24 +168,61 @@ Any *new* knob that must flip mid-session has to read from `GuardConfig.Path` it
 
 ## What a reload cannot do (fresh launch required)
 
-- **Harness changes.** Its DLL is locked while the game runs.
+- **Harness changes.** Its DLL is locked while the game runs — `tools/release.sh` reports that copy
+  as `LOCKED (game running?)` rather than failing (see *Build both for deployment*).
 - **`MovementOrderTypeInitGuard`** — a load-time fix cannot be re-taken on a type the CLR has
-  already prepared.
-- **`ClientBootstrapFix`** — it only installs its prefix; BannerlordTogether verifies its action
-  cache **once** per process, so a reload after the abort changes nothing.
+  already prepared. It runs from `ApplyEarly`, first in `Apply` and before `PatchAll`
+  (`Payload/PayloadEntry.cs:42,45`), and its own header states the consequence: "Load-time fix:
+  takes effect on a fresh launch, not on a hot-reload" (`Payload/MovementOrderTypeInitGuard.cs:42`).
+  A reload does re-run `ApplyEarly`, but the forced `RunClassConstructor`
+  (`Payload/MovementOrderTypeInitGuard.cs:76`) cannot re-initialize a type whose initializer has
+  already run — good or poisoned, that outcome is fixed for the process.
+- **`ClientBootstrapFix`** — it only installs a prefix on BT's verify method
+  (`Payload/ClientBootstrapFix.cs:23`); BT runs that verification **once** per process and latches
+  `_harmonyPatchBootstrapAttempted=true`, which permanently blocks retry
+  (`Payload/ClientBootstrapFix.cs:16-17`), so a reload after the abort changes nothing.
 - **`ClanModeSoloFix`** — a transpiler cannot un-inline callers that were already jitted, so a
-  mid-session reload may leave BT's clan-mode getter reading the original value.
+  mid-session reload may leave BT's clan-mode getter reading the original value. The class header
+  says the same: it "applies at module load, before any campaign code compiles"
+  (`Payload/ClanModeSoloFix.cs:26-28`).
+
+Each of these is idempotent and latched, and `PayloadEntry` re-applies `ClientBootstrapFix` and
+`ClanModeSoloFix` at the module screen for a late-loading BT assembly
+(`Payload/PayloadEntry.cs:119-120`) — a *re-apply* is not the same as a load-time fix taking effect,
+so a reload still does not deliver a change to any of them.
 
 ## Build both for deployment
 
+**`tools/release.sh` is the deploy step.** It builds both assemblies from one run and copies all
+three shipped files — `BLTDeploymentCrashGuard.dll` (harness) and
+`BLTDeploymentCrashGuard.Payload.dll` (payload) into
+`Modules/BLTDeploymentCrashGuard/bin/Win64_Shipping_Client/`, and `SubModule.xml` into the module
+root — then into `dist/`, writes `dist/manifest.txt`, and verifies the SHA256 of every file matches
+across build output, `dist/` and the game module. `SubModule.xml` still points at the harness; the
+harness loads the payload itself.
+
 ```
-cd Harness && dotnet build -c Release
-cd ..\Payload && dotnet build -c Release
+tools/release.sh              # build both, deploy, manifest, verify
+tools/release.sh --no-build   # deploy + manifest + verify from the existing build output
 ```
 
-Deploy BOTH DLLs to `Modules/BLTDeploymentCrashGuard/bin/Win64_Shipping_Client/`:
-`BLTDeploymentCrashGuard.dll` (harness) and `BLTDeploymentCrashGuard.Payload.dll` (payload).
-SubModule.xml still points at the harness; the harness loads the payload itself.
+Do not assemble a deployment by hand — the point of the script is that the harness and payload in
+`dist/` provably came from the same build. The full checklist around it is `docs/RELEASE.md`
+§ *2. Run `tools/release.sh`*; this document does not repeat it.
+
+**With the game running the script cannot finish, by design.** A file the game holds open is
+reported `LOCKED (game running?): … — left as is` and skipped rather than failing the copy; the hash
+check then sees a stale copy in the game module, prints `NOT release-ready`, adds *"The game is
+running: harness/SubModule copies were skipped. Close the game and re-run with `--no-build`"*, and
+exits non-zero. Treat that as the correct answer, not something to work around: a release run needs
+the game closed, and a fresh launch is required anyway (§ *What a reload cannot do (fresh launch
+required)*).
+
+For **payload-only iteration** with the game running, do not use the script — copy the payload DLL
+by hand as in *A) Build-and-drop* above. That works because the engine never holds a lock on the
+file you drop — it `LoadFrom`s a per-attempt shadow copy, and the byte-load fallback reads the
+bytes and loads those — so the canonical payload DLL stays writable during a session (see the
+intro).
 
 ## Trade-offs and known gaps
 

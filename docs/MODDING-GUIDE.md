@@ -251,18 +251,19 @@ internal static class SetupTeamsCrashGuardPatch
 }
 ```
 
-(`Payload/DeploymentCrashGuards.cs:13-26`.) Three rules, learned the hard way:
+(`Payload/DeploymentCrashGuards.cs:92-111`.) Three rules, learned the hard way:
 
 1. **Always short-circuit on `__exception == null`.** The finalizer runs on every call; the guard must
    be completely inert — and record no fire — while nothing is throwing. Every finalizer in this repo
-   opens that way (`Payload/DeploymentCrashGuards.cs:16-26,37-80`;
+   opens that way (`Payload/DeploymentCrashGuards.cs:100-110,121-128`;
    `Payload/PartyAiCrashGuard.cs:101-123,131-147`; `Payload/MapIncidentCrashGuard.cs:279-292,294-307`;
    `Payload/ClanScreenCrashGuard.cs:46-66`; `Payload/ConversationCameraCrashGuard.cs:57-66`).
 2. **Swallowing is not enough when the method has side effects.** If the crashed method left the world
    half-configured, replay its remaining tail — each step in its own `try/catch` so one failing step
    cannot abort the rest. The `FinishDeployment` guard replays agent handover, `AllowAiTicking`,
    `DisableDying`, fall-avoid, `OnAfterDeploymentFinished`, the non-public `AfterDeploymentFinished`
-   resolved by name, and `RemoveMissionBehavior` (`Payload/DeploymentCrashGuards.cs:45-77`). Without it
+   resolved by name, and `RemoveMissionBehavior`, each wrapped individually and logging which step
+   failed (`Payload/DeploymentCrashGuards.cs:129-166`; the per-step handlers at `:137-159`). Without it
    you trade a crash for a freeze: AI ticking stays off and the player agent stays non-detachable.
 3. **A method that returns through `ref`/`out` parameters must be *answered*, not just silenced.** A
    finalizer may take those parameters by ref and write a domain-neutral value — the party-AI guard
@@ -285,6 +286,27 @@ null)`) so the player lands back on the map instead of staring at a half-built s
 **Finalizers that observe and never swallow.** `return __exception;` unchanged logs the throw with live
 context and lets it propagate exactly as before — a breakpoint you can ship
 (`Payload/CharacterCreationTrace.cs:116-123`, `Payload/MovementOrderInitProbe.cs:73-93`).
+
+**An attribute-applied finalizer reports nothing, so give it a health class.** `[HarmonyPatch]` +
+`harmony.PatchAll` is the right installation style for a stable engine target (§2.14), but it returns
+no result: there is no `Apply` to wrap, nothing to pass to `Diag.Report`, and a target that was
+renamed simply is not patched. The remedy is a small companion class that runs **after** `PatchAll`
+and verifies the outcome rather than the attempt — `DeploymentCrashGuardHealth` re-resolves
+`SetupTeams` and `FinishDeployment`, walks `Harmony.GetPatchInfo(...).Finalizers` for one of *our*
+owner ids, and reports `critical: true` with a per-target detail string (`guarded` / `unpatched` /
+`missing`), plus a `deployment-guards.contract` self-test asserting both targets resolve and both
+finalizers are inert on a null exception (`Payload/DeploymentCrashGuards.cs:20-89`, called from
+`Payload/PayloadEntry.cs:45-46`). This file used to be the counter-example in this guide — two
+flagship crash finalizers with no health row at all; since 2026-09-04 it is the pattern to copy.
+Checking that the patch is *on the method* is also a stronger assertion than "`Apply` did not throw",
+so it is worth doing even where an explicit `Apply` exists.
+
+**Say what the suppression does not fix.** These two finalizers stop the crash-to-desktop; they do
+**not** restore the player-side troops that were missing when `SetupTeams` threw, so a battle can
+still open with empty formations. What prevents *that* is auto battle mode lifting the co-op mod's
+battle patches at the right chokepoint (§2.13; `Payload/DeploymentCrashGuards.cs:14-18`). A guard
+whose limitation is written in its own header cannot be mistaken later for a fix it never was — the
+same discipline as **P11** in `docs/MODDING-PITFALLS.md`.
 
 **A finalizer is self-retiring.** It does literally nothing while the bug is absent, so "never fired" in
 the health report is the signal that it can be removed once upstream fixes the cause
@@ -1327,21 +1349,32 @@ and the pair is what makes the health board diagnostic:
 | NOT resolved | 0 | Drift: a member was renamed or moved. Fix the resolution |
 
 The ids in use here are `setup-teams-guard`, `finish-deployment-guard`, `party-ai-guard`,
-`encounter-loop-guard`, `map-incident-guard`, `bg-tick-budget-guard` and one per gameplay fix
-(`Payload/DeploymentCrashGuards.cs:22,43`; `Payload/PartyAiCrashGuard.cs:110,139`;
-`Payload/EncounterLoopGuard.cs:121`; `Payload/MapIncidentCrashGuard.cs:227,242,285,300`;
-`Payload/BackgroundTickBudgetGuard.cs:128`).
+`encounter-loop-guard`, `map-incident-guard`, `bg-tick-budget-guard`, `battle-mode`,
+`hero-creation-guard`, `player-identity-guard`, `bootstrap-watch` and one per gameplay fix
+(`Payload/DeploymentCrashGuards.cs:106,127`; `Payload/PartyAiCrashGuard.cs:126,155`;
+`Payload/EncounterLoopGuard.cs:219`; `Payload/MapIncidentCrashGuard.cs:227,242,285,300`;
+`Payload/BackgroundTickBudgetGuard.cs:128`; `Payload/BattleMode.cs:283,332`;
+`Payload/ClientHeroCreationGuard.cs:69`; `Payload/PlayerIdentityGuard.cs:89`;
+`Payload/BootstrapWatch.cs:80`). Grep `RecordFire(` for the current set rather than trusting this
+list — every one of those ids is a row in `GUARD ACTIVITY:`.
 
-**The exceptions are worth knowing, because the table above cannot be read for them.** Twelve guards and
-fixes here record fires but never call `Diag.Report` (and never `SelfHealing.RegisterTest`):
-`DeploymentCrashGuards`, `PartyAiCrashGuard`, `EncounterLoopGuard`, `MapClickSpeedKeeper`,
-`ClientHeroCreationGuard`, `MovementOrderTypeInitGuard`, `PlayerIdentityGuard`, `TimeEnforcementGuard`,
-`TimeFlowPatch`, `ShareTimeControl`, `BattleMode` and `BootstrapWatch`. Four of the six ids listed above
-— `setup-teams-guard`, `finish-deployment-guard`, `party-ai-guard` and `encounter-loop-guard` — belong to
-that set, including both flagship deployment crash finalizers, so a drift in them shows only as a log
-line and never as `NOT resolved` on the board. The convention stated in `CLAUDE.md:71-73` is
-aspirational rather than enforced; if you adopt this pattern, know which of your own guards are still
-invisible to it.
+**A fire id without a health row is only half the pair, and the missing half is the dangerous one.** A
+component that records fires but never calls `Diag.Report` cannot be read against the table above: it
+contributes no row to `MOD HEALTH:`, so "renamed and never hooked" and "hooked and never needed" both
+render as silence. Twelve components were in that state until 2026-09-04, including `BattleMode` and
+both flagship deployment finalizers; six of them — `battle-mode`, `encounter-loop-guard`,
+`deployment-guards`, `party-ai-guard`, `hero-creation-guard` and `movementorder-typeinit` — now report
+and register a `<component>.contract` test, and two more (`player-identity-guard`, `bootstrap-watch`)
+gained fire counts so their retirement becomes measurable. What is still deliberately absent is a
+maintained list, not an accident: `docs/DIAGNOSTICS.md` § *What `MOD HEALTH:` does not cover*. If you
+adopt this pattern, keep the equivalent list — an exemption you can read is a decision, an exemption
+you cannot is a blind spot (`docs/MODDING-PITFALLS.md` **P19**).
+
+**Two ids under one component is legitimate, and needs saying out loud.** The deployment finalizers
+fire as `setup-teams-guard` and `finish-deployment-guard` but report health under the single
+`deployment-guards` component — two rows in `GUARD ACTIVITY:`, one in `MOD HEALTH:`. That is the one
+documented departure from "the `Diag.Report` id *is* the `RecordFire` id"; anything else that splits
+them should expect to be read as a bug.
 
 Safety-net logs label themselves "root-fix candidate", which
 turns a symptom suppressor into an instrument: the log lines become the evidence for the upstream bug
@@ -1552,9 +1585,22 @@ Harmony runs **all** prefixes even when one returns `false`, so a prefix alone a
 change happened. Two-phase capture fixes that: the prefix stores old/new value and the stack in
 `[ThreadStatic]` fields and sets a pending flag (skipping no-op sets); the postfix re-reads the live value
 and, if it differs from the requested one, appends
-`^ change SUPPRESSED/ALTERED by another patch — actual mode now X` before emitting
-(`Payload/TimeTrace.cs:83-128`, with the Harmony fact recorded at :20-22). It is the only practical way
+`^ change SUPPRESSED/ALTERED by … — actual mode now X` before emitting
+(`Payload/TimeTrace.cs:106-132`, with the Harmony fact recorded at :20-22). It is the only practical way
 to see "someone else blocked this" in a multi-mod Harmony stack.
+
+**Name the vetoing prefix when several of yours share a setter.** "Blocked by another patch" is
+actionable only while you have one prefix on the member. `Campaign.set_TimeControlMode` carries three
+of ours (`TimeEnforcementGuard`, `MapClickSpeedKeeper` and, under tracing, `TimeTrace`), and "someone
+suppressed this" then fails to distinguish a peer mod from your own guard doing its job. Each vetoing
+prefix calls a tiny `[ThreadStatic]` note — `TimeVeto.Note("TIME-GUARD")`,
+`TimeVeto.Note("CLICK-SPEED")` — and the postfix `Take()`s it, so the line reads
+`change SUPPRESSED/ALTERED by [TIME-GUARD]`, by `[CLICK-SPEED]`, or
+`by another patch (not one of ours)` when nothing of ours claimed it. The vetoer is folded into the
+throttle's dedup key too, so two different vetoes on the same transition do not collapse into one
+entry (`Payload/TimeEnforcementGuard.cs:17-20,217`; `Payload/MapClickSpeedKeeper.cs:93`;
+`Payload/TimeTrace.cs:114-132`). The cost of the pattern is a rule to remember: a **fourth** prefix
+that vetoes without calling `Note` makes the line misattribute, reading as the peer-mod case.
 
 ### 6.9 Multi-machine correlation
 
@@ -2099,12 +2145,7 @@ which is invisible until someone reports a bug against the launcher's number. A 
 own assembly identity cannot lie about which build produced the lines beneath it, and the session id
 tells you whether two log fragments came from the same launch.
 
-### 9.2 What "deploy" means: three files, two destinations, one hash check
-
-```bash
-cd Harness  && dotnet build -c Release
-cd ../Payload && dotnet build -c Release
-```
+### 9.2 What "deploy" means: three files, two destinations, one manifest
 
 | File | Built to | Deployed to |
 |---|---|---|
@@ -2112,18 +2153,57 @@ cd ../Payload && dotnet build -c Release
 | `BLTDeploymentCrashGuard.Payload.dll` | `Payload/bin/Release` | same two places |
 | `SubModule.xml` | repo root (stamped by the build) | module **root** (not `bin/`) and repo `dist/` |
 
-Then `md5sum` all three across build output, game module and `dist/` — they must match
-(`CLAUDE.md:29-46`). The failure this prevents is the most expensive one available: spending an evening
-diagnosing a build you did not actually deploy. `<AppendTargetFrameworkToOutputPath>false</…>` and
-`<DebugType>none</DebugType>` keep those paths short and the shipped set to exactly the files the
-installer downloads (§1.1).
+`<AppendTargetFrameworkToOutputPath>false</…>` and `<DebugType>none</DebugType>` keep those build
+paths short and the shipped set to exactly the files the installer downloads (§1.1).
+
+Six copies of three files, and nothing in the build system relates them to each other. Doing that by
+hand fails in two ways that both cost an evening: diagnosing a build you did not actually deploy, and
+— the worse one — shipping a **half-updated** `dist/`, because the installer fetches each file with
+its own request and will happily pair a new harness with an old payload.
+
+**One script produces the whole set from one build.** `tools/release.sh` reads `<Version>` from
+`Directory.Build.props`, builds both assemblies, checks `SubModule.xml` is stamped `v$VERSION`,
+copies the three files to the game module and to `dist/`, and writes `dist/manifest.txt`:
+
+```
+version=1.3.2
+<sha256>  BLTDeploymentCrashGuard.dll
+<sha256>  BLTDeploymentCrashGuard.Payload.dll
+<sha256>  SubModule.xml
+```
+
+It then re-hashes every copy and prints `OK` or `MISMATCH` per file across build output, `dist/` and
+the game module, exiting non-zero on any mismatch — the tree is release-ready only when the script
+says so (`tools/release.sh:24-78`). `--no-build` re-deploys and re-verifies existing output;
+`BANNERLORD_DIR` points it at a non-standard install. A locked file (the game is running) is reported
+rather than skipped silently, with the instruction to close the game and re-run with `--no-build`
+(`:40-43,73-77`). Getting `SubModule.xml` into `dist/` at all was a real gap — nothing wrote it until
+the harness build's `StampSubModuleVersion` target was told to copy the freshly stamped file there
+(`Directory.Build.props:12-25`), so the version the launcher shows a player could lag the release.
+
+**The same manifest is re-checked on the player's machine.** `install.cmd` downloads the three files,
+then downloads `dist/manifest.txt` and verifies each one with `certutil -hashfile … SHA256`, refusing
+a set that does not match: "The release may be mid-update on GitHub. Run this again in a minute."
+(`install.cmd:63-87,107-118`). If there is no manifest or no `certutil` it prints a notice and skips
+the check rather than failing the install (`:70-71,89-90`) — a verification step that can brick an
+install on an unusual machine is worse than the mismatch it prevents. The generalisable shape: the
+producer writes the digest, the consumer re-computes it, and *neither* trusts the transport. A
+publishing channel with no atomic multi-file update needs this or an equivalent; ours has none.
+
+**Keep the player-facing scripts from drifting.** `install.cmd`, `share-log.cmd` and
+`collect-diagnostics.cmd` are served live from the repo root and each carries its own copy-pasted
+Steam-library search list, which had already drifted to 11 / 11 / 6 entries. `tools/lint-scripts.sh`
+fails if the three lists differ, and fails if `install.cmd` does not download **and** verify every
+file named in `dist/manifest.txt` — so adding a fourth shipped artefact cannot silently ship
+unverified.
 
 **Pushing is releasing.** `install.cmd` fetches the three artefacts straight from
-`raw.githubusercontent.com/…/main/dist/` (`install.cmd:9,58-60`), and `.gitignore` excludes only
+`raw.githubusercontent.com/…/main/dist/` (`install.cmd:12,63-65`), and `.gitignore` excludes only
 `bin/`, `obj/` and `.runner/` — so `dist/` is committed. There is no GitHub Release, no CDN and no
 versioned URL: **any push that touches `dist/` ships to every player immediately.** The house rule
 follows directly — never push mid-investigation; deploy locally, iterate, push when a fix is proven
-(`CLAUDE.md:31-32`, and the working discipline at `CLAUDE.md:84-85`).
+(`CLAUDE.md` § *Version + release*, and § *Working discipline*). `docs/RELEASE.md` is the checklist
+that sequences all of this.
 
 ### 9.3 Hot-reload versus fresh launch
 
