@@ -165,28 +165,11 @@ namespace BLTDeploymentCrashGuard
                 {
                     return; // real co-op: enforcement untouched
                 }
-                // Only neutralize ON THE CAMPAIGN MAP. The fix this guard exists for
-                // (fast-forward dying after a mid-session load while hosting alone) is a
-                // MAP concern. Off the map — character creation, menus — blocking BT's
-                // UnstoppablePlay left the campaign clock pinned at Stop, which froze the
-                // co-op character-creation preview so the model rendered lying in its bind
-                // pose (field report 2026-09-04, sideways character in the banner editor).
-                // Let those states run at normal speed; resume neutralizing on the map.
-                if (!OnCampaignMap())
-                {
-                    _inSoloEnforce = false;
-                    if (_skipLogged)
-                    {
-                        _skipLogged = false;
-                        Log.Info("[TIME-GUARD] off the campaign map (e.g. character creation) — NOT neutralizing; time runs normally");
-                    }
-                    return;
-                }
                 _inSoloEnforce = true; // method runs; its time writes are blocked below
                 if (!_skipLogged)
                 {
                     _skipLogged = true;
-                    Log.Info("[TIME-GUARD] neutralizing EnforcePlaySpeed time-writes — no remote player connected, on the campaign map (state machine keeps running; auto-restores when one joins)");
+                    Log.Info("[TIME-GUARD] neutralizing EnforcePlaySpeed time-writes — no remote player connected (state machine keeps running; auto-restores when one joins)");
                 }
             }
             catch
@@ -198,39 +181,6 @@ namespace BLTDeploymentCrashGuard
         {
             _inSoloEnforce = false;
             return __exception;
-        }
-
-        private static Type _mapStateType;
-        private static int _mapStateResolved;
-
-        /// <summary>True only when the active game state IS the campaign map (MapState).
-        /// Character creation, menus, missions and load screens are all "not the map", so the
-        /// solo time-write neutralizer stays out of them.</summary>
-        private static bool OnCampaignMap()
-        {
-            try
-            {
-                object gsm = TaleWorlds.Core.GameStateManager.Current;
-                if (gsm == null)
-                {
-                    return false;
-                }
-                TaleWorlds.Core.GameState active = ((TaleWorlds.Core.GameStateManager)gsm).ActiveState;
-                if (active == null)
-                {
-                    return false;
-                }
-                if (_mapStateResolved == 0)
-                {
-                    _mapStateResolved = 1;
-                    _mapStateType = AccessTools.TypeByName("TaleWorlds.CampaignSystem.GameState.MapState");
-                }
-                return _mapStateType != null && _mapStateType.IsInstanceOfType(active);
-            }
-            catch
-            {
-                return false;
-            }
         }
 
         private static bool BlockSoloEnforceWritePrefix()
