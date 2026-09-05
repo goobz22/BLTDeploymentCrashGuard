@@ -187,12 +187,12 @@ SubModule.xml still points at the harness; the harness loads the payload itself.
 - Known Phase-B gap: `BattleMode`'s foreign-patch stash does not yet survive a reload — reloading
   while in `battleMode=solo` (vanilla, BT battle patches lifted) can leave them lifted. The stash is
   a payload static (`Payload/BattleMode.cs:75`), and every payload static is fresh per generation;
-  state that must *survive* a reload belongs in the harness `ISharedState` bag instead. The
+  state that must *survive* a reload belongs in the harness `ISharedState` bag instead. Note the
   `ISharedState` doc comment (`Harness/Contracts.cs:24-28`) already lists "BattleMode's
-  foreign-patch stash" among what the bag holds — that comment is aspirational, not current; the
-  code is the authority. Until it moves: iterate with
-  `"battleMode": "coop"` (nothing is lifted, so nothing can be lost), or restart after a reload done
-  in vanilla mode. Reloading in `battleMode=coop` is unaffected.
+  foreign-patch stash" among what the bag holds; the code above is the authority, and the stash is
+  not in the bag today. Until it moves: iterate with `"battleMode": "coop"` (nothing is lifted, so
+  nothing can be lost), or restart after a reload done in vanilla mode. Reloading in
+  `battleMode=coop` is unaffected.
 - Known gap of the same family: `PregnancySyncGuard`'s host birth listener is subscribed in
   `OnGameStart` (campaign events are per-`Campaign`), and a reload calls only `Apply` — the harness
   invokes `OnGameStart` solely from `SubModule.OnGameStart`. Reloading mid-campaign therefore leaves
