@@ -104,7 +104,16 @@ namespace BLTDeploymentCrashGuard.PregnancySync
                 {
                     try
                     {
-                        CampaignEvents.OnGivenBirthEvent.ClearListeners(previousOwner);
+                        // IMbEvent<> exposes only AddNonSerializedListener; ClearListeners(object) lives on
+                        // the concrete MbEvent<> behind the property (verified with Inspect on
+                        // TaleWorlds.CampaignSystem 1.4.8), so reach it by name.
+                        object birthEvent = CampaignEvents.OnGivenBirthEvent;
+                        MethodInfo clear = birthEvent != null ? AccessTools.Method(birthEvent.GetType(), "ClearListeners", new[] { typeof(object) }) : null;
+                        if (clear == null)
+                        {
+                            throw new MissingMethodException("ClearListeners(object) not found on " + (birthEvent != null ? birthEvent.GetType().Name : "null"));
+                        }
+                        clear.Invoke(birthEvent, new[] { previousOwner });
                         Log.Info("[PREG-SYNC] removed the previous payload generation's birth listener");
                     }
                     catch (Exception exClear)

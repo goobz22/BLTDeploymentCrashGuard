@@ -31,10 +31,9 @@ In `<Game>/Modules/BLTDeploymentCrashGuard/guardconfig.json`:
 test of every guard **that registered one** via `SelfHealing.RegisterTest` and logs PASS/FAIL, which
 proves that guard's wiring survived the last game/BT update (the `selfTest` block of
 `PayloadEntry.Apply`, `SelfHealing.RunSelfTests`). A guard that registers no test produces no line,
-so **absence is not a pass**: 25 payload files register a test (every crash guard does since
-2026-09-04), while the wired-in `MapClickSpeedKeeper`, `TimeEnforcementGuard`, `TimeFlowPatch`,
-`ShareTimeControl`, `PlayerIdentityGuard` and `BootstrapWatch` register none, and no tracer does —
-the roster is `docs/FIX-REFERENCE.md` § *Index 5*. The tracing flag is read **fresh from disk** on each
+so **absence is not a pass**: 31 payload files register a test — every guard, fix and advisor does
+since 2026-09-04; only the tracers, `PayloadEntry` and `PeerDetection` register none — the roster is
+`docs/FIX-REFERENCE.md` § *Index 5*. The tracing flag is read **fresh from disk** on each
 payload apply, so with hot-reload on you can flip it and drop a rebuilt payload to trace mid-session
 without losing the repro (`PayloadEntry.FreshTracingFlag`, `Payload/PayloadEntry.cs:219`). Log:
 `<Game>/Modules/BLTDeploymentCrashGuard/CrashGuard.log` (history in `.log.1` … `.log.6`).
@@ -48,11 +47,13 @@ per-fix tags — `[SIEGE-CMD]`, `[COOP-CMD]`, `[IDENTITY]`, `[TIME-GUARD]`, `[MO
 - `MOD HEALTH` — "NOT resolved" means a member was renamed and that fix is silently inert
   (`Harness/Diag.cs:87-99`); with `[SELFTEST] FAIL` (broken logic or a pinned member) that alone can
   be the whole explanation. **Silence there is ambiguous, not clean:** `MOD HEALTH:` is built only
-  from components that called `Diag.Report`, and some shipped ones never do — `PayloadEntry`,
-  `PlayerIdentityGuard`, `BootstrapWatch`, `MapClickSpeedKeeper`, `TimeEnforcementGuard`,
-  `TimeFlowPatch`, `ShareTimeControl` and every tracer (the deployment guards and `BattleMode`
-  report since 2026-09-04). Check `GUARD ACTIVITY:` and the fix's own tag before concluding it did
-  not apply (`docs/DIAGNOSTICS.md` § 2 *What `MOD HEALTH:` does not cover*).
+  from components that called `Diag.Report`, and the only shipped ones that never do are
+  `PayloadEntry`, `PeerDetection` and the tracers (every guard reports since 2026-09-04). Health is
+  keyed by component: a guard whose BT type is not loaded yet reports healthy as *inert*, and the
+  module-screen / game-start retry replaces that entry, so read the second `MOD HEALTH:` line —
+  the one tagged *re-checked at game start* — not the apply-time one. Check `GUARD ACTIVITY:` and
+  the fix's own tag before concluding it did not apply (`docs/DIAGNOSTICS.md` § 2 *What
+  `MOD HEALTH:` does not cover*).
 - `[PEER-DETECT]` — a BannerlordTogether type lookup that failed; the README calls it the earliest
   warning of a BT update (`README.md` § *Diagnostics & robustness*, the `[PEER-DETECT]` legend row). It is logged only when `PeerDetection.FindCoopType`
   **throws** (`PeerDetection.FindCoopType`, `Payload/BattleMode.cs:737`); a type that is simply

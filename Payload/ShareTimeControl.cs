@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using System.Reflection;
 using HarmonyLib;
 
@@ -22,13 +21,22 @@ namespace BLTDeploymentCrashGuard
     ///
     /// Runs only on the authority (IsHost); on the client process it no-ops. All access
     /// is by-name reflection so it survives if unrelated members change.
+    ///
+    /// Health component `share-time-control` (config-off reports healthy as "disabled by config";
+    /// no BT reports healthy as "inert"); fire id the same, once per grant; self-test
+    /// `share-time-control.contract` pins the two BT members and the grant decision (added
+    /// 2026-09-04 — this enabler used to be invisible to MOD HEALTH).
     /// </summary>
     internal static class ShareTimeControl
     {
+        private const string Component = "share-time-control";
+        private const string Tag = "[SHARE-TIME]";
+
         private static bool? _enabled;
         private static bool _resolved;
         private static bool _grantedLogged;
         private static int _lastTick;
+        private static bool _testRegistered;
 
         private static Type _coopSubModule;
         private static MethodInfo _toggle;              // ToggleClientTimeControlPermission(out bool, out string)
@@ -43,10 +51,49 @@ namespace BLTDeploymentCrashGuard
             {
                 if (_enabled == null)
                 {
-                    _enabled = ReadConfig();
+                    _enabled = GuardConfig.Bool("shareTimeControl", true);
                 }
                 return _enabled.Value;
             }
+        }
+
+        /// <summary>Tick-driven; Apply registers health + the self-test and, when BannerlordTogether
+        /// is already loaded, resolves its members now so the apply-time health line is accurate.
+        /// When BT is not up yet, Tick re-resolves later and re-reports (health is keyed).</summary>
+        internal static void Apply()
+        {
+            try
+            {
+                if (!_testRegistered)
+                {
+                    _testRegistered = true;
+                    SelfHealing.RegisterTest(SelfTest);
+                }
+                if (!Enabled)
+                {
+                    Diag.Report(Component, true, "disabled by config");
+                    return;
+                }
+                if (!PeerDetection.IsCoopAssemblyLoaded())
+                {
+                    Diag.Report(Component, true, "inert — BannerlordTogether not loaded");
+                    return;
+                }
+                Resolve(); // reports
+            }
+            catch (Exception ex)
+            {
+                Log.Info(Tag + " apply failed: " + ex.Message);
+                Diag.Report(Component, false, ex.Message);
+            }
+        }
+
+        /// <summary>The whole decision, engine-free so the self-test can pin it: grant only while the
+        /// feature is on, nothing has been granted this session, this process is the authority and
+        /// BT does not already report the permission as on.</summary>
+        internal static bool NeedsGrant(bool enabled, bool alreadyGranted, bool isHost, bool alreadyOn)
+        {
+            return enabled && !alreadyGranted && isHost && !alreadyOn;
         }
 
         internal static void Tick()
@@ -66,10 +113,11 @@ namespace BLTDeploymentCrashGuard
                 }
                 _lastTick = now;
 
-                if (!Resolve() || !IsHost())
+                if (!Resolve())
                 {
-                    return; // only the authority grants; client process no-ops
+                    return;
                 }
+                bool isHost = IsHost();
 
                 // Already on? nothing to do.
                 bool already = false;
@@ -81,14 +129,14 @@ namespace BLTDeploymentCrashGuard
                 catch
                 {
                 }
-                if (already)
+                if (!NeedsGrant(Enabled, _grantedLogged, isHost, already))
                 {
-                    if (!_grantedLogged)
+                    if (isHost && already && !_grantedLogged)
                     {
                         _grantedLogged = true;
-                        Log.Info("[SHARE-TIME] client time control is enabled — either player can pause/play/fast-forward");
+                        Log.Info(Tag + " client time control is enabled — either player can pause/play/fast-forward");
                     }
-                    return;
+                    return; // only the authority grants; the client process no-ops
                 }
 
                 // Grant it. The no-arg toggle validates host + single gameplay client
@@ -103,18 +151,19 @@ namespace BLTDeploymentCrashGuard
                 if (enabled)
                 {
                     _grantedLogged = true;
-                    Log.Info("[SHARE-TIME] granted client time control — either player can now pause/play/fast-forward");
+                    SelfHealing.RecordFire(Component);
+                    Log.Info(Tag + " granted client time control — either player can now pause/play/fast-forward");
                     Log.Screen("shared time control enabled — either player controls speed");
                 }
                 else if (reason != null && !reason.Contains("no longer connected") && !reason.Contains("No connected"))
                 {
                     // benign "no client yet" reasons are silent; log anything else once-ish
-                    Log.Info("[SHARE-TIME] not granted yet (" + reason + ") — will retry");
+                    Log.Info(Tag + " not granted yet (" + reason + ") — will retry");
                 }
             }
             catch (Exception ex)
             {
-                Log.Info("[SHARE-TIME] tick error: " + ex.Message);
+                Log.Info(Tag + " tick error: " + ex.Message);
             }
         }
 
@@ -149,24 +198,41 @@ namespace BLTDeploymentCrashGuard
             }
         }
 
+        private static MethodInfo ToggleMethod(Type coopSubModule)
+        {
+            return AccessTools.Method(coopSubModule, "ToggleClientTimeControlPermission",
+                new[] { typeof(bool).MakeByRefType(), typeof(string).MakeByRefType() });
+        }
+
+        private static MethodInfo MenuCheckMethod(Type coopSubModule)
+        {
+            return AccessTools.Method(coopSubModule, "IsClientTimeControlEnabledForCurrentMenu");
+        }
+
         private static bool Resolve()
         {
             if (_resolved)
             {
                 return _coopSubModule != null && _toggle != null && _isEnabledForMenu != null;
             }
-            _resolved = true;
             try
             {
                 _coopSubModule = PeerDetection.FindCoopType("CoopSubModule");
                 _coopSession = PeerDetection.FindCoopType("CoopSession");
                 if (_coopSubModule == null)
                 {
+                    // Latch only once BT is actually loaded: before that a miss means "not yet", not a rename.
+                    if (PeerDetection.IsCoopAssemblyLoaded())
+                    {
+                        _resolved = true;
+                        Log.Info(Tag + " CoopSubModule not found — shared time control INACTIVE (BannerlordTogether renamed it?)");
+                        Diag.Report(Component, false, "CoopSubModule not found (BannerlordTogether renamed it?)");
+                    }
                     return false;
                 }
-                _toggle = AccessTools.Method(_coopSubModule, "ToggleClientTimeControlPermission",
-                    new[] { typeof(bool).MakeByRefType(), typeof(string).MakeByRefType() });
-                _isEnabledForMenu = AccessTools.Method(_coopSubModule, "IsClientTimeControlEnabledForCurrentMenu");
+                _resolved = true;
+                _toggle = ToggleMethod(_coopSubModule);
+                _isEnabledForMenu = MenuCheckMethod(_coopSubModule);
                 if (_coopSession != null)
                 {
                     _isHostProp = AccessTools.Property(_coopSession, "IsHost");
@@ -174,38 +240,39 @@ namespace BLTDeploymentCrashGuard
                 }
                 if (_toggle == null || _isEnabledForMenu == null)
                 {
-                    Log.Info("[SHARE-TIME] required method(s) not found (toggle=" + (_toggle != null) + " menuCheck=" + (_isEnabledForMenu != null) + ") — shared time control INACTIVE (mod version changed?)");
+                    Log.Info(Tag + " required method(s) not found (toggle=" + (_toggle != null) + " menuCheck=" + (_isEnabledForMenu != null) + ") — shared time control INACTIVE (mod version changed?)");
+                    Diag.Report(Component, false, "CoopSubModule." + (_toggle == null ? "ToggleClientTimeControlPermission" : "IsClientTimeControlEnabledForCurrentMenu") + " not found (BannerlordTogether update?)");
                     return false;
                 }
-                Log.Info("[SHARE-TIME] shared time control enabler active (grants client time control on the authority)");
+                Diag.Report(Component, true, "");
+                Log.Info(Tag + " shared time control enabler active (grants client time control on the authority)");
                 return true;
             }
             catch (Exception ex)
             {
-                Log.Info("[SHARE-TIME] resolve error: " + ex.Message);
+                _resolved = true;
+                Log.Info(Tag + " resolve error: " + ex.Message);
+                Diag.Report(Component, false, ex.Message);
                 return false;
             }
         }
 
-        private static bool ReadConfig()
+        private static SelfHealing.TestResult SelfTest()
         {
-            try
-            {
-                string binDir = Path.GetDirectoryName(typeof(ShareTimeControl).Assembly.Location);
-                string configPath = Path.Combine(Path.GetFullPath(Path.Combine(binDir, "..", "..")), "guardconfig.json");
-                if (File.Exists(configPath))
-                {
-                    string text = File.ReadAllText(configPath);
-                    if (System.Text.RegularExpressions.Regex.IsMatch(text, "\"shareTimeControl\"\\s*:\\s*false"))
-                    {
-                        return false;
-                    }
-                }
-            }
-            catch
-            {
-            }
-            return true; // default on
+            bool btLoaded = PeerDetection.IsCoopAssemblyLoaded();
+            Type coopSubModule = PeerDetection.FindCoopType("CoopSubModule");
+            bool members = !btLoaded || (coopSubModule != null && ToggleMethod(coopSubModule) != null && MenuCheckMethod(coopSubModule) != null);
+            bool decisions =
+                NeedsGrant(true, false, true, false) &&
+                !NeedsGrant(false, false, true, false) &&   // config off
+                !NeedsGrant(true, true, true, false) &&     // already granted this session
+                !NeedsGrant(true, false, false, false) &&   // client process never grants
+                !NeedsGrant(true, false, true, true);       // BT already reports it on
+            bool pass = members && decisions;
+            return SelfHealing.TestResult.Of(Component + ".contract", pass,
+                pass ? (btLoaded ? "CoopSubModule.ToggleClientTimeControlPermission + IsClientTimeControlEnabledForCurrentMenu and the grant decision verified"
+                                 : "BannerlordTogether not loaded — grant decision verified only")
+                     : "members=" + members + " decisions=" + decisions);
         }
     }
 }

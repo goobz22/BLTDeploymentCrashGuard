@@ -62,10 +62,10 @@ Design principles:
   fix. As of v1.3.2 that includes the ones that used to be silent: the deployment guards (#1), the
   client hero-creation guard (#5), the party-AI guards (#6), the encounter-loop breaker (#7), the
   `MovementOrder` type-init fix (#9) and auto battle mode (#15) all register a `MOD HEALTH:` entry
-  and a `<component>.contract` self-test. What still reports neither: the player-identity guard
-  (#13), the `BootstrapAborted` watcher half of #10 (the priming half does report), four of the five
-  time fixes (all but the join-hold pause escape, #18), the log streamer and every tracer. For those
-  the startup log line and its patched-method count *are* the health signal — see
+  and a `<component>.contract` self-test — and, in a second pass, so do the player-identity guard
+  (#13), the `BootstrapAborted` watcher half of #10 and all five time fixes (#14, #18). What still
+  reports neither: the log streamer and every tracer. For those the startup log line and its
+  hooked-method count *are* the health signal — see
   [Is the mod actually doing anything?](#is-the-mod-actually-doing-anything).
 
 ## Install (players)

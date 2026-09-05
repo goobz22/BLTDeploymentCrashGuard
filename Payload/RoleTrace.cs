@@ -39,6 +39,9 @@ namespace BLTDeploymentCrashGuard
                 _coopSession = PeerDetection.FindCoopType("CoopSession");
                 if (_coopSession == null)
                 {
+                    // Always print a load line: a tracer with no load line is a tracer you cannot reason from.
+                    Log.Info("[ROLE] role-transition tracer idle — CoopSession not found (" +
+                             (PeerDetection.IsCoopAssemblyLoaded() ? "BannerlordTogether renamed it?" : "BannerlordTogether not loaded") + ")");
                     return;
                 }
                 Type mbSaveLoad = AccessTools.TypeByName("TaleWorlds.Core.MBSaveLoad")

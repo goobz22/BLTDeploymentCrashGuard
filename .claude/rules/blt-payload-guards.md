@@ -101,7 +101,7 @@ feature. The complete set: `deployment-guards` (`DeploymentCrashGuards.cs:42,48`
 `movementorder-typeinit` (`MovementOrderTypeInitGuard.cs:65,78,85,92`), `client-bootstrap-fix`
 (`ClientBootstrapFix.cs:71,78`), `bg-tick-budget-guard` on an unresolved `TryBackgroundCampaignTick`
 (`BackgroundTickBudgetGuard.cs:66`), `battle-mode` when a chokepoint hook is missing or `Apply` throws
-(`BattleMode.cs:130,136`) — an unresolved lift target degrades and is **not** critical: it costs one
+(`BattleMode.Apply`) — an unresolved lift target degrades and is **not** critical: it costs one
 lifted method, not the player side. Adding or removing one updates the same list in `CLAUDE.md`
 § *Conventions for guards/fixes*, same commit.
 
@@ -111,14 +111,24 @@ lifted method, not the player side. Adding or removing one updates the same list
 `harmony.PatchAll`, which reports nothing, but `DeploymentCrashGuardHealth` runs straight after
 (`PayloadEntry.cs:45-46`), verifies they really sit on `SetupTeams`/`FinishDeployment`, reports and
 registers a self-test (`DeploymentCrashGuards.cs:26-49`). Attribute patching is fine — pair it with a
-health class. `battle-mode`, `encounter-loop-guard`, `deployment-guards`, `party-ai-guard`,
-`hero-creation-guard` and `movementorder-typeinit` now all report health and register a `.contract`
-test; what still never reaches `MOD HEALTH:` is listed in `docs/DIAGNOSTICS.md` § *What `MOD HEALTH:`
-does not cover* — wire new code up, do not join it.
+health class. Every guard, fix and advisor now reports health and registers a `.contract` test —
+the 2026-09-04 pass added `battle-mode`, `encounter-loop-guard`, `deployment-guards`,
+`party-ai-guard`, `hero-creation-guard` and `movementorder-typeinit`, then `map-click-speed`,
+`time-flow`, `time-enforcement-guard`, `share-time-control`, `player-identity-guard` and
+`bootstrap-watch`. A tick-driven component gets an `Apply()` that only pins members and registers
+(`PlayerIdentityGuard`, `ShareTimeControl`, `BootstrapWatch`). A guard whose BT type is not loaded
+yet reports **healthy as `inert — BannerlordTogether not loaded`**, never a silent return, and
+because health is keyed by component the module-screen / game-start retry replaces that entry.
+What still never reaches `MOD HEALTH:` — the tracers, `PayloadEntry`, `PeerDetection` — is listed
+in `docs/DIAGNOSTICS.md` § *What `MOD HEALTH:` does not cover*; wire new code up, do not join it.
 
 Likewise a decision point is hooked by its own guard, never by a tracer: `BattleMode`'s
 `StartBattle`/`OpenNew` decisions and `EncounterLoopGuard`'s `Finish` stamp are always-on
-(`BattleMode.cs:110-137`, `EncounterLoopGuard.cs:70-73,136`); `TracePatches` is log-only (`:14-21`).
+(`BattleMode.Apply`, `EncounterLoopGuard.Apply`); `TracePatches` is log-only.
+
+State that must outlive a payload generation goes in the harness `ISharedState` bag as BCL types
+only — `object[]` records, strings, `MethodInfo`s — never a payload class, whose identity is fresh
+every generation (`BattleMode.StashKey`, `PregnancySyncGuard` § `ListenerOwnerKey`).
 
 ## Logging
 

@@ -24,11 +24,95 @@ namespace BLTDeploymentCrashGuard
     /// </summary>
     internal static class PlayerIdentityGuard
     {
+        private const string Component = "player-identity-guard";
+        private const string Tag = "[IDENTITY]";
         private const int MaxCorrectionsPerMission = 5;
 
         private static Mission _lastMission;
         private static int _corrections;
         private static int _lastCheckTick;
+        private static bool _testRegistered;
+
+        /// <summary>Tick-driven, so Apply only pins the mission/agent members the corrector writes
+        /// (compile-bound, but a game update renaming one would otherwise surface as a caught
+        /// MissingMethodException every second) and registers the self-test (added 2026-09-04 —
+        /// this guard used to be invisible to MOD HEALTH).</summary>
+        internal static void Apply()
+        {
+            try
+            {
+                if (!_testRegistered)
+                {
+                    _testRegistered = true;
+                    SelfHealing.RegisterTest(SelfTest);
+                }
+                string missing = MissingMembers();
+                Diag.Report(Component, missing.Length == 0, missing.Length == 0 ? "" : "missing " + missing + " (game update?)");
+                if (missing.Length > 0)
+                {
+                    Log.Info(Tag + " member(s) missing — corrector inactive: " + missing + " (game update?)");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Info(Tag + " apply failed: " + ex.Message);
+                Diag.Report(Component, false, ex.Message);
+            }
+        }
+
+        /// <summary>Every engine member the correction writes or reads, checked by name.</summary>
+        private static string MissingMembers()
+        {
+            string missing = "";
+            if (AccessTools.Property(typeof(Mission), "MainAgent") == null) missing += " Mission.MainAgent";
+            if (AccessTools.PropertySetter(typeof(Agent), "Controller") == null) missing += " Agent.Controller";
+            if (AccessTools.Property(typeof(Agent), "Character") == null) missing += " Agent.Character";
+            if (AccessTools.Property(typeof(Team), "GeneralAgent") == null) missing += " Team.GeneralAgent";
+            if (AccessTools.Property(typeof(Team), "PlayerOrderController") == null) missing += " Team.PlayerOrderController";
+            if (AccessTools.Property(typeof(OrderController), "Owner") == null) missing += " OrderController.Owner";
+            if (AccessTools.Property(typeof(Formation), "PlayerOwner") == null) missing += " Formation.PlayerOwner";
+            if (AccessTools.Property(typeof(Hero), "MainHero") == null) missing += " Hero.MainHero";
+            return missing.Trim();
+        }
+
+        /// <summary>The whole decision, engine-free so the self-test can pin it: correct only outside
+        /// the deployment phase (Controller=None is legitimate there), when the controlled agent is
+        /// not our hero, our hero's agent is present and is not already the controlled one, and the
+        /// per-mission cap has not been reached.</summary>
+        internal static bool NeedsCorrection(bool inDeployment, bool controlledIsMine, bool myAgentPresent, bool myAgentIsControlled, int corrections)
+        {
+            return !inDeployment && !controlledIsMine && myAgentPresent && !myAgentIsControlled && corrections < MaxCorrectionsPerMission;
+        }
+
+        private static SelfHealing.TestResult SelfTest()
+        {
+            string missing = MissingMembers();
+            bool members = missing.Length == 0;
+            bool decisions =
+                NeedsCorrection(false, false, true, false, 0) &&
+                NeedsCorrection(false, false, true, false, MaxCorrectionsPerMission - 1) &&
+                !NeedsCorrection(true, false, true, false, 0) &&     // deployment phase
+                !NeedsCorrection(false, true, true, true, 0) &&      // identity already correct
+                !NeedsCorrection(false, false, false, false, 0) &&   // our hero is not in this mission
+                !NeedsCorrection(false, false, true, true, 0) &&     // our agent is the controlled one after all
+                !NeedsCorrection(false, false, true, false, MaxCorrectionsPerMission); // cap reached
+            bool pass = members && decisions;
+            return SelfHealing.TestResult.Of(Component + ".contract", pass,
+                pass ? "Mission/Agent/Team/OrderController/Formation/Hero members and the correction decision table verified"
+                     : "members=" + members + (members ? "" : " (missing " + missing + ")") + " decisions=" + decisions);
+        }
+
+        private static Agent FindMyAgent(Mission mission, BasicCharacterObject myCharacter)
+        {
+            foreach (Agent agent in mission.Agents)
+            {
+                if (agent != null && agent.IsHuman && ReferenceEquals(agent.Character, myCharacter) && agent.IsActive())
+                {
+                    return agent;
+                }
+            }
+            return null;
+        }
 
         internal static void Tick()
         {
@@ -51,14 +135,6 @@ namespace BLTDeploymentCrashGuard
                     _lastMission = mission;
                     _corrections = 0;
                 }
-                if (_corrections >= MaxCorrectionsPerMission)
-                {
-                    return;
-                }
-                if (mission.GetMissionBehavior<DeploymentMissionController>() != null)
-                {
-                    return; // deployment phase: Controller=None on the player agent is legitimate
-                }
                 Hero mainHero = Hero.MainHero;
                 if (mainHero == null || mainHero.CharacterObject == null)
                 {
@@ -66,27 +142,22 @@ namespace BLTDeploymentCrashGuard
                 }
                 BasicCharacterObject myCharacter = mainHero.CharacterObject;
                 Agent controlled = mission.MainAgent;
-                if (controlled != null && ReferenceEquals(controlled.Character, myCharacter))
+                bool controlledIsMine = controlled != null && ReferenceEquals(controlled.Character, myCharacter);
+                if (controlledIsMine)
                 {
-                    return; // identity correct
+                    return; // identity correct — the common case, settled before any agent scan
                 }
-
-                Agent myAgent = null;
-                foreach (Agent agent in mission.Agents)
+                bool inDeployment = mission.GetMissionBehavior<DeploymentMissionController>() != null;
+                Agent myAgent = FindMyAgent(mission, myCharacter);
+                if (!NeedsCorrection(inDeployment, controlledIsMine, myAgent != null, myAgent != null && ReferenceEquals(myAgent, controlled), _corrections))
                 {
-                    if (agent != null && agent.IsHuman && ReferenceEquals(agent.Character, myCharacter) && agent.IsActive())
-                    {
-                        myAgent = agent;
-                        break;
-                    }
-                }
-                if (myAgent == null || ReferenceEquals(myAgent, controlled))
-                {
-                    return; // our hero isn't in this mission (spectating etc.) — nothing safe to do
+                    // deployment phase (Controller=None on the player agent is legitimate there), our
+                    // hero is not in this mission (spectating etc.), or the per-mission cap is reached
+                    return;
                 }
 
                 _corrections++;
-                SelfHealing.RecordFire("player-identity-guard"); // feeds GUARD ACTIVITY so the fix is retirable when BT fixes the swap
+                SelfHealing.RecordFire(Component); // feeds GUARD ACTIVITY so the fix is retirable when BT fixes the swap
                 Log.Info("[IDENTITY] player control is on the wrong agent (" + Describe(controlled) + ") — moving control to " + Describe(myAgent) + " (correction " + _corrections + "/" + MaxCorrectionsPerMission + ")");
 
                 try

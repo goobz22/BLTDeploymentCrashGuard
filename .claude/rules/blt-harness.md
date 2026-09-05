@@ -46,7 +46,13 @@ build overwrites it. Bump `<Version>` for a release.
   (`Diag.cs:93`). That suffix is guidance for reading a detail, not three literal strings to grep:
   `Diag.Report` discards `detail` on the healthy branch (`:71-85`), so no shipped stand-down text can
   ever appear in a degraded entry.
-- `critical: true` escalates to an on-screen warning (`Diag.cs:71-99`) — the earned-only rule and the
+- **Keyed by component (2026-09-04):** the latest `Diag.Report` for an id replaces its earlier
+  entry (`Diag.Report` → `Forget`), so a guard that reported *inert — BannerlordTogether not loaded*
+  at payload apply and resolved on the module-screen / game-start retry is counted once, as
+  resolved — which is why guards now report on **every** `Apply` exit path instead of latching a
+  `_reported` flag. `PayloadEntry.OnGameStart` prints the summary a third time, tagged *re-checked
+  at game start*, for exactly that reason.
+- `critical: true` escalates to an on-screen warning (`Diag.cs` § `HealthSummary`) — the earned-only rule and the
   complete call-site list live in `.claude/rules/blt-payload-guards.md` § *`critical: true` is earned*.
 - `Diag.ResetHealth()` and `SelfHealing.ResetTests()` run before each generation applies, so reloads
   do not duplicate entries; **fire counts persist** across generations

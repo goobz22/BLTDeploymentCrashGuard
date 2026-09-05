@@ -16,8 +16,74 @@ namespace BLTDeploymentCrashGuard
     /// </summary>
     internal static class BootstrapWatch
     {
+        private const string Component = "bootstrap-watch";
+        private const string Tag = "[BOOTSTRAP-WATCH]";
+        private const string Needle = "BootstrapAborted";
+
         private static int _lastCheckTick;
         private static bool _warned;
+        private static bool _testRegistered;
+
+        /// <summary>A log scanner has no engine member to resolve, so it is always "active"; the
+        /// self-test pins the two scanners (full-file and tail) on a synthetic BT log so a silent
+        /// parser regression cannot pass as "no abort happened" (added 2026-09-04).</summary>
+        internal static void Apply()
+        {
+            try
+            {
+                if (!_testRegistered)
+                {
+                    _testRegistered = true;
+                    SelfHealing.RegisterTest(SelfTest);
+                }
+                Diag.Report(Component, true, "");
+            }
+            catch (Exception ex)
+            {
+                Log.Info(Tag + " apply failed: " + ex.Message);
+                Diag.Report(Component, false, ex.Message);
+            }
+        }
+
+        private static SelfHealing.TestResult SelfTest()
+        {
+            string path = null;
+            try
+            {
+                path = Path.Combine(Path.GetTempPath(), "bltguard-bootstrapwatch-selftest-" + Guid.NewGuid().ToString("N") + ".txt");
+                string body = "[HARMONY] NativeActionCatalogReady source=application-tick actions=5167\r\n" +
+                              "[HARMONY] " + Needle + " reason=action-cache-mismatch restartRequired=True\r\n" +
+                              "[HARMONY] a later line\r\n";
+                File.WriteAllText(path, body, new UTF8Encoding(false));
+                long lineStart = body.IndexOf("[HARMONY] " + Needle, StringComparison.Ordinal); // FullFind reports the hit LINE's start
+                long exact = body.IndexOf(Needle, StringComparison.Ordinal);                    // TailFind reports the exact byte index
+                long full = FullFind(path, Needle);
+                long tail = TailFind(path, Needle);
+                long absentFull = FullFind(path, "NeverInThisFile");
+                long absentTail = TailFind(path, "NeverInThisFile");
+                bool pass = full == lineStart && tail == exact && absentFull == -1 && absentTail == -1;
+                return SelfHealing.TestResult.Of(Component + ".contract", pass,
+                    pass ? Needle + " located by both the full-file and the tail scan; an absent needle reports -1"
+                         : "full=" + full + " (want " + lineStart + ") tail=" + tail + " (want " + exact + ") absent=" + absentFull + "/" + absentTail);
+            }
+            catch (Exception ex)
+            {
+                return SelfHealing.TestResult.Of(Component + ".contract", false, ex.Message);
+            }
+            finally
+            {
+                try
+                {
+                    if (path != null && File.Exists(path))
+                    {
+                        File.Delete(path);
+                    }
+                }
+                catch
+                {
+                }
+            }
+        }
 
         /// <summary>Startup pass: if the PREVIOUS session aborted, clear the stale
         /// cache BEFORE the co-op mod's bootstrap audits it this session.</summary>
@@ -77,7 +143,7 @@ namespace BLTDeploymentCrashGuard
                         continue; // this abort was already handled on a previous pass
                     }
                     WriteHandledOffset(name, abortOffset);
-                    SelfHealing.RecordFire("bootstrap-watch"); // feeds GUARD ACTIVITY (retirable once BT regenerates its cache itself)
+                    SelfHealing.RecordFire(Component); // feeds GUARD ACTIVITY (retirable once BT regenerates its cache itself)
                     int cleared = ClearStaleCache();
                     _warned = !startup;
                     Log.Info("[BOOTSTRAP-WATCH] co-op mod reported BootstrapAborted in " + name +

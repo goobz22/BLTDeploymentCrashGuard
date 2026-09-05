@@ -190,6 +190,11 @@ namespace BLTDeploymentCrashGuard
                 Diag.Report(Component, ok, ok ? "" : detail, critical: !(startBattle && missionOpen));
                 _applied = true;
                 Log.Info(Tag + " battle chokepoints hooked — " + detail);
+                int inherited = StashedCount();
+                if (inherited > 0)
+                {
+                    Log.Info(Tag + " inherited " + inherited + " stashed foreign patch(es) from the previous payload generation — still restorable");
+                }
             }
             catch (Exception ex)
             {

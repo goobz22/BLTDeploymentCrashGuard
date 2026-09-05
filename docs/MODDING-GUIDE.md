@@ -1185,9 +1185,11 @@ assembly's own `GetReferencedAssemblies()` entries for those names
   shared state survived (`Harness/HotReload.cs:362-364`; `Harness/Diag.cs:63-69`;
   `Harness/SelfHealing.cs:94-106`).
 - **Apply new, then unpatch old** (§2.12). A failed apply keeps the previous generation running.
-- **Known gap, stated honestly**: `BattleMode`'s foreign-patch stash does not yet survive a reload, so
-  reloading while BT's battle patches are lifted can leave them lifted (`HOTRELOAD.md:65-68`). If your
-  design lifts foreign patches, that stash belongs in `ISharedState`.
+- **State that must outlive a generation goes in the bag — as BCL types.** `BattleMode`'s
+  foreign-patch stash and `PregnancySyncGuard`'s listener-owner object both live in `ISharedState`
+  since 2026-09-04 (`Payload/BattleMode.cs` § `StashKey`; `HOTRELOAD.md` § *Trade-offs and known
+  gaps*). The trap: a payload class has a fresh identity every generation, so a cast to it fails
+  after a reload — store `object[]` records, strings, `MethodInfo`s, never your own types.
 
 ### 4.6 Triggering a reload safely
 

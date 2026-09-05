@@ -43,8 +43,11 @@ namespace BLTDeploymentCrashGuard
                 if (n > 0)
                 {
                     _applied = true;
-                    Log.Info("[COOP-BATTLE] battle-formation tracer active on " + n + " method(s)");
                 }
+                // Always print the count, zero included: a tracer that prints nothing when it hooked
+                // nothing is indistinguishable from "the bug did not happen".
+                Log.Info("[COOP-BATTLE] battle-formation tracer active on " + n + " method(s)" +
+                         (n == 0 ? " — nothing hooked (" + (PeerDetection.IsCoopAssemblyLoaded() ? "BannerlordTogether renamed its battle types?" : "BannerlordTogether not loaded") + ")" : ""));
             }
             catch (Exception ex)
             {

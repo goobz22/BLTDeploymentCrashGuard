@@ -513,13 +513,12 @@ chokepoints — all six always-on, tracing or not. Lifted patches are **stashed*
 kind, priority and before/after lists and restored verbatim when a peer connects.
 `Payload/BattleMode.cs:10-41,270-337`; `HOTRELOAD.md` § *Trade-offs and known gaps*;
 `Harness/GuardConfig.cs:88`.
-Caveat: the foreign-patch stash does **not** survive a payload hot-reload, so reloading while in
-`battleMode=solo` can leave BT's battle patches lifted (`HOTRELOAD.md` § *Trade-offs and known gaps*).
-The `ISharedState` doc comment still *names* the stash among the objects the harness keeps across a
-reload (`Harness/Contracts.cs:25-30`, the stash on `:28`), but the payload never writes it there — the
-only payload references to that bag are the interface handle at `Payload/PayloadEntry.cs:17,23`, and
-`Stash` is a plain payload static (`Payload/BattleMode.cs:90`) that a reload resets. **Restart the game
-after hot-reloading in `battleMode=solo`.**
+The stash survives a payload hot-reload since 2026-09-04: it is kept in the harness `ISharedState`
+bag (`BattleMode.StashKey` = `battle-mode.stash`) as plain `object[]` records, so a generation
+applied after a reload in `battleMode=solo` inherits what the previous one lifted and restores it
+when a peer connects (`[BATTLE-MODE] inherited N stashed foreign patch(es)`). The `ISharedState` doc
+comment in `Harness/Contracts.cs` names the stash among the bag's contents and is now true;
+`battle-mode.contract` fails if the stash is not the bag's instance.
 
 **The native methods whose foreign patches are lifted** (battle-mission scope only; campaign/map co-op
 machinery is deliberately not listed) — 24 methods across 11 declaring types,

@@ -1035,7 +1035,9 @@ it runs `SelfHealing.RunSelfTests()` (`:104-108`).
 **Limitations.** It reports only components that called `Diag.Report` and runs only tests that
 called `SelfHealing.RegisterTest` — a mechanism that registers neither is invisible here, which is
 why v1.3.2 added `battle-mode`, `encounter-loop-guard`, `deployment-guards`, `party-ai-guard`,
-`hero-creation-guard` and `movementorder-typeinit`. *Index 5* is the current census.
+`hero-creation-guard`, `movementorder-typeinit`, and then `map-click-speed`, `time-flow`,
+`time-enforcement-guard`, `share-time-control`, `player-identity-guard` and `bootstrap-watch` —
+after which every guard, fix and advisor registers both. *Index 5* is the current census.
 
 **Self-test.** This is the gate that runs every guard's registered self-test.
 
@@ -3366,7 +3368,11 @@ setter prefixes are installed only if at least one `EnforcePlaySpeed` was patche
 retried from `PayloadEntry.OnBeforeInitialModuleScreen` and `OnGameStart` because the BT
 assembly may load after us (`Payload/PayloadEntry.cs:124`, `:130`; `:77-80`). The setter block
 is thread-scoped, so an unrelated write on another thread during the enforcer window is
-unaffected. No `Diag.Report`, no self-test. Scoping this neutralizer to the campaign map was
+unaffected. Health `time-enforcement-guard` since 2026-09-04: healthy as *inert* until
+BannerlordTogether loads (the retry replaces that entry), degraded when
+`CoopCampaignBehavior.EnforcePlaySpeed` or `Campaign.set_TimeControlMode` is missing — a
+neutralizer installed without the mode setter cannot block anything, so that is degraded, not
+healthy. Scoping this neutralizer to the campaign map was
 tried on 2026-09-04 and **reverted** (`docs/ENGINE-NOTES.md` §4 "Campaign time control",
 `:550-552`). The BT member names were
 taken from **runtime stack traces**, not from a decompile (`:49-50`), so a BT rename silently
@@ -3375,7 +3381,12 @@ disables the tracer — the only reveal is the "could not trace" line (`:157`) o
 substring) and depth-bounded to 12 frames, so a deeply-nested or renamed handler is missed, in
 which case the liveness stamp simply does not fire (a fail-safe direction).
 
-**Self-test.** None registered. Observable state transitions are logged: the apply line
+**Self-test.** `time-enforcement-guard.contract` — pins `CoopCampaignBehavior.EnforcePlaySpeed`
+(when BT is loaded) and `Campaign.set_TimeControlMode`, plus the `ShouldNeutralize(bool?)`
+decision (fail toward co-op: only a confident `false` neutralizes; `null` = could not read = do
+not) and `ShouldNoteVeto` (only the mode setter's veto is noted for the `[TIME]` tracer). Fire id
+`time-enforcement-guard`, once per "alone" episode, not per blocked write. Observable state
+transitions are logged: the apply line
 `[TIME-GUARD] EnforcePlaySpeed neutralizer active (N method(s)) — runs every tick, writes
 blocked while no remote player is connected` (`:121`), the peer-state edge line including
 `PeerDetection.Snapshot()` (`:187`), and a once-per-edge "neutralizing EnforcePlaySpeed
@@ -4720,6 +4731,7 @@ across `Payload/` and `Harness/`.
 |---|---|---|---|---|
 | `battle-mode` | `Payload/BattleMode.cs` | 15 | `battle-mode.contract` | `battle-mode` |
 | `bg-tick-budget-guard` | `Payload/BackgroundTickBudgetGuard.cs` | 19 | `bg-tick-budget-guard.contract` | `bg-tick-budget-guard` |
+| `bootstrap-watch` | `Payload/BootstrapWatch.cs` | 10 | `bootstrap-watch.contract` (synthetic-log parser check) | `bootstrap-watch` (one per handled abort — the retirement signal once BT regenerates its cache itself) |
 | `civilian-gate-fix` | `Payload/CivilianGateCloseFix.cs` | 20 | `civilian-gate-fix.contract` | `civilian-gate-fix` |
 | `clan-party-advisor` | `Payload/ClanPartyCreationAdvisor.cs` | 23 | `clan-party-advisor.contract` | `clan-party-advisor` |
 | `clan-screen-guard` | `Payload/ClanScreenCrashGuard.cs` | 4 | `clan-screen-guard.contract` | `clan-screen-guard` |
@@ -4735,22 +4747,25 @@ across `Payload/` and `Harness/`.
 | `hero-identity-lock` | `Payload/CoopHeroIdentityLock.cs` | 21 | `hero-identity-lock.contract` | `hero-identity-lock` |
 | `illness-death-guard` | `Payload/IllnessDeathGuard.cs` | 12 | `illness-death-guard.contract` | `illness-death-guard` |
 | `join-sync-pause-escape` | `Payload/JoinSyncPauseEscape.cs` | 18 | `join-sync-pause-escape.contract` | `join-sync-pause-escape` |
+| `map-click-speed` | `Payload/MapClickSpeedKeeper.cs` | 14 | `map-click-speed.contract` | `map-click-speed` (one per kept click) |
 | `map-incident-guard` | `Payload/MapIncidentCrashGuard.cs` | 8 | `map-incident-guard.contract` | `map-incident-guard` |
 | `marriage-barter-guard` | `Payload/MarriageBarterGuard.cs` | 11 | `marriage-barter-guard.contract` | `marriage-barter-guard` |
 | `movementorder-typeinit` | `Payload/MovementOrderTypeInitGuard.cs` | 9 | `movementorder-typeinit.contract` | — (a load-time fix: it either initializes the type or does not) |
 | `party-ai-guard` | `Payload/PartyAiCrashGuard.cs` | 6 | `party-ai-guard.contract` | `party-ai-guard` (all three layers) |
+| `player-identity-guard` | `Payload/PlayerIdentityGuard.cs` | 13 | `player-identity-guard.contract` | `player-identity-guard` (one per correction — a permanently-zero count is the evidence BT fixed the swap) |
 | `pregnancy-sync` | `Payload/PregnancySync/PregnancySyncGuard.cs` | 16 | `pregnancy-sync.loopback` | `pregnancy-sync` |
+| `share-time-control` | `Payload/ShareTimeControl.cs` | 14 | `share-time-control.contract` | `share-time-control` (one per grant) |
 | `siege-command-guard` | `Payload/SiegeCommandGuard.cs` | 24 | `siege-command-guard.contract` | `siege-command-guard` |
 | `siege-gate-prompt-fix` | `Payload/SiegeGatePromptFix.cs` | 20 | `siege-gate-prompt-fix.contract` | `siege-gate-prompt-fix` |
 | `stash-sync` | `Payload/StashSync/StashSyncGuard.cs` | 17 | `stash-sync.loopback` | `stash-sync` |
 | `stealth-hideout-advisor` | `Payload/StealthHideoutAdvisor.cs` | 22 | `stealth-hideout-advisor.contract` | `stealth-hideout-advisor` |
+| `time-enforcement-guard` | `Payload/TimeEnforcementGuard.cs` | 14 | `time-enforcement-guard.contract` | `time-enforcement-guard` (one per "alone" episode, not per blocked write) |
+| `time-flow` | `Payload/TimeFlowPatch.cs` | 14 | `time-flow.contract` | `time-flow` (one per overridden idle arrival, not per tick) |
 
 Fire ids with **no** health component and no self-test — they appear only in `GUARD ACTIVITY:`:
 
 | Fire id | Source file | README item | Why it has no health entry |
 |---|---|---|---|
-| `bootstrap-watch` | `Payload/BootstrapWatch.cs:80` | 10 | A log scanner, not a patch: there is no member to re-resolve, so "resolved" is not a meaningful state. The count is the retirement signal — it drops to zero once BannerlordTogether stops aborting. |
-| `player-identity-guard` | `Payload/PlayerIdentityGuard.cs:89` | 13 | A polling corrector on live mission state rather than a resolved-by-name patch. A permanently-zero count is the evidence that BT fixed the spawn identity swap and this net can be retired. |
 | `setup-teams-guard` | `Payload/DeploymentCrashGuards.cs:106` | 1 | Reported under the shared `deployment-guards` component; separate fire ids keep the two finalizers' counts distinguishable. |
 | `finish-deployment-guard` | `Payload/DeploymentCrashGuards.cs:127` | 1 | As above. |
 

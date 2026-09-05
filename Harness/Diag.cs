@@ -32,8 +32,9 @@ namespace BLTDeploymentCrashGuard
         public static readonly string SessionId = GenerateSessionId();
 
         private static readonly List<string> _healthy = new List<string>();
-        private static readonly List<string> _degraded = new List<string>();
-        private static bool _criticalMissing;
+        private static readonly List<string> _degradedIds = new List<string>();
+        private static readonly List<string> _degraded = new List<string>(); // "id (detail)" display strings, parallel to _degradedIds
+        private static readonly List<string> _criticalIds = new List<string>();
 
         private static string GenerateSessionId()
         {
@@ -64,24 +65,42 @@ namespace BLTDeploymentCrashGuard
         public static void ResetHealth()
         {
             _healthy.Clear();
+            _degradedIds.Clear();
             _degraded.Clear();
-            _criticalMissing = false;
+            _criticalIds.Clear();
         }
 
+        /// <summary>Keyed by component: the LATEST report for an id wins. A guard that first reported
+        /// "inert — BannerlordTogether not loaded" at payload apply and then resolved on the
+        /// module-screen / game-start retry replaces its entry instead of appearing twice (2026-09-04).</summary>
         public static void Report(string component, bool ok, string detail, bool critical = false)
         {
+            Forget(component);
             if (ok)
             {
                 _healthy.Add(component);
             }
             else
             {
+                _degradedIds.Add(component);
                 _degraded.Add(component + (string.IsNullOrEmpty(detail) ? "" : " (" + detail + ")"));
                 if (critical)
                 {
-                    _criticalMissing = true;
+                    _criticalIds.Add(component);
                 }
             }
+        }
+
+        private static void Forget(string component)
+        {
+            _healthy.Remove(component);
+            int index = _degradedIds.IndexOf(component);
+            if (index >= 0)
+            {
+                _degradedIds.RemoveAt(index);
+                _degraded.RemoveAt(index);
+            }
+            _criticalIds.Remove(component);
         }
 
         public static string HealthSummary()
@@ -91,7 +110,7 @@ namespace BLTDeploymentCrashGuard
             {
                 summary += ", " + _degraded.Count + " NOT resolved -> " + string.Join("; ", _degraded.ToArray()) +
                            "  (read each detail: a BannerlordTogether OR game update may have renamed a member; a detail saying 'inert', 'not loaded' or 'older game build' is on purpose)";
-                if (_criticalMissing)
+                if (_criticalIds.Count > 0)
                 {
                     Log.Screen("WARNING: a core BLT-guard fix did not load (BT may have updated) — see CrashGuard.log");
                 }

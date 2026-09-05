@@ -238,18 +238,19 @@ intro).
   `[HOTRELOAD] unpatch of bltogether.crashguard.genN failed: …` and carries on — both generations'
   patches are then live at once. Treat that line as "restart before you trust anything you observe".
 - Harness changes need a restart.
-- Known Phase-B gap: `BattleMode`'s foreign-patch stash does not yet survive a reload — reloading
-  while in `battleMode=solo` (vanilla, BT battle patches lifted) can leave them lifted. The stash is
-  a payload static (`Payload/BattleMode.cs:90`), and every payload static is fresh per generation;
-  state that must *survive* a reload belongs in the harness `ISharedState` bag instead. Note the
-  `ISharedState` doc comment (`Harness/Contracts.cs:25-30`) already lists "BattleMode's
-  foreign-patch stash" among what the bag holds; the code above is the authority, and the stash is
-  not in the bag today. Until it moves: iterate with `"battleMode": "coop"` (nothing is lifted, so
-  nothing can be lost), or restart after a reload done in vanilla mode. Reloading in
-  `battleMode=coop` is unaffected.
-- Known gap of the same family: `PregnancySyncGuard`'s host birth listener is subscribed in
-  `OnGameStart` (campaign events are per-`Campaign`), and a reload calls only `Apply` — the harness
-  invokes `OnGameStart` solely from `SubModule.OnGameStart`. Reloading mid-campaign therefore leaves
-  the **previous** generation's `OnGivenBirthEvent` listener attached (Harmony's `UnpatchAll` does
-  not remove campaign event listeners) while the new generation never subscribes for that campaign.
-  Load a campaign after the reload — or restart — before trusting birth sync in a dev session.
+- Closed 2026-09-04: `BattleMode`'s foreign-patch stash now lives in the harness `ISharedState` bag
+  under `battle-mode.stash`, as plain `object[]` records — only BCL/Harmony types may cross a
+  reload, because a payload class has a fresh identity every generation and a cast to it fails
+  after one. A reload in `battleMode=solo` therefore inherits what the previous generation lifted
+  and can restore it when a peer connects; the apply line says
+  `[BATTLE-MODE] inherited N stashed foreign patch(es)` and `battle-mode.contract` fails if the
+  stash is not bag-backed. Before that the stash was a payload static (fresh per generation) and a
+  solo-mode reload stranded BT's battle patches until restart.
+- Closed 2026-09-04, same family: `PregnancySyncGuard` publishes its listener-owner object to the
+  bag (`pregnancy-sync.listener-owner`). A new generation subscribes from `Apply` when a campaign is
+  already running (a reload never sees `OnGameStart` again) and first removes the previous
+  generation's `OnGivenBirthEvent` listener through the concrete event's `ClearListeners(object)`,
+  found by name — `IMbEvent<>` exposes only `AddNonSerializedListener`, and Harmony's `UnpatchAll`
+  never touches campaign event listeners. A retired generation's handler also checks the bag and
+  returns. The first reload after upgrading from a build older than this cannot find the previous
+  owner (that build never published one): restart once.

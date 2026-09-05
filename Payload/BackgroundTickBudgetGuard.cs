@@ -57,7 +57,14 @@ namespace BLTDeploymentCrashGuard
                 Type coop = AccessTools.TypeByName("BannerlordTogether.CoopSubModule");
                 if (coop == null)
                 {
-                    return; // BT not loaded (yet) — the module-screen retry calls again; vanilla needs no guard
+                    // BT not loaded (yet) — the module-screen retry calls again; vanilla needs no guard.
+                    // Report either way so the health line never silently omits this component
+                    // (a later successful retry re-reports and replaces this entry).
+                    bool btLoaded = PeerDetection.IsCoopAssemblyLoaded();
+                    Diag.Report("bg-tick-budget-guard", !btLoaded,
+                        btLoaded ? "BannerlordTogether.CoopSubModule not found (renamed?)" : "inert — BannerlordTogether not loaded",
+                        critical: btLoaded);
+                    return;
                 }
                 MethodInfo tick = AccessTools.Method(coop, "TryBackgroundCampaignTick");
                 if (tick == null)

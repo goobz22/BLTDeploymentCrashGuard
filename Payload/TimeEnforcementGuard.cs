@@ -67,8 +67,14 @@ namespace BLTDeploymentCrashGuard
     /// </summary>
     internal static class TimeEnforcementGuard
     {
+        private const string Component = "time-enforcement-guard";
+        private const string Tag = "[TIME-GUARD]";
+        private const string BehaviorType = "CoopCampaignBehavior";
+        private const string EnforceMethod = "EnforcePlaySpeed";
+
         private static bool _applied;
         private static bool _pauseTraceApplied;
+        private static bool _testRegistered;
         private static int _lastCheckTick;
         private static bool _peersConnected;
         private static bool _skipLogged;
@@ -82,6 +88,11 @@ namespace BLTDeploymentCrashGuard
             {
                 return;
             }
+            if (!_testRegistered)
+            {
+                _testRegistered = true;
+                SelfHealing.RegisterTest(SelfTest);
+            }
             ApplyEnforceGuard(harmony);
             ApplyPauseTrace(harmony);
         }
@@ -94,15 +105,23 @@ namespace BLTDeploymentCrashGuard
             }
             try
             {
-                Type behavior = PeerDetection.FindCoopType("CoopCampaignBehavior");
+                Type behavior = PeerDetection.FindCoopType(BehaviorType);
                 if (behavior == null)
                 {
-                    return; // co-op mod absent (or not loaded yet — Apply is retried later)
+                    // Co-op mod absent (or not loaded yet — Apply is retried from the module screen and
+                    // game start). Report either way; a later successful retry replaces this entry.
+                    bool btLoaded = PeerDetection.IsCoopAssemblyLoaded();
+                    Diag.Report(Component, !btLoaded, btLoaded ? BehaviorType + " not found (BannerlordTogether renamed it?)" : "inert — BannerlordTogether not loaded");
+                    if (btLoaded)
+                    {
+                        Log.Info(Tag + " " + BehaviorType + " not found — neutralizer inactive (BannerlordTogether update?)");
+                    }
+                    return;
                 }
                 int count = 0;
                 foreach (MethodInfo method in behavior.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {
-                    if (method.Name != "EnforcePlaySpeed" || method.IsAbstract)
+                    if (method.Name != EnforceMethod || method.IsAbstract)
                     {
                         continue;
                     }
@@ -119,26 +138,90 @@ namespace BLTDeploymentCrashGuard
                         Log.Info("[TIME-GUARD] could not patch EnforcePlaySpeed: " + exOne.Message);
                     }
                 }
-                if (count > 0)
+                if (count == 0)
                 {
-                    // block only the time writes made DURING the enforcer while solo
-                    foreach (string setterName in new[] { "set_TimeControlMode", "SetTimeControlModeLock", "set_TimeControlModeLock" })
-                    {
-                        Type campaign = AccessTools.TypeByName("TaleWorlds.CampaignSystem.Campaign");
-                        MethodInfo setter = campaign != null ? AccessTools.Method(campaign, setterName) : null;
-                        if (setter != null)
-                        {
-                            harmony.Patch(setter, new HarmonyMethod(typeof(TimeEnforcementGuard), nameof(BlockSoloEnforceWritePrefix)));
-                        }
-                    }
-                    _applied = true;
-                    Log.Info("[TIME-GUARD] EnforcePlaySpeed neutralizer active (" + count + " method(s)) — runs every tick, writes blocked while no remote player is connected");
+                    Log.Info(Tag + " " + BehaviorType + "." + EnforceMethod + " not found — neutralizer inactive (BannerlordTogether update?)");
+                    Diag.Report(Component, false, BehaviorType + "." + EnforceMethod + " not found (BannerlordTogether update?)");
+                    return;
                 }
+                // block only the time writes made DURING the enforcer while solo
+                bool modeSetter = false;
+                foreach (string setterName in new[] { "set_TimeControlMode", "SetTimeControlModeLock", "set_TimeControlModeLock" })
+                {
+                    MethodInfo setter = CampaignSetter(setterName);
+                    if (setter != null)
+                    {
+                        harmony.Patch(setter, new HarmonyMethod(typeof(TimeEnforcementGuard), nameof(BlockSoloEnforceWritePrefix)));
+                        modeSetter |= setterName == "set_TimeControlMode";
+                    }
+                }
+                if (!modeSetter)
+                {
+                    // Without the mode setter the enforcer's writes would go through unblocked: the
+                    // neutralizer is installed but toothless, which is a degraded state, not a healthy one.
+                    Log.Info(Tag + " Campaign.set_TimeControlMode not found — neutralizer cannot block writes (game update?)");
+                    Diag.Report(Component, false, "Campaign.set_TimeControlMode not found (game update?)");
+                    return;
+                }
+                _applied = true;
+                Diag.Report(Component, true, "");
+                Log.Info(Tag + " EnforcePlaySpeed neutralizer active (" + count + " method(s)) — runs every tick, writes blocked while no remote player is connected");
             }
             catch (Exception ex)
             {
-                Log.Info("[TIME-GUARD] apply failed: " + ex.Message);
+                Log.Info(Tag + " apply failed: " + ex.Message);
+                Diag.Report(Component, false, ex.Message);
             }
+        }
+
+        private static MethodInfo CampaignSetter(string name)
+        {
+            Type campaign = AccessTools.TypeByName("TaleWorlds.CampaignSystem.Campaign");
+            return campaign != null ? AccessTools.Method(campaign, name) : null;
+        }
+
+        /// <summary>The decision, engine-free so the self-test can pin it. Fail toward co-op:
+        /// neutralize BT's enforcer only on a CONFIDENT "no remote peer" (false); null means
+        /// "could not read", and a wrong "alone" would sabotage a live session.</summary>
+        internal static bool ShouldNeutralize(bool? anyRemotePeerConnected)
+        {
+            return anyRemotePeerConnected == false;
+        }
+
+        /// <summary>Only the mode setter's veto is noted for the [TIME] tracer: a note from either lock
+        /// setter would outlive its call and be misattributed to a later write (review 2026-09-04).</summary>
+        internal static bool ShouldNoteVeto(string setterName)
+        {
+            return setterName == "set_TimeControlMode";
+        }
+
+        private static SelfHealing.TestResult SelfTest()
+        {
+            bool btLoaded = PeerDetection.IsCoopAssemblyLoaded();
+            Type behavior = PeerDetection.FindCoopType(BehaviorType);
+            bool enforce = !btLoaded || (behavior != null && HasMethod(behavior, EnforceMethod));
+            bool setter = CampaignSetter("set_TimeControlMode") != null;
+            bool decisions =
+                ShouldNeutralize(false) && !ShouldNeutralize(true) && !ShouldNeutralize(null) &&
+                ShouldNoteVeto("set_TimeControlMode") && !ShouldNoteVeto("SetTimeControlModeLock") &&
+                !ShouldNoteVeto("set_TimeControlModeLock") && !ShouldNoteVeto(null);
+            bool pass = enforce && setter && decisions;
+            return SelfHealing.TestResult.Of(Component + ".contract", pass,
+                pass ? (btLoaded ? BehaviorType + "." + EnforceMethod + ", " : "BannerlordTogether not loaded — vanilla member pinned only; ") +
+                       "Campaign.set_TimeControlMode and the neutralize / veto-note decisions verified"
+                     : "enforce=" + enforce + " setter=" + setter + " decisions=" + decisions);
+        }
+
+        private static bool HasMethod(Type type, string name)
+        {
+            foreach (MethodInfo method in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            {
+                if (method.Name == name && !method.IsAbstract)
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private static void ApplyPauseTrace(Harmony harmony)
@@ -194,7 +277,7 @@ namespace BLTDeploymentCrashGuard
                 {
                     _lastCheckTick = now;
                     // Fail toward co-op: neutralize only on a CONFIDENT "no session".
-                    bool connected = PeerDetection.AnyRemotePeerConnected() != false;
+                    bool connected = !ShouldNeutralize(PeerDetection.AnyRemotePeerConnected());
                     if (connected != _peersConnected)
                     {
                         _skipLogged = false;
@@ -210,6 +293,7 @@ namespace BLTDeploymentCrashGuard
                 if (!_skipLogged)
                 {
                     _skipLogged = true;
+                    SelfHealing.RecordFire(Component); // one fire per "alone" episode, not per blocked write
                     Log.Info("[TIME-GUARD] neutralizing EnforcePlaySpeed time-writes — no remote player connected (state machine keeps running; auto-restores when one joins)");
                 }
             }
@@ -231,7 +315,7 @@ namespace BLTDeploymentCrashGuard
                 // Note the veto only for set_TimeControlMode — the one setter the [TIME] tracer
                 // observes and therefore consumes the note on. A note from the two lock setters
                 // would outlive its call and be misattributed to a later write (review 2026-09-04).
-                if (__originalMethod != null && __originalMethod.Name == "set_TimeControlMode")
+                if (__originalMethod != null && ShouldNoteVeto(__originalMethod.Name))
                 {
                     TimeVeto.Note("TIME-GUARD");
                 }

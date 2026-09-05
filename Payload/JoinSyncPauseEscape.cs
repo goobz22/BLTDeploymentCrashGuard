@@ -69,7 +69,11 @@ namespace BLTDeploymentCrashGuard
                 Type coopSubModule = PeerDetection.FindCoopType("CoopSubModule");
                 if (coopSubModule == null)
                 {
-                    return; // co-op mod absent or not loaded yet — Apply is retried later
+                    // Co-op mod absent or not loaded yet — Apply is retried later. Report either way so
+                    // the health line never silently omits this component; a later retry replaces it.
+                    bool btLoaded = PeerDetection.IsCoopAssemblyLoaded();
+                    Diag.Report("join-sync-pause-escape", !btLoaded, btLoaded ? "CoopSubModule not found (BannerlordTogether renamed it?)" : "inert — BannerlordTogether not loaded");
+                    return;
                 }
 
                 MethodInfo toggle = FindDeclared(coopSubModule, "ToggleHostManualPause");

@@ -240,12 +240,24 @@ when `"selfTest": true`) **and again inside the `[HOTRELOAD] genN applied` line*
 included, produces two copies. The copy count never tells you whether this was a launch or a reload;
 read `genN` and the `(initial)` / `(reload)` reason instead.
 
-The 2026-09-04 pass closed the worst of those absences. Six components that previously reported nothing
+Since 2026-09-04 the line is printed a **third** time, from `PayloadEntry.OnGameStart`, tagged
+*re-checked at game start, after the late-BannerlordTogether retries* — and `Diag.Report` is keyed
+by component: the latest report for an id replaces the earlier one, so a guard that said *inert —
+BannerlordTogether not loaded* at payload apply and resolved on the module-screen / game-start
+retry appears once, as resolved. Read the game-start line; the apply-time line cannot yet know.
+
+The 2026-09-04 pass closed those absences. Twelve components that previously reported nothing
 now report health and register a self-test, so a rename under them now degrades the health line
 instead of passing silently:
 
 | Component id | Self-test | Critical? | Notes |
 |---|---|---|---|
+| `map-click-speed` | `map-click-speed.contract` | no | Degraded when `MapScreen`, `HandleLeftMouseButtonClick` or `Campaign.set_TimeControlMode` is missing — the keeper used to log "keeper idle" and vanish. Fires once per kept click. |
+| `time-flow` | `time-flow.contract` | no | Healthy with *disabled by config* when `timeAlwaysFlows=false`; degraded when `MobileParty.ComputeIsWaiting` is missing. Fires once per overridden idle arrival, not per tick. |
+| `time-enforcement-guard` | `time-enforcement-guard.contract` | no | Healthy as *inert* until BannerlordTogether loads; degraded when `CoopCampaignBehavior.EnforcePlaySpeed` or `Campaign.set_TimeControlMode` is missing — installed-but-toothless is degraded, not healthy. Fires once per "alone" episode. |
+| `share-time-control` | `share-time-control.contract` | no | Tick-driven: `Apply` reports *disabled by config* / *inert*, or resolves at once when BT is already up; `Resolve` re-reports from `Tick` when BT loads late (it no longer latches a "not yet"). Fires once per grant. |
+| `player-identity-guard` | `player-identity-guard.contract` | no | Tick-driven: `Apply` pins by name the eight `Mission` / `Agent` / `Team` / `OrderController` / `Formation` / `Hero` members the correction writes. Fires per correction. |
+| `bootstrap-watch` | `bootstrap-watch.contract` | no | A scanner, always healthy; the self-test writes a synthetic BT log to a temp file and checks both scanners locate `BootstrapAborted`. Fires per handled abort. |
 | `battle-mode` | `battle-mode.contract` | when a chokepoint hook is missing, **or** when `Apply` throws | Two critical paths, not one: `critical: !(startBattle && missionOpen)` (`Payload/BattleMode.cs:130`) and the catch, which is `critical: true` unconditionally (`:136`). Detail carries `chokepoints StartBattle=… OpenNew=…; lift targets N/M method(s)` and names any unresolved one (`:119-130`); an unresolved lift target degrades but is not critical — it costs one lifted method, not the player side. Fires into `GUARD ACTIVITY:` whenever patches are lifted or restored (`:283,332`). |
 | `encounter-loop-guard` | `encounter-loop-guard.contract` | no | Reports **healthy** when BT is absent, degraded when BT is present but `BattleSyncBehavior` / `ApplyEncounterRequestNow` is missing (`Payload/EncounterLoopGuard.cs:83,114-121`). Its `inert — BannerlordTogether not loaded` detail is on the healthy path, so it is discarded and never printed — read the stand-down off the *missing* `[ENCOUNTER-GUARD] … loop breaker active` load line (`:116`) instead. Fires into `GUARD ACTIVITY:` when the breaker trips (`:219`). |
 | `deployment-guards` | `deployment-guards.contract` | **yes** | Verifies after `PatchAll` that our finalizers really sit on `SetupTeams` and `FinishDeployment` (`Payload/DeploymentCrashGuards.cs:35-43`). Documented limitation, restated in the load line itself (`:43-44`): the finalizers suppress the CTD, they do **not** restore the missing player-side troops — auto battle mode is what prevents an empty player side (`:14-18`). |
@@ -257,17 +269,16 @@ Self-test names follow `<component>.contract`; the three exceptions are `pregnan
 `stash-sync.loopback` and `client-bootstrap-fix.wiring`, which prove a pipeline rather than a
 decision table.
 
-What does not reliably reach `MOD HEALTH:` — never for the first three rows, and **conditionally**
-for the rest, where a silent `Apply` return removes the component from the line entirely:
+What does not reliably reach `MOD HEALTH:` — never for the first row, and **conditionally** for
+the second, where a silent `Apply` return removes the component from the line entirely. Until
+2026-09-04 this table had six more rows — the player-identity guard, the bootstrap watch, the four
+time fixes, and the two BT-gated guards that vanished on a no-BT launch; all of them report now,
+the BT-gated ones as healthy *inert — BannerlordTogether not loaded* until the retry resolves them:
 
 | Component | What it reports | Where it does show up |
 |---|---|---|
-| `PlayerIdentityGuard`, `BootstrapWatch` | no `Diag.Report`, no self-test — but each now calls `SelfHealing.RecordFire` on every correction / handled abort (`Payload/PlayerIdentityGuard.cs:89`, `Payload/BootstrapWatch.cs:80`) | `GUARD ACTIVITY:` — `player-identity-guard`, `bootstrap-watch` — and their own tags, e.g. `[IDENTITY]` |
-| `TimeEnforcementGuard`, `MapClickSpeedKeeper`, `TimeFlowPatch`, `ShareTimeControl` | nothing | their own tags only: `[TIME-GUARD]`, `[CLICK-SPEED]`, `[TIME-FLOW]`, `[SHARE-TIME]` |
 | `PeerDetection`, `PayloadEntry` | nothing of their own | `PeerDetection.Snapshot()` embedded in other components' lines |
 | `StealthHideoutAdvisor` | **conditional** — reports normally on a current game build (`Payload/StealthHideoutAdvisor.cs:59`, `[STEALTH] … advisor active on N method(s)`); absent only on an older build without `HideoutAmbushMissionController`, where `Apply` returns first (`:37-40`) | normally `MOD HEALTH:` + `stealth-hideout-advisor.contract`; on an older build, nothing |
-| `BackgroundTickBudgetGuard` | **conditional** — returns before any `Diag.Report` when `BannerlordTogether.CoopSubModule` is absent (`Payload/BackgroundTickBudgetGuard.cs:57-61`), so on a no-BT launch the component vanishes *including* its `critical: true` path (`:66`) | its tag `[TICK-GUARD]`, and `bg-tick-budget-guard` in `GUARD ACTIVITY:` |
-| `JoinSyncPauseEscape` | **conditional** — returns when `CoopSubModule` cannot be resolved (`Payload/JoinSyncPauseEscape.cs:69-73`) | its tag `[JOIN-ESCAPE]` |
 
 The two deployment finalizers keep their **own** fire ids, `setup-teams-guard` and
 `finish-deployment-guard` (`Payload/DeploymentCrashGuards.cs:106,127`), under the single

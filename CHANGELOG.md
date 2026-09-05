@@ -124,9 +124,48 @@ battle works at all with the default configuration.
   detail saying 'inert', 'not loaded' or 'older game build' is on purpose*. A clean line is
   unchanged: `MOD HEALTH: <n> active, all resolved`. Harness change — next launch.
 - **New health components reported:** `battle-mode`, `encounter-loop-guard`, `deployment-guards`,
-  `party-ai-guard`, `hero-creation-guard`, `movementorder-typeinit`, each with a matching
-  `<component>.contract` self-test under `selfTest=true`. The two deployment finalizers keep their
-  existing fire ids `setup-teams-guard` and `finish-deployment-guard`.
+  `party-ai-guard`, `hero-creation-guard`, `movementorder-typeinit`, and in a second pass
+  `map-click-speed`, `time-flow`, `time-enforcement-guard`, `share-time-control`,
+  `player-identity-guard` and `bootstrap-watch` — each with a matching `<component>.contract`
+  self-test under `selfTest=true` that pins the game/BT members it depends on **and** its decision
+  table (the veto, neutralize, grant, suppress and correction rules are now pure functions the test
+  exercises). After this pass every guard, fix and advisor reports; only the tracers, `PayloadEntry`
+  and `PeerDetection` do not. The two deployment finalizers keep their existing fire ids
+  `setup-teams-guard` and `finish-deployment-guard`.
+- **No guard vanishes from `MOD HEALTH:` any more when BannerlordTogether is absent or loads late.**
+  `TimeEnforcementGuard`, `BackgroundTickBudgetGuard`, `JoinSyncPauseEscape` and `ShareTimeControl`
+  used to return silently when BT's type was not there yet, which made a no-BT launch (or a late BT
+  load) indistinguishable from a broken guard. They now report healthy as
+  *inert — BannerlordTogether not loaded*, or degraded when BT **is** loaded and the member is
+  missing. `ShareTimeControl` also no longer latches a "not yet" as a permanent miss.
+- **Health is keyed by component, and re-checked at game start.** `Diag.Report` replaces an earlier
+  entry for the same id instead of appending, so a guard that resolved on the module-screen /
+  game-start retry is counted once, as resolved. A third `MOD HEALTH:` line, tagged
+  *re-checked at game start, after the late-BannerlordTogether retries*, prints the settled
+  picture; read that one. Harness change — next launch.
+- **Every tracer prints a load line, the empty case included.** `[ROLE]` used to go silent when
+  `CoopSession` was missing and `[COOP-BATTLE]` printed its count only when it hooked something;
+  both now print, and the empty line says whether BT is absent or renamed the type.
+- **The time fixes read their flags through `GuardConfig`.** `timeAlwaysFlows` and
+  `shareTimeControl` had private regex readers of their own; they now go through the same
+  `GuardConfig.Bool` as every other key (same file, same defaults).
+
+### Hot-reload (dev only)
+
+- **Battle-mode's lifted-patch stash survives a reload.** It used to be a payload static, so a reload
+  in `battleMode=solo` stranded BannerlordTogether's lifted battle patches until restart. The stash
+  now lives in the harness shared-state bag (`battle-mode.stash`) as plain records — a payload class
+  has a fresh identity every generation, so only BCL/Harmony types may cross a reload — and the
+  apply line reports `inherited N stashed foreign patch(es)`. `battle-mode.contract` fails if the
+  stash is not bag-backed.
+- **Birth sync survives a mid-campaign reload.** The host's birth listener was subscribed only from
+  the game's `OnGameStart`, which a reload never sees again, and the previous generation's listener
+  stayed attached (Harmony's `UnpatchAll` does not remove campaign event listeners). A new
+  generation now subscribes from `Apply` when a campaign is already running, first removing the
+  previous generation's listener through the event's `ClearListeners(object)` — the owner object is
+  published to the shared-state bag (`pregnancy-sync.listener-owner`) for exactly that — and a
+  retired generation's handler returns early. The first reload after upgrading from an older build
+  cannot find the previous owner; restart once.
 
 ### Battle-load crash (root-cause fix)
 

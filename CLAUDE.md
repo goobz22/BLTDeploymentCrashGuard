@@ -59,9 +59,15 @@ The conforming skeleton, the id convention and the full `critical:` call-site li
   stamp never ran.
 - **Every `Apply` exit path reports**, "target type not found" included: a silent return is missing
   from `MOD HEALTH:`, reading as *not built*. A config-disabled guard reports
-  `(component, true, "disabled by config")` — off on purpose is healthy. Tracers are exempt: their
-  load line *is* their health report, so print the resolved count. What still never reaches
-  `MOD HEALTH:` is the maintained table in `docs/DIAGNOSTICS.md` § *What `MOD HEALTH:` does not cover*.
+  `(component, true, "disabled by config")` — off on purpose is healthy; a BT-gated guard whose type
+  has not loaded yet reports `(component, true, "inert — BannerlordTogether not loaded")` and lets
+  the module-screen / game-start retry re-report — health is keyed by id, the latest report wins.
+  Tracers are exempt: their load line *is* their health report, so print the resolved count, zero
+  included. What still never reaches `MOD HEALTH:` is the maintained table in
+  `docs/DIAGNOSTICS.md` § *What `MOD HEALTH:` does not cover*.
+- **State that must outlive a payload generation** goes in the harness `ISharedState` bag as BCL
+  types only (`object[]` records, strings, `MethodInfo`s) — a payload class has a fresh identity
+  every generation (`BattleMode.StashKey`, `PregnancySyncGuard` listener owner).
 - **Fail open** — wrap every patch body; the catch returns the vanilla-preserving value; `return null`
   from a finalizer only for a deliberate suppressor; a depth counter decrements in a **finalizer**,
   never a postfix; reflect (`AccessTools`) so a game/BT update degrades, not crashes.
