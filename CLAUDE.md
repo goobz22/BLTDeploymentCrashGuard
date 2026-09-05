@@ -95,8 +95,8 @@ first; add what you prove.
   `Payload/JoinSyncPauseEscape.cs:69-73` when BT is not loaded;
   `Payload/StealthHideoutAdvisor.cs:37-40` on an older game build). The table in
   `docs/DIAGNOSTICS.md` § *What `MOD HEALTH:` does not cover* is the maintained list; wire new code
-  up instead of joining it. `PlayerIdentityGuard` is the known reset-convention exception: no `OnMissionInit`, it
-  resets in `Tick` via `ReferenceEquals(Mission.Current, _lastMission)`
+  up instead of joining it. `PlayerIdentityGuard` is the known reset-convention exception: no
+  `OnMissionInit`, it resets in `Tick` via `ReferenceEquals(Mission.Current, _lastMission)`
   (`Payload/PlayerIdentityGuard.cs:29,49-51`).
 - **Hazard:** `Campaign.set_TimeControlMode` carries three of our prefixes (`TimeEnforcementGuard`,
   `MapClickSpeedKeeper`, `TimeTrace` when tracing) and Harmony runs every one even when another
