@@ -180,7 +180,8 @@ The namespace split is real and matters for `AccessTools.TypeByName` lookups —
 
 ### `Mission.SpawnTroop` — enumerate, never name the signature
 
-`Mission.SpawnTroop` has **exactly one** declaration in the installed build: a 15-argument instance
+`Mission.SpawnTroop` has **exactly one** declaration in the installed build (re-probed 2026-09-04):
+a 15-argument instance
 method returning `Agent` (`Inspect.exe TaleWorlds.MountAndBlade.dll TaleWorlds.MountAndBlade.Mission`
 → ``method Agent SpawnTroop(IAgentOriginBase, Boolean, Boolean, Boolean, Boolean, Int32, Int32,
 Boolean, Boolean, Nullable`1, Nullable`1, String, ItemObject, FormationClass, Boolean)``). Patch it
@@ -286,13 +287,13 @@ treating it as a property is a silent reflection failure that quietly disables t
 
 - `Formation.set_PlayerOwner(v)` ⇒ `SetControlledByAI(v == null)`. Reassigning `PlayerOwner` also
   flips AI control of that formation (`Payload/PlayerIdentityGuard.cs:127-133`).
-- `Formation.SetControlledByAI(bool isControlledByAI, bool enforceNotSplittableByAI)` is a
-  **single** declaration — the one-argument call seen in C# is the optional second parameter, so a
-  reflection lookup must ask for `new[] { typeof(bool), typeof(bool) }`
+- `Formation.SetControlledByAI(bool isControlledByAI, bool enforceNotSplittableByAI)` is a **single**
+  declaration (re-probed 2026-09-04) — the one-argument call seen in C# is the optional second
+  parameter, so a reflection lookup must ask for `new[] { typeof(bool), typeof(bool) }`
   (`Payload/SiegeCommandGuard.cs:93`; `Inspect` on `Formation` returns the one line
-  `method Void SetControlledByAI(Boolean, Boolean)`). It **early-returns when the value is
-  unchanged** (`IL_0001 call get_IsAIControlled; IL_0007 beq -> IL_00C7`), so only real flips do
-  anything and a tracer must compare against `IsAIControlled` to log anything meaningful
+  `method Void SetControlledByAI(Boolean, Boolean)`). It **early-returns when the value is unchanged**
+  (`IL_0001 call get_IsAIControlled; IL_0007 beq -> IL_00C7`), so only real flips do anything and a
+  tracer must compare against `IsAIControlled` to log anything meaningful
   (`Payload/ControlTrace.cs:139-154`). The second argument is passed `false` when a guard takes a
   formation back (`Payload/SiegeCommandGuard.cs:428`).
 - `Team.SetPlayerRole(bool isPlayerGeneral, bool isPlayerSergeant)` — the player's battle role is
@@ -376,7 +377,7 @@ parties' troops by class, so the mask is empty and the client commands nothing. 
 folds host party into formations I–IV and client into V–VIII so each block is pure. Remote player
 hero id via BT's session ghost-hero string id. Further BT internals: `docs/BT-INTERNALS.md`.
 
-Evidence: `Payload/CoopCommandSplit.cs:19-31` (the IL decode), `:33-35` (the I–IV / V–VIII split),
+Evidence: `Payload/CoopCommandSplit.cs:19-31` (the IL decode), `:33-36` (the I–IV / V–VIII split),
 `:324-326,:351` (`GhostHeroStringId` read through `PeerDetection.ReadCoopStaticString`);
 `CHANGELOG.md:29-38`.
 Members: `SpNativeBattleHostMissionBehavior.IsClientFormationCommandApproved`,
@@ -651,7 +652,8 @@ frame-starvation hang needs a **time** guard, not an exception guard
   (`Payload/MapIncidentCrashGuard.cs:231-233`).
 - **`IncidentEffect.Consequence()` is the single choke point every incident effect flows through**,
   returning `List<TextObject>`; `Incident.InvokeOption(int)` is the campaign entry point behind the
-  option-click handler and **also** returns `List<TextObject>`. It has no overloads — the guard
+  option-click handler and **also** returns `List<TextObject>`. It has no overloads (re-probed
+  2026-09-04: `NameSearch` on `TaleWorlds.CampaignSystem.dll` returns one row) — the guard
   resolves it by bare name and then **asserts** that return type before patching, so a future build
   that reshapes the method cannot be bound blind. Both are patchable as a family-wide safety net
   (`Payload/MapIncidentCrashGuard.cs:83-98,:279,:294`; `CHANGELOG.md:257-259`).
@@ -903,7 +905,9 @@ sibling of this class of bug is in
 
 Signature needed to bind a Harmony finalizer: `GetBehaviors` returns its results through **by-ref
 parameters** — `ref AiBehavior bestAiBehavior, ref IInteractablePoint behaviorObject,
-ref CampaignVec2 bestTargetPoint`. `CampaignVec2` lives in `TaleWorlds.CampaignSystem` — it is
+ref CampaignVec2 bestTargetPoint`. `CampaignVec2` lives in `TaleWorlds.CampaignSystem`
+(re-probed 2026-09-04: `NameSearch` returns the single type `TaleWorlds.CampaignSystem.CampaignVec2`,
+with no `.Map` variant) — it is
 `IInteractablePoint` that lives in `TaleWorlds.CampaignSystem.Map`, so the finalizer's file needs
 **both** usings (`Payload/PartyAiCrashGuard.cs:4-5` for the finalizer at `:101-102`) — and it is a
 **value type**, so `default(CampaignVec2)` is a valid substitute.
@@ -948,7 +952,8 @@ build (`Payload/ClanScreenCrashGuard.cs:58-60`).
 `TaleWorlds.CampaignSystem.ViewModelCollection.ClanManagement.Categories.ClanPartiesVM` drives the
 tab, through `GetNewPartyLeaderCandidates` (the leader popup list), `GetCanCreateNewParty` (button
 enable + a `TextObject disabledReason`) and
-`CreateNewClanParty(Hero newLeader, int partyGoldLowerThreshold)` — the threshold argument is the
+`CreateNewClanParty(Hero newLeader, int partyGoldLowerThreshold)` (signature re-probed 2026-09-04;
+`Inspect` returns `method Void CreateNewClanParty(Hero, Int32)`) — the threshold argument is the
 `ClanFinanceModel.PartyGoldLowerThreshold` value the VM already computed, and the mod sidesteps the
 signature by resolving the method by name only
 (`Payload/ClanPartyCreationAdvisor.cs:46,:72-88,:103,:171`).
@@ -1276,10 +1281,12 @@ directory and probing there resolves the type and its members, including
 [§4](#the-map-click-speed-downgrade). `Modules/Native` was the missing piece.
 
 So: treat `NOT FOUND` as **inconclusive** until the closure resolves, and never record "the game
-update removed this member" on a bare probe miss. The same artefact hid
-`SandBox.View.Missions.MissionConversationCameraView` ([§10](#10-agents-and-visuals)) and
-`Hero.get_StealthEquipment`, which `IlDump` then showed live at
-`HideoutAmbushMissionController::AfterStart` IL_0052.
+update removed this member" on a bare probe miss. The same artefact hides
+`SandBox.View.Missions.MissionConversationCameraView` ([§10](#10-agents-and-visuals)): a `NameSearch`
+of `SandBox.View.dll` in its own module folder returns **nothing** for that name, and the same search
+in the closure directory returns `TYPE SandBox.View.Missions.MissionConversationCameraView`.
+`IlDump` is not affected the same way — it reads the metadata directly, which is why it can show,
+for example, `Hero::get_StealthEquipment` at `HideoutAmbushMissionController::AfterStart` IL_0052.
 
 ### Enumerating patch targets by name
 
