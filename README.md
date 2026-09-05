@@ -1395,13 +1395,9 @@ record):
   `[COOP-BATTLE]` captures which shape the battle took. All of these need a live multi-player
   session to reproduce further.
 - **Dev only (hot-reload)** — reloading leaks ~1–3 MB per generation (an old assembly cannot unload
-  on .NET Framework), harness changes and load-time fixes such as #9 need a fresh launch, and
-  #15's foreign-patch stash does not survive a reload, so reloading while `battleMode=solo` can
-  leave BannerlordTogether's battle patches lifted for the rest of the session. Reloading
-  *mid-campaign* also drops birth sync (#16) for the rest of the session: the host's birth listener
-  is subscribed only from the game's `OnGameStart`, which does not fire again on a reload, so the
-  new generation never subscribes and the previous generation's listener is never removed. Reload
-  at the main menu, or restart, before testing birth sync. Detail: `HOTRELOAD.md`.
+  on .NET Framework), and harness changes and load-time fixes such as #9 need a fresh launch. Since
+  this release a reload while `battleMode=solo` keeps BannerlordTogether's lifted battle patches
+  restorable, and a mid-campaign reload keeps birth sync (#16) working. Detail: `HOTRELOAD.md`.
 
 ## License
 
