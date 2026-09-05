@@ -200,7 +200,9 @@ taken at `StartBattle` — the game-start decision never removed any, and missio
 pre-mission half had run (`Payload/BattleMode.cs:24-34`, the field-evidence paragraph in the class
 header). The two chokepoints are hooked by `BattleMode` itself, always-on
 (`Payload/BattleMode.cs:110-150`); the lifecycle order the mod hangs on is
-[below](#modulegame-lifecycle-the-mod-hangs-on) (`Payload/PayloadEntry.cs:115-158`).
+[below](#modulegame-lifecycle-the-mod-hangs-on) (`Payload/PayloadEntry.cs:117-159`, where the
+`module-screen`, `game-start` and `mission-init` decisions are each still taken — they are cheap and
+correct, just not sufficient on their own).
 
 Consequence for the pattern, not just for this mod: a "decide once at game start" hook is
 structurally wrong for anything that reacts to another mod's Harmony patches, because module load
