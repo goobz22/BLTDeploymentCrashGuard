@@ -51,6 +51,9 @@ namespace BLTDeploymentCrashGuard
                 BattleMode.Apply(harmony); // always-on battle chokepoints (StartBattle/OpenNew) + health/self-test
                 EncounterLoopGuard.Apply(harmony);
                 MapClickSpeedKeeper.Apply(harmony);
+                ShareTimeControl.Apply(); // tick-driven; Apply only registers health + self-test and resolves BT members if BT is already up
+                PlayerIdentityGuard.Apply(); // tick-driven corrector; Apply pins its mission/agent members + registers the self-test
+                BootstrapWatch.Apply(); // log scanner; Apply registers its health + parser self-test
                 ClientHeroCreationGuard.Apply(harmony);
                 ClanScreenCrashGuard.Apply(harmony);
                 IllnessDeathGuard.Apply(harmony);
@@ -134,6 +137,10 @@ namespace BLTDeploymentCrashGuard
             BattleMode.DecideAndApply(Harmony, "game-start");
             PregnancySync.PregnancySyncGuard.OnGameStart(); // per-campaign host birth listener
             CoopHeroIdentityLock.OnGameStart(); // arm the this-machine's-hero claim for the loaded campaign
+            // Health is keyed by component, so the late-BannerlordTogether retries above have
+            // replaced any "inert — not loaded" entries by now: print the settled picture once per
+            // campaign start, after the apply-time line that could not yet know.
+            Log.Info(Diag.HealthSummary() + " [re-checked at game start, after the late-BannerlordTogether retries]");
         }
 
         public void OnMissionInit()

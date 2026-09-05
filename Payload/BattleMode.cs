@@ -77,6 +77,10 @@ namespace BLTDeploymentCrashGuard
         private const string PlayerEncounterType = "TaleWorlds.CampaignSystem.Encounters.PlayerEncounter";
         private const string MissionStateType = "TaleWorlds.MountAndBlade.MissionState";
 
+        /// <summary>One lifted foreign patch. Stored across payload generations as a plain
+        /// object[] record (<see cref="ToRecord"/>) because this class's identity is per-generation
+        /// (each payload build has a unique assembly name) while the harness bag outlives it —
+        /// only BCL/Harmony types may cross a reload.</summary>
         private sealed class StashedPatch
         {
             public string Owner;
@@ -85,9 +89,65 @@ namespace BLTDeploymentCrashGuard
             public int Priority;
             public string[] Before;
             public string[] After;
+
+            public object[] ToRecord()
+            {
+                return new object[] { Owner, Kind, PatchMethod, Priority, Before, After };
+            }
+
+            public static StashedPatch FromRecord(object[] record)
+            {
+                if (record == null || record.Length < 6 || !(record[0] is string) || !(record[1] is int) || !(record[2] is MethodInfo))
+                {
+                    return null;
+                }
+                return new StashedPatch
+                {
+                    Owner = (string)record[0],
+                    Kind = (int)record[1],
+                    PatchMethod = (MethodInfo)record[2],
+                    Priority = record[3] is int ? (int)record[3] : 0,
+                    Before = record[4] as string[],
+                    After = record[5] as string[]
+                };
+            }
         }
 
-        private static readonly Dictionary<MethodBase, List<StashedPatch>> Stash = new Dictionary<MethodBase, List<StashedPatch>>();
+        /// <summary>Harness-bag key. The stash MUST outlive a payload generation: patches lifted by
+        /// generation N are still lifted when generation N+1 applies, and only this record lets N+1
+        /// put them back (the hot-reload gap closed 2026-09-04; HOTRELOAD.md § Trade-offs).</summary>
+        internal const string StashKey = "battle-mode.stash";
+        private static Dictionary<MethodBase, List<object[]>> _localStash;
+
+        private static Dictionary<MethodBase, List<object[]>> Stash
+        {
+            get
+            {
+                ISharedState shared = PayloadEntry.Shared;
+                if (shared == null)
+                {
+                    return _localStash ?? (_localStash = new Dictionary<MethodBase, List<object[]>>());
+                }
+                Dictionary<MethodBase, List<object[]>> bag = shared.GetObject(StashKey) as Dictionary<MethodBase, List<object[]>>;
+                if (bag == null)
+                {
+                    bag = new Dictionary<MethodBase, List<object[]>>();
+                    shared.Set(StashKey, bag);
+                }
+                return bag;
+            }
+        }
+
+        /// <summary>Number of stashed foreign patches — after a reload, what the previous generation left lifted.</summary>
+        internal static int StashedCount()
+        {
+            int n = 0;
+            foreach (KeyValuePair<MethodBase, List<object[]>> entry in Stash)
+            {
+                n += entry.Value.Count;
+            }
+            return n;
+        }
         private static readonly HashSet<string> WarnedUnresolved = new HashSet<string>(StringComparer.Ordinal);
         private static string _configMode;
         private static bool? _lastVanilla;
@@ -289,12 +349,13 @@ namespace BLTDeploymentCrashGuard
         private static void EnsureCoop(string reason, string detail)
         {
             int restored = 0;
-            foreach (KeyValuePair<MethodBase, List<StashedPatch>> entry in Stash)
+            foreach (KeyValuePair<MethodBase, List<object[]>> entry in Stash)
             {
                 Patches current = Harmony.GetPatchInfo(entry.Key);
-                foreach (StashedPatch stashed in entry.Value)
+                foreach (object[] record in entry.Value)
                 {
-                    if (IsPresent(current, stashed))
+                    StashedPatch stashed = StashedPatch.FromRecord(record);
+                    if (stashed == null || IsPresent(current, stashed))
                     {
                         continue;
                     }
@@ -465,16 +526,17 @@ namespace BLTDeploymentCrashGuard
                     continue;
                 }
                 foreignOwners.Add(patch.owner);
-                List<StashedPatch> list;
+                List<object[]> list;
                 if (!Stash.TryGetValue(method, out list))
                 {
-                    list = new List<StashedPatch>();
+                    list = new List<object[]>();
                     Stash[method] = list;
                 }
                 bool known = false;
-                foreach (StashedPatch existing in list)
+                foreach (object[] record in list)
                 {
-                    if (existing.Kind == kind && existing.Owner == patch.owner && existing.PatchMethod == patch.PatchMethod)
+                    StashedPatch existing = StashedPatch.FromRecord(record);
+                    if (existing != null && existing.Kind == kind && existing.Owner == patch.owner && existing.PatchMethod == patch.PatchMethod)
                     {
                         known = true;
                         break;
@@ -490,7 +552,7 @@ namespace BLTDeploymentCrashGuard
                         Priority = patch.priority,
                         Before = patch.before,
                         After = patch.after
-                    });
+                    }.ToRecord());
                 }
             }
         }
@@ -591,11 +653,13 @@ namespace BLTDeploymentCrashGuard
                           ParseMode("{\"soloVanillaBattles\": false}") == "coop" &&
                           ParseMode("{\"soloVanillaBattles\": true}") == "auto" &&
                           ParseMode("{}") == "auto" && ParseMode(null) == "auto";
-            bool pass = targets && chokepoints && decisions && owners && config;
+            // The stash must live in the harness bag, or a reload in battleMode=solo strands BT's patches.
+            bool stash = PayloadEntry.Shared == null || ReferenceEquals(Stash, PayloadEntry.Shared.GetObject(StashKey));
+            bool pass = targets && chokepoints && decisions && owners && config && stash;
             return SelfHealing.TestResult.Of("battle-mode.contract", pass,
-                pass ? "all " + resolved + " lift targets + both chokepoints re-resolved; decision table, owner filter and config parser verified"
+                pass ? "all " + resolved + " lift targets + both chokepoints re-resolved; decision table, owner filter, config parser and bag-backed stash verified"
                      : "targets=" + targets + " (" + resolved + "/" + ExpectedTargetMethods() + (unresolved.Count > 0 ? ", missing " + string.Join(", ", unresolved.ToArray()) : "") + ")" +
-                       " chokepoints=" + chokepoints + " decisions=" + decisions + " owners=" + owners + " config=" + config);
+                       " chokepoints=" + chokepoints + " decisions=" + decisions + " owners=" + owners + " config=" + config + " stash=" + stash);
         }
 
         private static bool HasMethod(Type type, string name)
