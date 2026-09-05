@@ -76,6 +76,20 @@ battle works at all with the default configuration.
   handled BT bootstrap abort. Both were previously invisible, so there was no way to tell whether
   the upstream bug they cover is still happening (which is how each becomes retirable).
 
+- **The identity swap is now caught at its source, not only cleaned up after.** Proven from IL:
+  the game grants player control in exactly one place (`Mission.SpawnTroop`, to the troop that is
+  `Game.PlayerTroop`) and `Hero.MainHero` is derived from that same field, so in a campaign
+  mission a player-control assignment to any other hero is never vanilla. `PlayerIdentityGuard`
+  now has a log-only prefix on `Agent.set_Controller` that records such a write once per agent as
+  `[IDENTITY] SWAP AT SOURCE … the caller is the bug:` with the live game stack, and counts it as
+  `player-identity-swap-source` in `GUARD ACTIVITY:`. The corrector is unchanged; this line is
+  the evidence that names the BannerlordTogether (or engine) code a real fix has to change.
+- **`[TICK-GUARD]` prints the frame delta beside the tick cost.** BannerlordTogether hands its
+  background campaign tick the raw frame time, exactly as vanilla does on the map, and the campaign
+  turns it into game time proportionally — so a long frame feeds the next tick more work. The
+  throttle already breaks that loop (the long frame is the one it skips); the number is now in the
+  log so a future freeze report shows whether it happened.
+
 ### Diagnostics
 
 - **Log flood at co-op setup fixed.** With `tracing=true`, while you sit on the co-op setup menu

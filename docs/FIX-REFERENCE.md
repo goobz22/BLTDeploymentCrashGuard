@@ -1870,12 +1870,26 @@ impostor back to AI (`controlled.Controller = AgentControllerType.AI`, `:94-97`)
 impostor (`:128-134`). Each repair step is in its own try/catch so a partial repair still
 completes; the player is told via `Log.Screen` (`:139`).
 
-**Patched members.** None patched. Written: `Agent.Controller`
-(`AgentControllerType.AI`/`.Player`), `Team.GeneralAgent`, `OrderController.Owner` (via
-`Team.PlayerOrderController`), `Formation.PlayerOwner` (over
+**Swap at the source (2026-09-04).** Alongside the corrector, `Apply` installs one always-on
+prefix on `Agent.set_Controller` (`ControllerPrefix`). Proven from IL: `Mission.SpawnTroop` grants
+`Controller = Player` only when `isPlayerSide && troop == Game.Current.PlayerTroop`, and
+`Hero.MainHero` is derived from that same field (`docs/ENGINE-NOTES.md` § *Agent identity and
+control*), so in a campaign mission a `Player` assignment to any **other hero's** agent is never
+vanilla — it is the swap happening. The prefix logs it once per agent (`TraceThrottle`) as
+`[IDENTITY] SWAP AT SOURCE: Player control assigned to another hero's agent … the caller is the
+bug:` followed by the **live** game stack, and records fire id `player-identity-swap-source`.
+Non-hero troops are ignored (BannerlordTogether's soldier mode may legitimately control one), as
+is our own hand-back. That line is the evidence the polling corrector could never produce: it
+names the BT (or engine) caller, which is the prerequisite for retiring the corrector with a fix
+at that caller. The filter is the pure `IsForeignHeroTakeover(value, isCampaign, agentIsHero,
+agentIsLocalHero)`, pinned by the self-test.
+
+**Patched members.** `Agent.set_Controller` (void prefix, log-only). Written by the corrector:
+`Agent.Controller` (`AgentControllerType.AI`/`.Player`), `Team.GeneralAgent`,
+`OrderController.Owner` (via `Team.PlayerOrderController`), `Formation.PlayerOwner` (over
 `Team.FormationsIncludingSpecialAndEmpty`). Read: `Mission.Current`, `Mission.MainAgent`,
 `Mission.Agents`, `Mission.PlayerTeam`, `Mission.Scene`,
-`Mission.GetMissionBehavior<DeploymentMissionController>()`.
+`Mission.GetMissionBehavior<DeploymentMissionController>()`, `Hero.MainHero`.
 
 **Limitations.** Capped at `MaxCorrectionsPerMission = 5` per mission so it can never fight
 another system in a loop (`:27`, `:54-57`). Skipped entirely while a
@@ -1894,9 +1908,10 @@ evidence BannerlordTogether fixed the swap and this net can be removed. `CHANGEL
 records it explicitly as a reactive safety net, not a root fix; the shared-save load case is
 superseded by `CoopHeroIdentityLock`.
 
-**Self-test.** `player-identity-guard.contract` — the eight engine members by name plus the
-correction decision table. **Health** `player-identity-guard` (degraded only when a member is
-missing). Fire id `player-identity-guard`, one per correction.
+**Self-test.** `player-identity-guard.contract` — the eight engine members by name, the
+correction decision table and the swap-at-source filter. **Health** `player-identity-guard`
+(degraded only when a member is missing). Fire ids `player-identity-guard`, one per correction,
+and `player-identity-swap-source`, one per foreign-hero takeover seen at the setter.
 
 ### Co-op hero identity lock (shared-save host handoff)
 
@@ -4766,6 +4781,7 @@ Fire ids with **no** health component and no self-test — they appear only in `
 
 | Fire id | Source file | README item | Why it has no health entry |
 |---|---|---|---|
+| `player-identity-swap-source` | `Payload/PlayerIdentityGuard.cs` § `ControllerPrefix` | 13 | Reported under the `player-identity-guard` component; a separate id so `GUARD ACTIVITY:` distinguishes "the swap was seen at the setter" from "the corrector had to act". |
 | `setup-teams-guard` | `Payload/DeploymentCrashGuards.cs:106` | 1 | Reported under the shared `deployment-guards` component; separate fire ids keep the two finalizers' counts distinguishable. |
 | `finish-deployment-guard` | `Payload/DeploymentCrashGuards.cs:127` | 1 | As above. |
 

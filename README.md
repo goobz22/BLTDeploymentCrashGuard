@@ -349,8 +349,11 @@ Nothing is written outside those two folders, so there is nothing else to clean 
     a brief moment as the wrong character. Since v1.3.2 every correction is fire-counted, so
     `player-identity-guard=N` appears in `GUARD ACTIVITY:` — that is how you tell whether the swap
     still happens on your machine at all (and, one day, that it can be retired). Since this release
-    it also reports `player-identity-guard` in `MOD HEALTH:` and runs a
-    `player-identity-guard.contract` self-test that pins the mission/agent members it writes.
+    it also reports `player-identity-guard` in `MOD HEALTH:`, runs a
+    `player-identity-guard.contract` self-test that pins the mission/agent members it writes, and
+    watches the one place the swap can happen: the game grants player control only to your own
+    hero, so when anything assigns it to another hero the guard logs
+    `[IDENTITY] SWAP AT SOURCE …` with the live stack — the line that names the code to fix.
 
 14. **Time fixes (co-op)** — four separate fixes:
     - *Keep fast-forward through map clicks* — exactly one transition is vetoed: the
@@ -1289,27 +1292,35 @@ record):
   **0/0 "Formation is currently empty"** with a full, unwounded party. #1 removes the crash and #15
   restores playable battles by lifting BT's battle patches when you are alone; BT should roster and
   spawn the player side (or skip its deployment gate) when no client is connected.
-- **Client bootstrap abort** — the action-cache audit false-negative (fix #10 primes it; BT
-  should regenerate the cache instead of aborting). It recurs on **every** client launch because BT
-  never persists a good cache, and a session that already aborted cannot be repaired — only a
-  restart helps, because BT never re-verifies.
+- **Client bootstrap abort** — the action-cache audit false-negative. BT's audit would fail on
+  **every** client launch, and a session that aborted cannot be repaired because BT never
+  re-verifies; fix #10 makes the audit pass each time, before it can abort, so with this mod
+  nothing recurs. What remains upstream is cosmetic: BT never persists the cache it validated, so
+  #10 does its work on every launch instead of once.
 - **Co-op spawn identity swap is repaired, not prevented** — BT's spawn sync can still build the
   *other* player's hero as the local player agent while your own hero spawns AI-controlled. #13
   detects this within a second and hands control back, but it is a safety net: expect a brief moment
-  as the wrong character, and at most five corrections per battle. A BT-side fix would spawn the
-  local hero as player-controlled in the first place.
+  as the wrong character, and at most five corrections per battle. Since this release #13 also
+  catches the swap **at the source**: vanilla only ever makes your own hero the player, so the
+  moment anything assigns player control to another hero the log records who did it, with the live
+  stack (`[IDENTITY] SWAP AT SOURCE …`). Send that line — it names the code that needs the
+  BT-side fix.
 - **Background campaign tick has no time budget** — throttled by #19; BT should bound the
   per-frame cost. The throttle is a burst pause, not a smooth slowdown: after one over-budget tick
   the background world stops for as long as that tick took (up to 10 s), so the co-op map can
   visibly lag during a heavy battle.
 - **Army-siege attach gap** — a peer's party rides a besieging army without joining the
   besieger camp, so every `PlayerSiege`-derived path reads null on that peer (#8 repairs the
-  incident case; `[INCIDENT-GUARD] REPAIRED` lines are the field evidence).
+  incident case; `[INCIDENT-GUARD] REPAIRED` lines are the field evidence). BannerlordTogether
+  manages camp membership deliberately — it has its own patch that blocks camp joins on the host
+  for settlements it holds frozen for sync — so this mod does not force the join from the peer's
+  side; that would fight BT's siege sync rather than fix it.
 - **Map incidents are not synced** — an incident's world effects apply only on the peer that
   confirmed it.
 - **Siege command on a co-op client** — BannerlordTogether's host decides which formations a
-  client may command (`BattleCommandAssignmentPacket` — observed in the field, not yet pinned to
-  BT's IL), so #24 stands down on a machine BT positively reports as a client and logs a
+  client may command (`BattleCommandAssignmentPacket`, pinned to BT's IL: a per-player
+  `AllowedFormationMask` plus general/sergeant flags, re-sent by the host), so #24 stands down on
+  a machine BT positively reports as a client and logs a
   `[SIEGE-CMD] co-op CLIENT` note. With #25 the client still commands its own block (V–VIII); to
   command every formation of your own castle's defense including the host's and the garrison's,
   host the session (#21 hands the host role back and forth on a shared save).

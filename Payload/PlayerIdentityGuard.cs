@@ -33,11 +33,12 @@ namespace BLTDeploymentCrashGuard
         private static int _lastCheckTick;
         private static bool _testRegistered;
 
-        /// <summary>Tick-driven, so Apply only pins the mission/agent members the corrector writes
-        /// (compile-bound, but a game update renaming one would otherwise surface as a caught
-        /// MissingMethodException every second) and registers the self-test (added 2026-09-04 —
-        /// this guard used to be invisible to MOD HEALTH).</summary>
-        internal static void Apply()
+        /// <summary>Tick-driven corrector plus one always-on capture at the source. Apply pins the
+        /// mission/agent members the corrector writes (compile-bound, but a game update renaming one
+        /// would otherwise surface as a caught MissingMethodException every second), registers the
+        /// self-test, and installs <see cref="ControllerPrefix"/> on Agent.set_Controller — the
+        /// culprit capture (2026-09-04).</summary>
+        internal static void Apply(Harmony harmony)
         {
             try
             {
@@ -47,16 +48,67 @@ namespace BLTDeploymentCrashGuard
                     SelfHealing.RegisterTest(SelfTest);
                 }
                 string missing = MissingMembers();
-                Diag.Report(Component, missing.Length == 0, missing.Length == 0 ? "" : "missing " + missing + " (game update?)");
                 if (missing.Length > 0)
                 {
                     Log.Info(Tag + " member(s) missing — corrector inactive: " + missing + " (game update?)");
+                    Diag.Report(Component, false, "missing " + missing + " (game update?)");
+                    return;
                 }
+                if (!_culpritHooked && harmony != null)
+                {
+                    harmony.Patch(AccessTools.PropertySetter(typeof(Agent), "Controller"),
+                        new HarmonyMethod(typeof(PlayerIdentityGuard), nameof(ControllerPrefix)));
+                    _culpritHooked = true;
+                }
+                Diag.Report(Component, true, "");
+                Log.Info(Tag + " identity corrector active (once a second in campaign missions); swap-at-source capture on Agent.set_Controller=" + _culpritHooked);
             }
             catch (Exception ex)
             {
                 Log.Info(Tag + " apply failed: " + ex.Message);
                 Diag.Report(Component, false, ex.Message);
+            }
+        }
+
+        private static bool _culpritHooked;
+
+        /// <summary>The swap, caught in the act. Proven from IL (2026-09-04): Mission.SpawnTroop grants
+        /// Controller=Player only when `isPlayerSide && troop == Game.Current.PlayerTroop`, and
+        /// Hero.MainHero is DERIVED from that same field (get_MainHero → CharacterObject.PlayerCharacter
+        /// → Game.PlayerTroop), so in a campaign mission vanilla never makes another hero's agent the
+        /// player. When it happens anyway, the write goes through this setter — logging it here with
+        /// the live stack names the caller that the once-a-second corrector can only clean up after.
+        /// Throttled per agent; ignores non-hero troops (BT's soldier mode may legitimately control
+        /// one) and our own corrector's hand-back.</summary>
+        internal static bool IsForeignHeroTakeover(AgentControllerType value, bool isCampaign, bool agentIsHero, bool agentIsLocalHero)
+        {
+            return value == AgentControllerType.Player && isCampaign && agentIsHero && !agentIsLocalHero;
+        }
+
+        private static void ControllerPrefix(Agent __instance, AgentControllerType value)
+        {
+            try
+            {
+                if (__instance == null || value != AgentControllerType.Player)
+                {
+                    return;
+                }
+                Hero main = Hero.MainHero;
+                BasicCharacterObject character = __instance.Character;
+                bool known = character != null && main != null && main.CharacterObject != null;
+                if (!known || !IsForeignHeroTakeover(value, Campaign.Current != null, character.IsHero, ReferenceEquals(character, main.CharacterObject)))
+                {
+                    return;
+                }
+                string who = Describe(__instance);
+                SelfHealing.RecordFire("player-identity-swap-source");
+                TraceThrottle.Emit("identity-culprit:" + who,
+                    Tag + " SWAP AT SOURCE: Player control assigned to another hero's agent " + who + " (local hero is " +
+                    (main != null && main.Name != null ? main.Name.ToString() : "?") + ") — vanilla only ever does this for Game.PlayerTroop; the caller is the bug:\n" +
+                    RuntimeDiagnostics.LiveGameStack(2));
+            }
+            catch
+            {
             }
         }
 
@@ -96,10 +148,16 @@ namespace BLTDeploymentCrashGuard
                 !NeedsCorrection(false, false, false, false, 0) &&   // our hero is not in this mission
                 !NeedsCorrection(false, false, true, true, 0) &&     // our agent is the controlled one after all
                 !NeedsCorrection(false, false, true, false, MaxCorrectionsPerMission); // cap reached
-            bool pass = members && decisions;
+            bool capture =
+                IsForeignHeroTakeover(AgentControllerType.Player, true, true, false) &&    // another hero made the player: the swap
+                !IsForeignHeroTakeover(AgentControllerType.AI, true, true, false) &&       // only Player assignments matter
+                !IsForeignHeroTakeover(AgentControllerType.Player, false, true, false) &&  // campaign missions only
+                !IsForeignHeroTakeover(AgentControllerType.Player, true, false, false) &&  // a plain troop (BT soldier mode) is not the swap
+                !IsForeignHeroTakeover(AgentControllerType.Player, true, true, true);      // our own hero is never a takeover
+            bool pass = members && decisions && capture;
             return SelfHealing.TestResult.Of(Component + ".contract", pass,
-                pass ? "Mission/Agent/Team/OrderController/Formation/Hero members and the correction decision table verified"
-                     : "members=" + members + (members ? "" : " (missing " + missing + ")") + " decisions=" + decisions);
+                pass ? "Mission/Agent/Team/OrderController/Formation/Hero members, the correction decision table and the swap-at-source filter verified"
+                     : "members=" + members + (members ? "" : " (missing " + missing + ")") + " decisions=" + decisions + " capture=" + capture);
         }
 
         private static Agent FindMyAgent(Mission mission, BasicCharacterObject myCharacter)

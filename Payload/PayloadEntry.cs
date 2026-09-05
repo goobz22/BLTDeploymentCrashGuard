@@ -52,7 +52,7 @@ namespace BLTDeploymentCrashGuard
                 EncounterLoopGuard.Apply(harmony);
                 MapClickSpeedKeeper.Apply(harmony);
                 ShareTimeControl.Apply(); // tick-driven; Apply only registers health + self-test and resolves BT members if BT is already up
-                PlayerIdentityGuard.Apply(); // tick-driven corrector; Apply pins its mission/agent members + registers the self-test
+                PlayerIdentityGuard.Apply(harmony); // tick-driven corrector + the swap-at-source capture on Agent.set_Controller
                 BootstrapWatch.Apply(); // log scanner; Apply registers its health + parser self-test
                 ClientHeroCreationGuard.Apply(harmony);
                 ClanScreenCrashGuard.Apply(harmony);

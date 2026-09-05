@@ -662,6 +662,19 @@ The chain that can become multi-second is
 frame-starvation hang needs a **time** guard, not an exception guard
 (`UPSTREAM_BUG_REPORT.md:153-154`).
 
+**How much campaign time one tick simulates is proportional to the frame delta (2026-09-04, IL).**
+`Campaign.RealTick(float realDt)` → `TickMapTime(realDt)`: `_dt = 0.25 × realDt`, multiplied by
+`SpeedUpMultiplier` in the fast-forward modes and zeroed while the main party is waiting in the
+stoppable modes, then `MapTimeTracker.Tick(4320 × _dt)`. Vanilla's map path
+(`MapState.OnMapModeTick(dt)`) passes the raw frame delta with no clamp, and so does
+BannerlordTogether's background tick (`docs/BT-INTERNALS.md` § *9. Background campaign tick*).
+`Campaign.Tick()` then runs `CampaignPeriodicEventManager.TickPeriodicEvents` (hourly / daily /
+quarter-daily, one call each per tick), `MobilePartyHourlyTick`, `EncounterManager.Tick` and
+`TickPartialHourlyAi`. Consequence: a long frame feeds the next tick a proportionally larger slice
+of campaign time, which is the feedback loop a frame-starvation hang rides on — and why an
+equal-time throttle that skips the frame right after a heavy tick (the long one) is enough to break
+it (`Payload/BackgroundTickBudgetGuard.cs` § `Prefix`, which now records that `dt`).
+
 ### Map incidents (IL-proven, 2026-08-30; game 1.4.8+)
 
 - Game build **1.4.8 added map incidents** in the namespace `TaleWorlds.CampaignSystem.Incidents`

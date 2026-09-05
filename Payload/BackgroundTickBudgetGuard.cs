@@ -101,8 +101,15 @@ namespace BLTDeploymentCrashGuard
             return Math.Min(elapsedMs, MaxBlockMs);
         }
 
-        private static bool Prefix()
+        /// <summary>The frame delta BT hands to the campaign — IL (2026-09-04): OnApplicationTick passes
+        /// its dt straight through, exactly as vanilla MapState.OnMapModeTick does, and
+        /// Campaign.TickMapTime advances game time by 0.25 × dt × speed. Logged with every throttle
+        /// line so the field evidence shows whether a heavy tick was fed a long frame.</summary>
+        private static float _lastDt;
+
+        private static bool Prefix(float dt)
         {
+            _lastDt = dt;
             if (Stopwatch.GetTimestamp() < _blockedUntilTimestamp)
             {
                 _throttledCalls++;
@@ -137,7 +144,7 @@ namespace BLTDeploymentCrashGuard
                 if (_lastLogTick == 0 || now - _lastLogTick >= 5000 || now < _lastLogTick)
                 {
                     _lastLogTick = now;
-                    Log.Info("[TICK-GUARD] BT background campaign tick took " + elapsedMs + "ms (budget " + BudgetMs +
+                    Log.Info("[TICK-GUARD] BT background campaign tick took " + elapsedMs + "ms (frame dt " + _lastDt.ToString("F3") + "s; budget " + BudgetMs +
                              "ms) — pausing background ticking " + blockMs + "ms so the game stays responsive" +
                              " (worst " + _worstMs + "ms, " + _throttledCalls + " throttled call(s) this session)");
                 }
