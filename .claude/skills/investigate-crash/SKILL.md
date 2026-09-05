@@ -43,7 +43,7 @@ without losing the repro (`Payload/PayloadEntry.cs:211-232`). Log:
 
 Grep targets: `MOD HEALTH`, `[SELFTEST]`, `[HOTRELOAD]`, `[BATTLE-MODE]`, `[PEER-DETECT]`, then the
 per-fix tags — `[SIEGE-CMD]`, `[COOP-CMD]`, `[IDENTITY]`, `[TIME-GUARD]`, `[MO-INIT]`, `[CHARGEN]`,
-`[DIAG]` (`docs/DIAGNOSTICS.md` § 2 *Log tags (grep targets)*, `README.md:461-490`). In this order:
+`[DIAG]` (`docs/DIAGNOSTICS.md` § 2 *Log tags (grep targets)*, `README.md` § *Diagnostics & robustness*, the grep-tag legend). In this order:
 
 - `MOD HEALTH` — "NOT resolved" means a member was renamed and that fix is silently inert
   (`Harness/Diag.cs:87-99`); with `[SELFTEST] FAIL` (broken logic or a pinned member) that alone can
@@ -53,7 +53,7 @@ per-fix tags — `[SIEGE-CMD]`, `[COOP-CMD]`, `[IDENTITY]`, `[TIME-GUARD]`, `[MO
   Check `GUARD ACTIVITY:` and the fix's own tag before concluding it did not apply
   (`docs/DIAGNOSTICS.md` § 2 *What `MOD HEALTH:` does not cover*).
 - `[PEER-DETECT]` — a BannerlordTogether type lookup that failed; the README calls it the earliest
-  warning of a BT update (`README.md:475-476`). It is logged only when `PeerDetection.FindCoopType`
+  warning of a BT update (`README.md` § *Diagnostics & robustness*, the `[PEER-DETECT]` legend row). It is logged only when `PeerDetection.FindCoopType`
   **throws** (`Payload/BattleMode.cs:486-489`); a type that is simply absent returns `null` with no
   line at all (`BattleMode.cs:483,490`), so a quiet `[PEER-DETECT]` does not clear a rename either.
 - `[DIAG]` — memory + engine-state heartbeat every ~15 s and at each mission transition; shows a
@@ -136,10 +136,10 @@ Copy **all three** files — `BLTDeploymentCrashGuard.dll`, `BLTDeploymentCrashG
 half-updated `dist/` ships a mismatch silently.
 
 **Fresh launch vs hot-reload:** while the game runs the harness DLL is locked, so deploy the payload
-alone — it reloads via shadow copy (`[HOTRELOAD] gen2 applied`, `HOTRELOAD.md:37-47`). Harness
+alone — it reloads via shadow copy (`[HOTRELOAD] gen2 applied`, `HOTRELOAD.md` § *A) Build-and-drop*). Harness
 changes and load-time fixes need a **fresh launch** (`CLAUDE.md` § *Version + release*); the ones
 that cannot be reloaded — `MovementOrderTypeInitGuard`, `ClientBootstrapFix`, `ClanModeSoloFix` —
-are listed at `HOTRELOAD.md:139-147`.
+are listed at `HOTRELOAD.md` § *What a reload cannot do (fresh launch required)*.
 
 ## 8. Do not push until it is proven
 

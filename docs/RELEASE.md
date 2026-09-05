@@ -35,8 +35,9 @@ item: the README and the changelog are the only things telling a player to updat
 
 ## 1. Bump the version
 
-Edit `<Version>` in `Directory.Build.props`. That is the only place. `SubModule.xml` and
-`dist/SubModule.xml` are written by the build — do not hand-edit either.
+Edit `<Version>` in `Directory.Build.props`. That is the only place. The harness build re-stamps
+`SubModule.xml`; step 2 places `dist/SubModule.xml` — do not hand-edit either, and never copy into
+`dist/` by hand: the build deliberately never writes there.
 
 ## 2. Run `tools/release.sh`
 
@@ -53,8 +54,9 @@ Close the game first. The script:
 3. checks the repo-root `SubModule.xml` is stamped `v<Version>` — it aborts with *"SubModule.xml is
    not stamped v… — build the harness first"* if not. **This is why a version bump must be followed
    by a full run, not `--no-build`:** only a harness build re-stamps the XML;
-4. copies all three files into the game module and into `dist/`. A file the running game holds open
-   is reported as `LOCKED (game running?)` and left alone rather than failing the copy;
+4. copies all three files into the game module — a file the running game holds open is reported as
+   `LOCKED (game running?)` and left alone rather than failing the copy — then into `dist/`, where
+   the copies are unguarded and a failure aborts the run;
 5. writes `dist/manifest.txt` — `version=<Version>` followed by one `<sha256>  <file>` line per
    shipped file — and prints it;
 6. verifies the SHA256 of each file matches across **build output, `dist/` and the game module**.
@@ -88,10 +90,8 @@ or a bug affected:
 - `docs/FIX-REFERENCE.md` § *Character-creation lifecycle tracer and first-chance capture* — the
   documentation-divergence note about the v1.3.2 changelog wording.
 - `docs/MODDING-PITFALLS.md` § *P5 · Trusting the changelog or the spec over the code*.
-- `CLAUDE.md` § *Version + release* — the note that `MovementOrderTypeInitGuard` shipped in v1.3.2
-  without a changelog entry.
-- The `Payload/` headers that say "until v1.3.2" (`BattleMode.cs`, `EncounterLoopGuard.cs`,
-  `TracePatches.cs`).
+- The `Payload/` headers that date a change to v1.3.2 — `BattleMode.cs` and `EncounterLoopGuard.cs`
+  ("until v1.3.2"), `TracePatches.cs` ("literally true since v1.3.2").
 
 ## 4. Write the changelog entry
 
@@ -103,6 +103,15 @@ which is marked inline with a bracketed *(corrected \<date\>)*.
 
 `MovementOrderTypeInitGuard` shipped with README, tag, ENGINE-NOTES and FIX-REFERENCE all landed and
 no changelog entry at all. The changelog is the step that gets forgotten; do it here, not last.
+
+**Cite `CHANGELOG.md` by version heading, never by line.** A new entry goes on top, so it shifts
+every line below it and every `CHANGELOG.md:<line>` anchor pointing into the file. The stable form is
+`CHANGELOG.md` § *v1.3.2 — solo battles fixed with tracing off…*. Enumerate existing line anchors
+with:
+
+```bash
+grep -rn 'CHANGELOG\.md:[0-9]' --include=*.md --include=*.cs . | grep -v '^./CHANGELOG.md'
+```
 
 ## 5. Doc rows for anything new
 
@@ -154,6 +163,7 @@ Read `Modules/BLTDeploymentCrashGuard/CrashGuard.log` and require all of:
 | Type-init fix took | `[MO-INIT] MovementOrder initialized safely (patched 1 site(s))` — **1**, not 0 or 2 |
 | Chokepoints hooked | `[BATTLE-MODE] battle chokepoints hooked — chokepoints StartBattle=True OpenNew=True; lift targets 24/24 method(s)` |
 | Deployment guards armed | `[DEPLOY-GUARD] deployment crash guards active — SetupTeams=guarded FinishDeployment=guarded` |
+| Loop breaker armed | `[ENCOUNTER-GUARD] encounter-request loop breaker active (<n> method(s); local-Finish stamp hooked=True)` — `True`, not `False`. With BannerlordTogether absent the component is healthy and inert and the line does not appear |
 
 Then **load one battle hosting solo** and confirm both:
 
@@ -215,13 +225,31 @@ mod writes and renames*).
 
 ## Known doc-sync items
 
-Two documents still describe the pre-2026-09-04 release process and should be corrected the next
-time they are touched:
+Documents that still contradict what shipped. Correct each the next time that file is touched; this
+list exists so the next reader does not re-derive a problem that is already fixed.
 
 - `docs/FIX-REFERENCE.md` § *Single-version-source enforcement (`StampSubModuleVersion`)* — its
   *Limitations* say `dist/SubModule.xml` "must be copied by hand as part of deploy". The
   `StampSubModuleVersion` target now copies the stamped XML into `dist/` on every harness build.
-- `CLAUDE.md` § *Version + release* and `.claude/rules/blt-harness.md` § *Deploy = the release* —
-  both describe a manual `md5sum` cross-check and state that nothing cross-checks the
-  harness/payload pair. `tools/release.sh` does the SHA256 cross-check, and `dist/manifest.txt` plus
-  `install.cmd` carry it through to the player.
+- `.claude/rules/blt-harness.md` § *Deploy = the release* — still describes a manual `md5sum`
+  cross-check and states that nothing cross-checks the harness/payload pair. `tools/release.sh` does
+  the SHA256 cross-check, and `dist/manifest.txt` plus `install.cmd` carry it through to the player.
+  The same section also still says `collect-diagnostics.cmd` searches only 6 Steam-library paths;
+  all three scripts now carry the same 11, enforced by `tools/lint-scripts.sh`. Its line anchors
+  have drifted too: `install.cmd:9,58-60` for the download (the repo URL is `install.cmd:12`, the
+  three `curl` lines are `install.cmd:63-65`), `install.cmd:51-56` for the `.prev` rename (it is
+  `install.cmd:56-61`), `collect-diagnostics.cmd:14-19` for the path list (it is
+  `collect-diagnostics.cmd:22-33`), and `HOTRELOAD.md:139-147` for the reload-cannot-do list — cite
+  that one as `HOTRELOAD.md` § *What a reload cannot do (fresh launch required)*, since its line
+  anchors have drifted before.
+- `docs/BT-INTERNALS.md` § *14. BT behaviours a companion mod's fixes are built on* and
+  `docs/FIX-REFERENCE.md` § *Illness death guard* still say the `noSickness` guard "stands down"
+  when the third-party NoSickness mod is present. It never did — it coexists, and
+  `Harness/GuardConfig.cs:92` now says so. The false claim was removed from the generated
+  `guardconfig.json` text in this release and corrected inline in `CHANGELOG.md` § *v1.2.x — fixes
+  added on top of the harness/payload split*; `docs/MODDING-PITFALLS.md` already flags it as live
+  drift.
+- Every `CHANGELOG.md:<line>` anchor in `docs/BT-INTERNALS.md`, `docs/ENGINE-NOTES.md`,
+  `docs/FIX-REFERENCE.md`, `docs/MODDING-GUIDE.md` and `docs/MODDING-PITFALLS.md` predates the
+  rewritten v1.3.2 entry and now lands on unrelated prose. Re-anchor each to its version heading per
+  § *4. Write the changelog entry*, whose `grep` enumerates them.
