@@ -9,6 +9,32 @@ tracing and read `CrashGuard.log`).
 
 ---
 
+## 0. Crash triage checklist (start here)
+
+Work down the list; do not skip to a fix.
+
+1. **Collect the evidence.** `Modules/BLTDeploymentCrashGuard/CrashGuard.log` plus its rotated
+   segments (`.1 … .6`), TaleWorlds' `rgl_log_*` / `rgl_log_errors_*` / `watchdog_*`, and any
+   ButterLib report (§4). `collect-diagnostics.cmd` gathers them in one pass.
+2. **Identify the build that produced the log.** The banner line carries the mod version, harness
+   build time and session id; `[HOTRELOAD] genN applied` says which payload generation was live at
+   the moment of the crash (health and tracer lines are re-printed per generation).
+3. **Read the mod's own verdict before the exception.** `MOD HEALTH:`, `[SELFTEST]`,
+   `[BATTLE-MODE]` — but see § *What `MOD HEALTH:` does not cover* below: absence is not health.
+4. **Turn tracing on and reproduce** (§2). Then check the tracer load lines: a tracer that hooked
+   0 methods produces silence that is easy to misread as "the bug did not happen".
+5. **Find the first-chance exception, not the last log line** (§2): inner-exception chain,
+   `CONTEXT:`, and the `LIVE …` frames that name the trigger.
+6. **Ask whether the throw is a re-throw.** A failed type initializer is cached; if a constructor
+   probe never fired yet the crash still happens, the type was poisoned earlier — look at load time.
+7. **Locate it in IL** (§1): `NameSearch` → `Inspect` → `IlDump` → `Callers`, until the null-deref,
+   ordering or type-init fact is proven in the installed assembly.
+8. **Name both locations** — the manifested frame and the root cause — before editing anything.
+9. **Fix at the root, then prove it from the log again**: the guard's own tag fires, `MOD HEALTH:`
+   lists it, and the crash no longer reproduces on a clean launch.
+
+---
+
 ## 1. Static analysis — read the installed game
 
 Use the IL probes in `../tools/il-probes/` (build once, see that folder's README). Typical flow:
@@ -63,6 +89,50 @@ Diagnostics added in the 2026-09-04 investigation:
 | `[MO-INIT]` | The `MovementOrder` type-init guard's result at load: "initialized safely" or "already poisoned". |
 | `[DIAG]` | Memory + engine-state heartbeat (WS/private/managed, GC counts, handles, threads; Mission/GameState/Campaign) every ~15 s and at every mission transition. Use it to see a leak/balloon build up before a symptom. |
 | `[repeat] … ×N` | A high-frequency line coalesced by `TraceThrottle` (see below). |
+
+### Tracer load lines — a tracer's health report
+
+Tracers do not call `Diag.Report`; their load line **is** their health report, printed once per
+payload generation from `Apply`. Read it before trusting anything a tracer did or did not log:
+
+| Line | Meaning |
+|---|---|
+| `[CHARGEN] character-creation tracer active on N method(s); …` | hooked N methods; the same line states whether the session-wide first-chance capture armed. |
+| `[CONTROL] control tracer active on N method(s)` | as above for input/control (`ControlTrace.cs:45`). |
+| `[COOP-BATTLE] battle-formation tracer active on N method(s)` | BT battle-command tracing is live. |
+| `[TIME] time-control tracer active on N method(s)` | the `Campaign.set_TimeControlMode` / lock tracer. |
+| `[TIME-GUARD] shared-pause tracer active on N method(s)` | the shared-pause observation hooks. |
+| `[TRACE] tracer active on N method overload(s)` | the generic tracer in `TracePatches.cs`. |
+| `[<TAG>] type not found: X` | the type could not be resolved by name — a game/BT rename, nothing was hooked. |
+| `[<TAG>] no patchable method T.M` | the type resolved, the method did not. |
+
+**N = 0 (or a `type not found` line) means the trace is empty by construction.** With by-name
+reflection everywhere, a silent hook miss is indistinguishable from "the bug did not happen", so a
+tracer that prints no count is a tracer you cannot reason from — fix the count first.
+
+### What `MOD HEALTH:` does not cover
+
+`MOD HEALTH:` is built from the components that called `Diag.Report`, and is printed once per
+generation from `PayloadEntry.Apply` (with `[SELFTEST]` following when `"selfTest": true`). A
+component that never reports is **absent**, not healthy — and several shipped ones never report:
+
+| Component | What it reports | Where it does show up |
+|---|---|---|
+| `Payload/DeploymentCrashGuards.cs` (fix #1: `SetupTeams`, `FinishDeployment` finalizers) | nothing — attribute classes applied by `harmony.PatchAll(typeof(PayloadEntry).Assembly)`, with no `Apply`, no `Diag.Report`, no `SelfHealing.RegisterTest` and untagged log lines | `GUARD ACTIVITY:` — `setup-teams-guard`, `finish-deployment-guard` (`SelfHealing.RecordFire`), plus the `SUPPRESSED crash in …` line |
+| `BattleMode` / `PeerDetection`, `PayloadEntry` | no health, no self-test; nothing pins the `BattleTargets` member list, and `EnumerateTargets` skips an unresolvable type with a bare `continue` | `[BATTLE-MODE]` lines and the patch counts they carry |
+| `PlayerIdentityGuard`, `BootstrapWatch` | nothing at all (no report, no self-test, no `RecordFire`) | their own tags only, e.g. `[IDENTITY]` |
+| `ClientHeroCreationGuard` | `RecordFire("hero-creation-guard")` only | `GUARD ACTIVITY:` |
+| `StealthHideoutAdvisor` | returns silently when `HideoutAmbushMissionController` is missing (older game build) | nothing — it is simply absent |
+
+Practical consequences when reading a log:
+
+- A fix missing from `MOD HEALTH:` may still be loaded. Check `GUARD ACTIVITY:` and the fix's own
+  tag before concluding it did not apply.
+- A BT or game rename under `BattleTargets` produces **fewer patched methods, not a degraded
+  component** — compare the `[BATTLE-MODE]` counts against a known-good log rather than trusting
+  the health line.
+- `GUARD ACTIVITY:` counts accumulate across hot-reload generations while `MOD HEALTH:` is reset per
+  generation (`HOTRELOAD.md`), so the two lines answer different questions.
 
 ### Reading a first-chance exception line
 
