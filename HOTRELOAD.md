@@ -7,16 +7,29 @@ The mod is split into two assemblies:
 - **Payload** (`Payload/` → `BLTDeploymentCrashGuard.Payload.dll`) — all guards/fixes/tracers.
   Hot-reloadable. This is where ~all iteration happens.
 
-Every generation loads via `Assembly.LoadFrom` on a per-generation shadow copy (LoadFrom-context binding is required — byte-loading binds 0Harmony to the wrong copy via app-base probing); each payload build compiles under a unique assembly NAME (`BLTDeploymentCrashGuard.Payload.b<stamp>`, published under the fixed file name) because the LoadFrom context dedups simple-named assemblies by name only — a unique version alone is collapsed (field-proven 2026-09-01). Fresh statics and a per-generation Harmony
-owner id (`bltogether.crashguard.gen{N}`); the new generation is applied first, then the previous
-generation is `UnpatchAll`'d — a failed reload keeps the previous generation, so the game is never
-left unpatched.
+In build-and-drop mode a generation loads via `Assembly.LoadFrom` on a shadow copy written per
+reload **attempt**, not per generation (`Harness/HotReload.cs:294,307-314`). LoadFrom-context
+binding is required — byte-loading binds 0Harmony to the wrong copy via app-base probing — but a
+byte load (`Assembly.Load(bytes)`, `HotReload.cs:331-339`) remains the fallback when the shadow
+load fails or dedups, and it is the *only* path under `"hotReloadRoslyn": true` (see
+*Mode (B) is not a superset of mode (A)* below).
+
+Each payload build compiles under a unique assembly NAME (`BLTDeploymentCrashGuard.Payload.b<stamp>`,
+published under the fixed file name) because the LoadFrom context dedups simple-named assemblies by
+name only — a unique version alone is collapsed (field-proven 2026-09-01). Every generation gets
+fresh statics and a per-generation Harmony owner id (`bltogether.crashguard.gen{N}`); the new
+generation is applied first, then the previous generation is `UnpatchAll`'d — a failed reload keeps
+the previous generation, so the game is never left unpatched.
 
 Three consequences of that design that are easy to trip over:
 
 - **`InternalsVisibleTo` can never cover the payload.** It matches by exact assembly name, and the
-  payload's name changes every build, so the shared harness surface (`Log`, `Diag`, `GuardConfig`,
-  `SelfHealing`, `ISharedState`) is **public** on purpose. Do not "tidy" it back to internal.
+  payload's name changes every build (`Payload/BLTDeploymentCrashGuard.Payload.csproj:23`), so the
+  shared harness surface (`Log`, `Diag`, `GuardConfig`, `SelfHealing`, `ISharedState`) is **public**
+  on purpose. Do not "tidy" it back to internal. A vestigial
+  `[assembly: InternalsVisibleTo("BLTDeploymentCrashGuard.Payload")]` is still in the tree at
+  `Harness/AssemblyInfo.cs:9`, under a lead comment (`:3-5`) that its own next lines correct — it is
+  inert, and its presence is not evidence the internal path works.
 - **An `AssemblyResolve` hook cannot fix a bad load context**, because the hook only runs when
   probing *fails*. Under byte-load, default-context probing *succeeds* against the game's own
   0Harmony — so the load context, not a resolver pin, is the fix.
@@ -94,8 +107,11 @@ clean):
   again; shared time control will try to grant again (`_grantedLogged`), the `[CLICK-SPEED]` /
   `[TIME-FLOW]` once-only lines reappear and the join-escape arm window restarts; the siege
   take-over's once-per-mission screen note can appear a second time in one battle,
-  and its refused-hand-off / stopped-shuffle counters restart at zero (they are per generation, not
-  per battle). `CoopCommandSplit` re-resolves both players' parties and re-announces the I–IV / V–VIII
+  and its refused-hand-off / stopped-shuffle counters restart at zero. Those counters are per
+  **battle** anyway — `SiegeCommandGuard.OnMissionInit` zeroes them
+  (`Payload/SiegeCommandGuard.cs:157-162`, called from `Payload/PayloadEntry.cs:138`) and the line
+  itself reads "this battle: …" (`:520`); a reload just zeroes them mid-battle as well.
+  `CoopCommandSplit` re-resolves both players' parties and re-announces the I–IV / V–VIII
   split, and the BT release hooks are re-scanned with their one retry.
 - In-flight deferred work. A reload while `ClanPartyCreationAdvisor` is waiting for a new clan party
   to settle silently drops the pending troop-screen open — the pending-timeout path never runs,
@@ -170,8 +186,11 @@ SubModule.xml still points at the harness; the harness loads the payload itself.
 - Harness changes need a restart.
 - Known Phase-B gap: `BattleMode`'s foreign-patch stash does not yet survive a reload — reloading
   while in `battleMode=solo` (vanilla, BT battle patches lifted) can leave them lifted. The stash is
-  a payload static, and every payload static is fresh per generation; state that must *survive* a
-  reload belongs in the harness `ISharedState` bag instead. Until it moves: iterate with
+  a payload static (`Payload/BattleMode.cs:75`), and every payload static is fresh per generation;
+  state that must *survive* a reload belongs in the harness `ISharedState` bag instead. The
+  `ISharedState` doc comment (`Harness/Contracts.cs:24-28`) already lists "BattleMode's
+  foreign-patch stash" among what the bag holds — that comment is aspirational, not current; the
+  code is the authority. Until it moves: iterate with
   `"battleMode": "coop"` (nothing is lifted, so nothing can be lost), or restart after a reload done
   in vanilla mode. Reloading in `battleMode=coop` is unaffected.
 - Known gap of the same family: `PregnancySyncGuard`'s host birth listener is subscribed in
