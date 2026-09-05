@@ -905,12 +905,11 @@ sibling of this class of bug is in
 
 Signature needed to bind a Harmony finalizer: `GetBehaviors` returns its results through **by-ref
 parameters** — `ref AiBehavior bestAiBehavior, ref IInteractablePoint behaviorObject,
-ref CampaignVec2 bestTargetPoint`. `CampaignVec2` lives in `TaleWorlds.CampaignSystem`
-(re-probed 2026-09-04: `NameSearch` returns the single type `TaleWorlds.CampaignSystem.CampaignVec2`,
-with no `.Map` variant) — it is
-`IInteractablePoint` that lives in `TaleWorlds.CampaignSystem.Map`, so the finalizer's file needs
-**both** usings (`Payload/PartyAiCrashGuard.cs:4-5` for the finalizer at `:101-102`) — and it is a
-**value type**, so `default(CampaignVec2)` is a valid substitute.
+ref CampaignVec2 bestTargetPoint`. `CampaignVec2` lives in `TaleWorlds.CampaignSystem` — re-probed
+2026-09-04: `NameSearch` returns the single type `TaleWorlds.CampaignSystem.CampaignVec2`, with no
+`.Map` variant. It is `IInteractablePoint` that lives in `TaleWorlds.CampaignSystem.Map`, which is why
+the finalizer's file needs **both** usings (`Payload/PartyAiCrashGuard.cs:4-5`, finalizer at
+`:101-102`). `CampaignVec2` is a **value type**, so `default(CampaignVec2)` is a valid substitute.
 
 The safe "hold at current position this tick" answer is `AiBehavior.Hold` with a null `behaviorObject`
 and the party's own `Position` as the target point.
@@ -952,11 +951,12 @@ build (`Payload/ClanScreenCrashGuard.cs:58-60`).
 `TaleWorlds.CampaignSystem.ViewModelCollection.ClanManagement.Categories.ClanPartiesVM` drives the
 tab, through `GetNewPartyLeaderCandidates` (the leader popup list), `GetCanCreateNewParty` (button
 enable + a `TextObject disabledReason`) and
-`CreateNewClanParty(Hero newLeader, int partyGoldLowerThreshold)` (signature re-probed 2026-09-04;
-`Inspect` returns `method Void CreateNewClanParty(Hero, Int32)`) — the threshold argument is the
-`ClanFinanceModel.PartyGoldLowerThreshold` value the VM already computed, and the mod sidesteps the
-signature by resolving the method by name only
-(`Payload/ClanPartyCreationAdvisor.cs:46,:72-88,:103,:171`).
+`CreateNewClanParty(Hero newLeader, int partyGoldLowerThreshold)` — **two** parameters, re-probed
+2026-09-04. The caller `OnNewPartyCreationOver` fills the second from
+`Campaign.Current.Models.ClanFinanceModel.PartyGoldLowerThreshold`, and `CreateNewClanParty` uses it
+as a gold floor: when `newLeader.Gold` is below it, `GiveGoldAction.ApplyBetweenCharacters` tops the
+leader up from `Hero.MainHero` before the party is spawned. The mod sidesteps the signature by
+resolving the method by name only (`Payload/ClanPartyCreationAdvisor.cs:46,:72-88,:103,:171`).
 
 Decoded from the installed build's IL (`Payload/ClanPartyCreationAdvisor.cs:19-28`;
 `CHANGELOG.md:86-98`; `README.md:193-197`):
@@ -1230,8 +1230,9 @@ into `%USERPROFILE%\Documents` with "crash" in the filename (`collect-diagnostic
 
 ### Target framework and the engine assembly split
 
-Both mod assemblies target **`net472`**, and a mod DLL must target `net472` to load
-(`Harness/BLTDeploymentCrashGuard.csproj:6`; `Payload/BLTDeploymentCrashGuard.Payload.csproj:6`).
+Both mod assemblies target **`net472`** (`Harness/BLTDeploymentCrashGuard.csproj:6`;
+`Payload/BLTDeploymentCrashGuard.Payload.csproj:6`), which is what a Bannerlord 1.4.8 module targets
+(`docs/MODDING-PITFALLS.md:412`; `docs/MODDING-GUIDE.md:51`).
 That is a *target framework*, not the runtime the process executes on: the two `.NET Framework 4.8`
 statements in [assembly binding](#assembly-binding-in-a-bannerlord-process-field-proven-2026-08-21--2026-09-01)
 above (no assembly unloading; the ButterLib/Roslyn bind conflict) are about the installed 4.x
@@ -1266,10 +1267,13 @@ string (`Payload/StealthHideoutAdvisor.cs:27`; `Payload/ConversationCameraCrashG
 ### A probe `NOT FOUND` is not proof of absence (2026-09-04)
 
 A probe that loads a target DLL whose **dependency closure does not resolve** silently returns a
-**partial** type list, so a member that exists reads as missing. The probes resolve references out of
-three hardcoded directories only — `Modules/BannerlordTogether`, `Modules/Bannerlord.Harmony` and the
-game bin (`tools/il-probes/Inspect/Inspect.cs:9-19`) — which is *not* the closure of a module
-assembly.
+**partial** type list, so a member that exists reads as missing. All the probes resolve references out
+of the same three hardcoded directories — `Modules/BannerlordTogether`, `Modules/Bannerlord.Harmony`
+and the game bin (`tools/il-probes/Inspect/Inspect.cs:9-10,:14-19`;
+`tools/il-probes/NameSearch/NameSearch.cs:9-10,:16-21`;
+`tools/il-probes/IlDump/IlDump.cs:12-13,:25-30`) — which is *not* the closure of an arbitrary module
+assembly, and `NameSearch` then keeps whatever survived a `ReflectionTypeLoadException`
+(`tools/il-probes/NameSearch/NameSearch.cs:29`).
 
 Reproduced: `Inspect.exe <Game>/Modules/SandBox/bin/Win64_Shipping_Client/SandBox.View.dll
 SandBox.View.Map.MapScreen` prints `NOT FOUND`, while `NameSearch` on the same DLL lists the **nested**
@@ -1280,13 +1284,16 @@ directory and probing there resolves the type and its members, including
 `HandleClickTimeChange(Boolean)` and `HandleLeftMouseButtonClick(...)` — the two asserted in
 [§4](#the-map-click-speed-downgrade). `Modules/Native` was the missing piece.
 
+The artefact is per-probe-invocation, not per-tool: `IlDump.exe <module>/SandBox.View.dll
+"SandBox.View.Map.MapScreen::HandleClickTimeChange"` also prints `TYPE NOT FOUND` from the module
+folder and dumps the IL from the closure directory. `IlDump` on `<module>/SandBox.dll` works
+unaided only because that assembly's own dependencies do resolve. `NameSearch` hides
+`SandBox.View.Missions.MissionConversationCameraView` ([§10](#10-agents-and-visuals)) the same way —
+no rows from the module folder, `TYPE SandBox.View.Missions.MissionConversationCameraView` from the
+closure directory.
+
 So: treat `NOT FOUND` as **inconclusive** until the closure resolves, and never record "the game
-update removed this member" on a bare probe miss. The same artefact hides
-`SandBox.View.Missions.MissionConversationCameraView` ([§10](#10-agents-and-visuals)): a `NameSearch`
-of `SandBox.View.dll` in its own module folder returns **nothing** for that name, and the same search
-in the closure directory returns `TYPE SandBox.View.Missions.MissionConversationCameraView`.
-`IlDump` is not affected the same way — it reads the metadata directly, which is why it can show,
-for example, `Hero::get_StealthEquipment` at `HideoutAmbushMissionController::AfterStart` IL_0052.
+update removed this member" on a bare probe miss.
 
 ### Enumerating patch targets by name
 
