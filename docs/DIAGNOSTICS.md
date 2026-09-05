@@ -188,29 +188,59 @@ zero:
 ### What `MOD HEALTH:` does not cover
 
 `MOD HEALTH:` is built from the components that called `Diag.Report`. It is printed from
-`PayloadEntry.Apply` (`Payload/PayloadEntry.cs:102`, with `[SELFTEST]` following when
+`PayloadEntry.Apply` (`Payload/PayloadEntry.cs:104`, with `[SELFTEST]` following when
 `"selfTest": true`) **and again inside the `[HOTRELOAD] genN applied` line**
 (`Harness/HotReload.cs:381`) — so a reloaded generation produces two copies and a fresh launch one;
 do not count `MOD HEALTH:` lines as generations. A component that never reports is **absent**, not
-healthy — and several shipped ones never report:
+healthy.
+
+The 2026-09-04 pass closed the worst of those holes. Six components that previously reported nothing
+now report health and register a self-test, so a rename under them now degrades the health line
+instead of passing silently:
+
+| Component id | Self-test | Critical? | Notes |
+|---|---|---|---|
+| `battle-mode` | `battle-mode.contract` | critical only when a chokepoint hook is missing | Detail carries `chokepoints StartBattle=… OpenNew=…; lift targets N/M method(s)` and names any unresolved one (`Payload/BattleMode.cs:120-130`). An unresolved lift target degrades but is not critical — it costs one lifted method, not the player side. |
+| `encounter-loop-guard` | `encounter-loop-guard.contract` | no | Reports healthy with detail `inert — BannerlordTogether not loaded` when BT is absent, and degraded when BT is present but `BattleSyncBehavior` / `ApplyEncounterRequestNow` is missing (`Payload/EncounterLoopGuard.cs:83,114-121`). |
+| `deployment-guards` | `deployment-guards.contract` | **yes** | Verifies after `PatchAll` that our finalizers really sit on `SetupTeams` and `FinishDeployment` (`Payload/DeploymentCrashGuards.cs:35-43`). |
+| `party-ai-guard` | `party-ai-guard.contract` | no | |
+| `hero-creation-guard` | `hero-creation-guard.contract` | no | Previously `RecordFire` only. |
+| `movementorder-typeinit` | `movementorder-typeinit.contract` | **yes** | The self-test pins the premise: struct + `beforefieldinit`, the ctor, exactly one transpiled site, and the null-safe helper (`Payload/MovementOrderTypeInitGuard.cs:65-92`). A **load-time** fix — a fresh launch, never hot-reload. |
+
+Self-test names follow `<component>.contract`; the three exceptions are `pregnancy-sync.loopback`,
+`stash-sync.loopback` and `client-bootstrap-fix.wiring`, which prove a pipeline rather than a
+decision table.
+
+What still never reaches `MOD HEALTH:`:
 
 | Component | What it reports | Where it does show up |
 |---|---|---|
-| `Payload/DeploymentCrashGuards.cs` (fix #1: `SetupTeams`, `FinishDeployment` finalizers) | nothing — attribute classes applied by `harmony.PatchAll(typeof(PayloadEntry).Assembly)`, with no `Apply`, no `Diag.Report`, no `SelfHealing.RegisterTest` and untagged log lines | `GUARD ACTIVITY:` — `setup-teams-guard`, `finish-deployment-guard` (`SelfHealing.RecordFire`), plus the `SUPPRESSED crash in …` line |
-| `BattleMode` / `PeerDetection`, `PayloadEntry` | no health, no self-test; nothing pins the `BattleTargets` member list, and `EnumerateTargets` skips an unresolvable type with a bare `continue` | `[BATTLE-MODE]` lines and the patch counts they carry |
-| `PlayerIdentityGuard`, `BootstrapWatch` | nothing at all (no report, no self-test, no `RecordFire`) | their own tags only, e.g. `[IDENTITY]` |
-| `ClientHeroCreationGuard` | `RecordFire("hero-creation-guard")` only | `GUARD ACTIVITY:` |
-| `StealthHideoutAdvisor` | returns silently when `HideoutAmbushMissionController` is missing (older game build) | nothing — it is simply absent |
+| `PlayerIdentityGuard`, `BootstrapWatch` | no `Diag.Report`, no self-test — but each now calls `SelfHealing.RecordFire` on every correction / handled abort (`Payload/PlayerIdentityGuard.cs:89`, `Payload/BootstrapWatch.cs:80`) | `GUARD ACTIVITY:` — `player-identity-guard`, `bootstrap-watch` — and their own tags, e.g. `[IDENTITY]` |
+| `TimeEnforcementGuard`, `MapClickSpeedKeeper`, `TimeFlowPatch`, `ShareTimeControl` | nothing | their own tags only: `[TIME-GUARD]`, `[CLICK-SPEED]`, `[TIME-FLOW]`, `[SHARE-TIME]` |
+| `PeerDetection`, `PayloadEntry` | nothing of their own | `PeerDetection.Snapshot()` embedded in other components' lines |
+| `StealthHideoutAdvisor` | returns before reporting when `HideoutAmbushMissionController` is missing — older game build (`Payload/StealthHideoutAdvisor.cs:36-41`) | nothing — it is simply absent |
+
+The two deployment finalizers keep their **own** fire ids, `setup-teams-guard` and
+`finish-deployment-guard` (`Payload/DeploymentCrashGuards.cs:106,127`), under the single
+`deployment-guards` health component: in `GUARD ACTIVITY:` you see which of the two fired, in
+`MOD HEALTH:` you see one component.
 
 Practical consequences when reading a log:
 
 - A fix missing from `MOD HEALTH:` may still be loaded. Check `GUARD ACTIVITY:` and the fix's own
   tag before concluding it did not apply. `GUARD ACTIVITY:` is itself throttled — at most one line
-  per 120 s, and only reprinted when the summary text changes (`Payload/PayloadEntry.cs:189-202`) —
+  per 120 s, and only reprinted when the summary text changes (`Payload/PayloadEntry.cs:191-211`) —
   so *its* absence is not evidence either; grep the tag and `SUPPRESSED crash in` too.
-- A BT or game rename under `BattleTargets` produces **fewer patched methods, not a degraded
-  component** — compare the `[BATTLE-MODE]` counts against a known-good log rather than trusting
-  the health line.
+- A BT or game rename under `BattleTargets` no longer passes silently: an unresolved lift target is
+  named in the `battle-mode` health detail and logged once as
+  `[BATTLE-MODE] lift target type not found: … — its BT patches cannot be lifted (game update?)`
+  or `lift target method not found: <Type>.<Method> (game update?)` (`Payload/BattleMode.cs:349,366`).
+  Still compare the `[BATTLE-MODE]` patch counts against a known-good log — a count that fell is the
+  earliest signal.
+- Read the `MOD HEALTH:` suffix rather than reacting to the count: when something is unresolved the
+  line appends *"(read each detail: a BannerlordTogether OR game update may have renamed a member; a
+  detail saying 'inert', 'not loaded' or 'older game build' is on purpose)"* (`Harness/Diag.cs:93`).
+  A degraded entry whose detail says `inert` or `not loaded` is a deliberate stand-down, not damage.
 - `GUARD ACTIVITY:` counts accumulate across hot-reload generations while `MOD HEALTH:` is reset per
   generation (`HOTRELOAD.md`), so the two lines answer different questions.
 
@@ -233,6 +263,110 @@ type-init throw may be a **re-throw** whose `CONTEXT` (mission live) differs fro
 (mission null, earlier). If a probe on the constructor never fires but the crash still happens,
 the type was poisoned before the probe/handler existed — look earlier (load time), not at the
 manifested frame.
+
+### A real log, annotated
+
+Verbatim from `Modules/BLTDeploymentCrashGuard/CrashGuard.log`, 2026-09-04. Every line below was
+copied out of that file unmodified; the excerpts come from two sessions on the same day.
+
+**The bracket after the timestamp is the session role**, set from the payload tick:
+`[?]` = not computed yet (everything logged before the first tick, i.e. the whole startup block),
+`[C]` client, `[H]` host with a peer connected, `[S]` solo — no remote peer
+(`Payload/PayloadEntry.cs:173-184`, `Harness/Log.cs:19,69`). A startup block is always `[?]`; a
+line that says `[S]` is authoritative that no peer was connected when it was written.
+
+#### A launch, start to first heartbeat (session `1265ffd7`)
+
+```
+2026-09-04 15:11:27.462 [?] ===== BLT Deployment Crash Guard v1.3.2 (harness build 2026-09-04 13:30) session=1265ffd7 =====
+2026-09-04 15:11:27.485 [?] payload build 15:07:49 applying on bltogether.crashguard.gen1
+2026-09-04 15:11:27.513 [?] [MO-INIT] MovementOrder constructed with no active mission — returned time 0 instead of crashing (this is the fix firing)
+2026-09-04 15:11:27.515 [?] [MO-INIT] MovementOrder initialized safely (patched 1 site(s)) — the beforefieldinit type-init battle crash is prevented for this session
+2026-09-04 15:11:29.475 [?] [BATTLE-MODE] VANILLA battles active (auto: confidently no session, apply) — removed 0 foreign patch(es)
+2026-09-04 15:11:29.476 [?] MOD HEALTH: 20 active, all resolved
+2026-09-04 15:11:29.477 [?] [SELFTEST] running 20 guard decision-logic test(s)…
+2026-09-04 15:11:29.504 [?] [SELFTEST] PASS siege-command-guard.contract — members re-resolved (incl. vanilla's siege AI-on default); hand-off decision table verified
+2026-09-04 15:11:29.520 [?] [SELFTEST] FAIL pregnancy-sync.loopback — threw: Object reference not set to an instance of an object.
+2026-09-04 15:11:29.531 [?] [SELFTEST] 19 passed, 1 failed
+2026-09-04 15:11:29.532 [?] [HOTRELOAD] gen1 applied (initial) | MOD HEALTH: 20 active, all resolved
+2026-09-04 15:11:30.926 [S] [DIAG] mem WS=3150MB priv=3592MB managed=87MB peakWS=3150MB gc0/1/2=246/49/11 handles=1864 threads=123 | Mission=null GameState=none Campaign=null
+2026-09-04 15:11:30.928 [S] GUARD ACTIVITY: none fired this session (nothing crashed on a guarded path)
+```
+
+| Line | What it settles |
+|---|---|
+| `===== … v1.3.2 (harness build 2026-09-04 13:30) session=1265ffd7 =====` | The build that produced everything below, and the session id that separates this launch from the next one in the same file. The **harness** build time is stamped here; it does not move when only the payload is redeployed. |
+| `payload build 15:07:49 applying on bltogether.crashguard.gen1` | The payload half — the pair that matters. The harness is 13:30 and the payload 15:07, which is normal during iteration and is exactly the pair `dist/manifest.txt` exists to keep honest when shipping. `gen1` = a fresh launch; `gen2`, `gen3`… are hot-reloads. |
+| `[MO-INIT] MovementOrder constructed with no active mission — returned time 0 instead of crashing (this is the fix firing)` | The guard **firing**, at load, before any mission — the type would otherwise have been poisoned here and every later `Formation.ResetAux` would re-throw the cached failure (see the next excerpt). |
+| `[MO-INIT] MovementOrder initialized safely (patched 1 site(s))` | The transpiler found exactly the one site it expects. A count other than 1 is the signal that the game build moved. |
+| `[BATTLE-MODE] VANILLA battles active (auto: confidently no session, apply) — removed 0 foreign patch(es)` | The decision, its **reason** (`apply` — the payload-load decision point), the confidence (`confidently no session`, from `PeerDetection`), and what it did: 0 patches removed, because BT has not installed its battle patches yet at load. Contrast with the `start-battle` line below. |
+| `MOD HEALTH: 20 active, all resolved` | Only the components that called `Diag.Report`. **This capture predates the 2026-09-04 health wiring** — a log from the current build lists `battle-mode`, `encounter-loop-guard`, `deployment-guards`, `party-ai-guard`, `hero-creation-guard` and `movementorder-typeinit` too, and the count rises accordingly. Never compare a count across builds; compare the named entries. |
+| `[SELFTEST] running 20 guard decision-logic test(s)…` | The denominator. Fewer tests than components means a component registered no test — read the count, not just the pass line. |
+| `[SELFTEST] PASS siege-command-guard.contract — members re-resolved …` | A pass is a **re-resolution** of the members plus a check of the decision table, run against the live game — not a compile-time assertion. This is what tells you a rename has *not* happened. |
+| `[SELFTEST] FAIL pregnancy-sync.loopback — threw: …` | A real failure, kept visible: the wire loopback threw an NRE. It names the component (`pregnancy-sync`) and the suite (`.loopback`, a pipeline test rather than a `.contract` decision table). |
+| `[SELFTEST] 19 passed, 1 failed` | The summary to grep. `1 failed` with a healthy `MOD HEALTH:` line is normal and important: health says *resolved*, the self-test says *still behaves correctly*. |
+| `[HOTRELOAD] gen1 applied (initial) \| MOD HEALTH: …` | The same health text a second time. **Do not count `MOD HEALTH:` lines as generations** — a fresh launch prints one, a reload prints two. |
+| `[DIAG] mem WS=3150MB … handles=1864 threads=123 \| Mission=null GameState=none Campaign=null` | The heartbeat. On its own it is a baseline; its value is the *series* (§0 *Branch: freeze / hang*). Note the role flipped to `[S]` here — the first tick has run. |
+| `GUARD ACTIVITY: none fired this session (nothing crashed on a guarded path)` | Nothing has fired **yet**. It is throttled to one line per 120 s and only reprinted when the text changes, so this line's absence later means "unchanged", not "not running". |
+
+Later in that same session, guards had fired and the line carries counts:
+
+```
+2026-09-04 15:19:30.921 [S] GUARD ACTIVITY: client-bootstrap-fix=1, bg-tick-budget-guard=6, illness-death-guard=1
+```
+
+Each entry is a `SelfHealing.RecordFire` id with the number of times it fired this session — proof
+a guarded path was actually hit, which `MOD HEALTH:` can never tell you.
+
+#### The battle chokepoint doing its job (session `13be0322`)
+
+```
+2026-09-04 14:32:03.088 [S] [BATTLE-MODE] VANILLA battles active (auto: confidently no session, start-battle) — removed 24 foreign patch(es)
+```
+
+Same decision, different decision point: `start-battle` is `PlayerEncounter.StartBattle`, and by
+then BT **has** installed its battle patches — all 24 of them are lifted for this solo battle. This
+is the line that matters when reading a "my troops were missing" report: `removed 0` at `apply` is
+expected, `removed 24` at `start-battle` is the fix working, and no `start-battle` line at all means
+the chokepoint never ran.
+
+#### A first-chance exception, in full (session `13ec180d`)
+
+```
+2026-09-04 14:45:34.050 [S] [CHARGEN] first-chance System.TypeInitializationException: The type initializer for 'TaleWorlds.MountAndBlade.MovementOrder' threw an exception.
+      at TaleWorlds.MountAndBlade.Formation.ResetAux()
+   <- INNER: System.NullReferenceException: Object reference not set to an instance of an object.
+      at TaleWorlds.MountAndBlade.MovementOrder..ctor(MovementOrderEnum orderEnum)
+      at TaleWorlds.MountAndBlade.MovementOrder..cctor()
+   CONTEXT: Mission=live(mode=StartUp,state=Initializing) GameState=MissionState Campaign=set
+   mem WS=4480MB priv=5280MB managed=235MB peakWS=4480MB gc0/1/2=1187/269/41 handles=2005 threads=104
+      LIVE TaleWorlds.MountAndBlade.Formation.ResetAux
+      LIVE TaleWorlds.MountAndBlade.Formation.Reset
+      LIVE TaleWorlds.MountAndBlade.Team.Initialize
+      LIVE TaleWorlds.MountAndBlade.Mission+TeamCollection.Add
+      LIVE TaleWorlds.MountAndBlade.MissionCombatantsLogic.AddPlayerTeam
+      LIVE TaleWorlds.MountAndBlade.MissionCombatantsLogic.OnBehaviorInitialize
+      LIVE TaleWorlds.MountAndBlade.Mission.AfterStart
+      LIVE TaleWorlds.MountAndBlade.MissionState.FinishMissionLoading
+      LIVE TaleWorlds.MountAndBlade.MissionState.TickLoading
+      LIVE TaleWorlds.MountAndBlade.MissionState.OnTick
+      LIVE TaleWorlds.Core.GameStateManager.OnTick
+      LIVE TaleWorlds.Core.Game.OnTick
+      LIVE TaleWorlds.Core.GameManagerBase.OnTick
+      LIVE TaleWorlds.MountAndBlade.Module.OnApplicationTick
+      LIVE TaleWorlds.DotNet.Managed.ApplicationTick
+      LIVE ManagedCallbacks.LibraryCallbacksGenerated.Managed_ApplicationTick_Patch1
+2026-09-04 14:45:40.554 [S] [repeat] CHARGEN-FC TypeInitializationException @ TaleWorlds.MountAndBlade.Formation.ResetAux ×1 in 6.5s (identical, collapsed)
+```
+
+| Part | What it settles |
+|---|---|
+| `first-chance System.TypeInitializationException … at …Formation.ResetAux()` | The **manifested** frame. This is where the symptom appears and where a naive fix would go; it is not the cause. The capture is session-wide, so this was logged whether or not the game swallowed it. |
+| `<- INNER: System.NullReferenceException … at MovementOrder..ctor(MovementOrderEnum) / ..cctor()` | The **cause**. A `TypeInitializationException` is always a wrapper — its inner exception and inner frames are the answer, and here they name the static constructor of a `beforefieldinit` struct. Without the chain this log says only "something failed in `ResetAux`". |
+| `CONTEXT: Mission=live(mode=StartUp,state=Initializing) GameState=MissionState Campaign=set` | Engine state **at the throw**. `Mission=live` here is the trap: the cctor that actually failed ran earlier, when `Mission.Current` was null. A cached type-init failure re-throws in a context that has nothing to do with the origin. |
+| `mem WS=4480MB priv=5280MB managed=235MB …` | The same counters the `[DIAG]` heartbeat prints, sampled at the throw, so a throw can be placed on the memory curve without correlating timestamps by hand. |
+| the `LIVE …` frames | The **actual executing stack**, from `Formation.ResetAux` out to `Managed_ApplicationTick_Patch1`. It names the trigger — a player team being added during `MissionState.FinishMissionLoading` — which the exception's own truncated stack does not show. This is the chain to hand to `Callers.exe`. |
+| `[repeat] CHARGEN-FC TypeInitializationException @ …ResetAux ×1 in 6.5s (identical, collapsed)` | `TraceThrottle` collapsing a recurrence: the full block is logged once, later identical throws become a count. `×1` means it happened once more in those 6.5 s — the throttle is not hiding a flood here, but on a per-tick fight the ×N is where the frequency lives. |
 
 ---
 
