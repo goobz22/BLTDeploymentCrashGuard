@@ -13,14 +13,21 @@ tracing and read `CrashGuard.log`).
 
 Work down the list; do not skip to a fix.
 
-1. **Collect the evidence.** `Modules/BLTDeploymentCrashGuard/CrashGuard.log` plus its rotated
-   segments (`.1 … .6`), TaleWorlds' `rgl_log_*` / `rgl_log_errors_*` / `watchdog_*`, and any
-   crash report (§4). `collect-diagnostics.cmd` gathers only part of that — `CrashGuard.log`,
-   `CrashGuard.log.1`, `guardconfig.json`, the Desktop `bt-sync-*.txt` files and the newest
-   `%USERPROFILE%\Documents\*crash*.html` (`collect-diagnostics.cmd:33-42`, and its own closing
-   banner at `:66` says so). Segments `.2 … .6` and everything under
-   `C:/ProgramData/Mount and Blade II Bannerlord/logs/` are **not** collected: none of the three
-   scripts reads that folder. Attach those by hand.
+1. **Collect the evidence.** `collect-diagnostics.cmd` bundles the whole set into one zip and
+   uploads it — nothing on this list needs attaching by hand:
+
+   | In the bundle | Source | Where |
+   |---|---|---|
+   | `CrashGuard.log` **and every rotated segment `.1 … .6`** | module folder | `collect-diagnostics.cmd:54-55` |
+   | `guardconfig.json`, `hero-identity.json`, `SubModule.xml` | module folder | `:56-58` |
+   | `bt-sync-host/client/solo.txt` | Desktop | `:59` |
+   | 3 newest `rgl_log_*`, 3 newest `rgl_log_errors_*`, 2 newest `watchdog_log_*`, newest `launcher_log_*` | `%ProgramData%\Mount and Blade II Bannerlord\logs` | `:61-64` |
+   | newest game crash folder, **text files only** (the dumps are too large to upload) | `%ProgramData%\Mount and Blade II Bannerlord\crashes` | `:67-71` |
+   | newest `*crash*.html` | `%USERPROFILE%\Documents` | `:75-77` |
+
+   `guardconfig.json` and `SubModule.xml` are part of the evidence, not padding: they say which
+   config produced the log and which version wrote it. What the bundle still does **not** carry:
+   the memory dump inside the crash folder, and any segment already rotated out past `.6`.
 2. **Identify the build that produced the log.** The banner line carries the mod version, harness
    build time and session id; `[HOTRELOAD] genN applied` says which payload generation was live at
    the moment of the crash (health and tracer lines are re-printed per generation).
@@ -37,6 +44,55 @@ Work down the list; do not skip to a fix.
 8. **Name both locations** — the manifested frame and the root cause — before editing anything.
 9. **Fix at the root, then prove it from the log again**: the guard's own tag fires, `MOD HEALTH:`
    lists it, and the crash no longer reproduces on a clean launch.
+
+### Branch: freeze / hang (nothing throws)
+
+A hang produces no exception, so **every piece of exception tooling in this repo is silent by
+construction** — the session-wide first-chance capture only fires on a throw, the finalizer guards
+only run on an escaping exception, and `GUARD ACTIVITY:` stays at "none fired this session". That
+silence is the expected output of a hang, not evidence of health. Do not read it as "the mod was
+fine".
+
+1. **Read the `[DIAG]` heartbeat.** It is emitted on a timer regardless of whether anything throws,
+   so it is the one signal a hang still produces. Compare consecutive lines for build-up in
+   `WS=` / `priv=` / `managed=`, in `handles=` and in `threads=`; the `Mission=` / `GameState=` /
+   `Campaign=` fields say what the engine believed it was doing. **The last heartbeat is the time of
+   death** — everything after it is post-mortem.
+2. **Read the last `[TRACE]` and `[BATTLE-MODE]` lines before the heartbeat stops.** They are the
+   last decision the mod made, and they name the chokepoint it was standing on.
+3. **Attach a debugger to the live process.** A hang is the one symptom you can still inspect
+   directly — the game has not exited.
+   - Visual Studio → **Debug > Attach to Process** → `Bannerlord.exe`, attach to **Managed** code,
+     then **Break All** (pause), **Debug > Windows > Threads**, and read the main thread's managed
+     call stack. Sample it several times a few seconds apart: a stack that does not move between
+     samples is a deadlock or a blocking wait; a stack that churns inside the same few frames is a
+     spin.
+   - No IDE: `dotnet-dump collect -p <pid>`, then `dotnet-dump analyze <dump>` and `clrstack`
+     (`setthread <n>` to walk the other threads).
+4. **Do not kill the game to "get the log".** The log is already on disk and flushed; killing the
+   process throws away the live stack, which is the only evidence a hang produces.
+
+### Branch: log-only triage (someone else's log, no reproduction)
+
+What a log alone **can** settle:
+
+- **Which build produced it** — the banner line (mod version, harness build time, session id) and
+  `payload build <time> applying on <harmony id>` (which payload generation was live).
+- **Whether the mod resolved its targets on that machine** — `MOD HEALTH:` plus the `[SELFTEST]`
+  block. A `FAIL` names the component; a resolution failure names the member that moved.
+- **Which guards actually fired** — `GUARD ACTIVITY:`, with a count per guard id. A non-zero count
+  is proof a guarded path was hit on their machine.
+- **What was thrown, and by whom** — the first-chance block (§2): exception type, the full
+  `<- INNER:` chain, the `CONTEXT:` engine state and the `LIVE …` trigger stack.
+- **What the mod decided** — the last `[BATTLE-MODE]`, `[TIME]`, `[ENCOUNTER-GUARD]` lines.
+
+What it **cannot** settle: a **root cause on a build you do not have**. Member names, IL offsets and
+patch counts are per-build facts; a count that looks wrong may be a different game or BT version
+rather than a bug. Pin the build before theorising — `VerCheck.exe <dll>` prints assembly identity
+and nothing else (it reads no game path and installs no resolver,
+`tools/il-probes/VerCheck/VerCheck.cs:1-5`), so it runs against any DLL, including one a reporter
+sends. Then ask for `collect-diagnostics.cmd` (step 1) rather than guessing from the fragment you
+were pasted.
 
 ---
 
@@ -92,7 +148,9 @@ Diagnostics added in the 2026-09-04 investigation:
 | `[CHARGEN]` | Character-creation lifecycle + a **session-wide first-chance exception capture** with the full inner-exception chain and the throwing frames. |
 | `[MO-PROBE]` | (dev) logs the **first 12** `MovementOrder` constructions + `Mission.Current` state, and any throw out of the ctor at the instant it is thrown (`Payload/MovementOrderInitProbe.cs:27,56,73-92`). After the 12th it is silent except on a throw — an origin probe for the type-init crash, not a census. |
 | `[MO-INIT]` | The `MovementOrder` type-init guard's result at load: "initialized safely" or "already poisoned". |
-| `[DIAG]` | Memory + engine-state heartbeat (WS/private/managed, GC counts, handles, threads; Mission/GameState/Campaign) every ~15 s and at every mission transition. Use it to see a leak/balloon build up before a symptom. |
+| `[DIAG]` | Memory + engine-state heartbeat (WS/private/managed, GC counts, handles, threads; Mission/GameState/Campaign) every ~15 s and at every mission transition. Use it to see a leak/balloon build up before a symptom — and it is the only signal a freeze still produces (§0 *Branch: freeze / hang*). |
+| `[DEPLOY-GUARD]` | The two deployment finalizers (README fix #1) and their health check. `deployment crash guards active — SetupTeams=guarded FinishDeployment=guarded` at load (`Payload/DeploymentCrashGuards.cs:43`), `SUPPRESSED crash in DeploymentMissionController.SetupTeams: …` when one fires (`:107,128`), and one line per recovery step that itself failed (`:144-159`). Every line in that file now carries the tag; before 2026-09-04 they were untagged and ungreppable. |
+| `[TIME] … change SUPPRESSED/ALTERED by [X]` | Names **which** of our three prefixes on `Campaign.set_TimeControlMode` vetoed a write — `[TIME-GUARD]`, `[CLICK-SPEED]`, or `another patch (not one of ours)` when the vetoer was not ours (`Payload/TimeTrace.cs:118-124`). The vetoing prefix notes itself (`TimeEnforcementGuard.cs:217`, `MapClickSpeedKeeper.cs:93`) and the `[repeat]` dedup key includes the vetoer (`TimeTrace.cs:127-128`), so a collapsed burst still says who won. |
 | `[repeat] … ×N` | A high-frequency line coalesced by `TraceThrottle` (see below). |
 
 ### Tracer load lines — a tracer's health report
