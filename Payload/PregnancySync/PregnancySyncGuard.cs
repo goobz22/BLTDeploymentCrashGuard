@@ -25,8 +25,8 @@ namespace BLTDeploymentCrashGuard.PregnancySync
     ///        birthday follow deterministically from DeliverOffSpring(mother, father) on both sides.
     ///
     /// Everything is gated on config pregnancySync AND an active BT session; inert otherwise.
-    /// Default OFF until validated live with a second player (the two-machine hop is the only part
-    /// no solo test can cover). The wire format + framing + no-BT-collision are proven headless
+    /// Default ON ("pregnancySync": true in Harness/GuardConfig.cs DefaultJson); the two-machine hop
+    /// is the only part no solo test can cover. The wire format + framing + no-BT-collision are proven headless
     /// (tests/BirthPayloadTest, 24/24); the in-game loopback self-test proves a REAL hero's
     /// identity survives serialize -> frame -> receive-path parse field-for-field.
     /// </summary>
@@ -63,6 +63,9 @@ namespace BLTDeploymentCrashGuard.PregnancySync
                 bool receiveHooked = HookReceive(harmony);
                 Log.Info("[PREG-SYNC] receive hook installed (" + receiveHooked + "); host birth listener wires at game-start");
                 Diag.Report("pregnancy-sync", receiveHooked, receiveHooked ? "" : "BT receive method not found");
+                // A payload hot-reload mid-campaign never sees OnGameStart again, so subscribe now if
+                // a campaign is already running (no-op on a fresh launch, where Campaign.Current is null).
+                Subscribe("payload apply — a campaign is already running");
             }
             catch (Exception ex)
             {
@@ -71,13 +74,23 @@ namespace BLTDeploymentCrashGuard.PregnancySync
             }
         }
 
-        // A stable listener owner object for the campaign event subscription.
+        // A stable listener owner object for the campaign event subscription. It is also published
+        // to the harness bag so the NEXT payload generation can remove this generation's listener:
+        // Harmony's UnpatchAll never touches campaign event listeners, and a payload static dies
+        // with its generation, so without the bag a reload left the old listener attached forever
+        // (HOTRELOAD.md § Trade-offs — closed 2026-09-04).
         private static readonly object Sentinel = new object();
+        private const string ListenerOwnerKey = "pregnancy-sync.listener-owner";
         private static Campaign _subscribedCampaign;
 
         /// <summary>Wire the host birth listener per-campaign (CampaignEvents is per-Campaign and
         /// null at module load). Idempotent; re-subscribes when a new campaign is loaded.</summary>
         internal static void OnGameStart()
+        {
+            Subscribe("game-start");
+        }
+
+        private static void Subscribe(string when)
         {
             try
             {
@@ -85,13 +98,31 @@ namespace BLTDeploymentCrashGuard.PregnancySync
                 {
                     return;
                 }
+                ISharedState shared = PayloadEntry.Shared;
+                object previousOwner = shared != null ? shared.GetObject(ListenerOwnerKey) : null;
+                if (previousOwner != null && !ReferenceEquals(previousOwner, Sentinel))
+                {
+                    try
+                    {
+                        CampaignEvents.OnGivenBirthEvent.ClearListeners(previousOwner);
+                        Log.Info("[PREG-SYNC] removed the previous payload generation's birth listener");
+                    }
+                    catch (Exception exClear)
+                    {
+                        Log.Info("[PREG-SYNC] could not remove the previous generation's birth listener: " + exClear.Message + " — births may be broadcast twice until restart");
+                    }
+                }
                 CampaignEvents.OnGivenBirthEvent.AddNonSerializedListener(Sentinel, OnGivenBirth);
+                if (shared != null)
+                {
+                    shared.Set(ListenerOwnerKey, Sentinel);
+                }
                 _subscribedCampaign = Campaign.Current;
-                Log.Info("[PREG-SYNC] host birth listener subscribed for this campaign");
+                Log.Info("[PREG-SYNC] host birth listener subscribed for this campaign (" + when + ")");
             }
             catch (Exception ex)
             {
-                Log.Info("[PREG-SYNC] OnGameStart subscribe failed: " + ex.Message);
+                Log.Info("[PREG-SYNC] subscribe failed (" + when + "): " + ex.Message);
             }
         }
 
@@ -247,6 +278,12 @@ namespace BLTDeploymentCrashGuard.PregnancySync
                 if (!_enabled || _reconstructing)
                 {
                     return;
+                }
+                ISharedState shared = PayloadEntry.Shared;
+                object owner = shared != null ? shared.GetObject(ListenerOwnerKey) : null;
+                if (owner != null && !ReferenceEquals(owner, Sentinel))
+                {
+                    return; // a newer payload generation owns the listener now; this one is retired
                 }
                 if (PeerDetection.ReadCoopStaticBool("IsHost") != true)
                 {
