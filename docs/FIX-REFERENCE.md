@@ -139,11 +139,12 @@ replays the method's remaining tail so the battle unfreezes
 `mission.SetFallAvoidSystemActive(false)`; `mission.OnAfterDeploymentFinished()`;
 `AccessTools.Method(__instance.GetType(), "AfterDeploymentFinished")?.Invoke(__instance, null)`
 (non-public, resolved by name); `mission.RemoveMissionBehavior(__instance)`. Since v1.3.2 the
-guarding is even: the two agent steps share one try/catch (`:134-144`) and **every** remaining
-tail step has its own try/catch (`:147-158`), so one failing step can no longer skip the rest —
+guarding is even: the two agent steps share one try/catch (`:137-145`) and **every** remaining
+tail step has its own try/catch (`:149-159`), so one failing step can no longer skip the rest —
 the earlier build left `AllowAiTicking` / `DisableDying` unguarded inside the outer try, where a
-throw abandoned every later step. Each per-step catch logs `[DEPLOY-GUARD] recovery <step>`; the
-outer catch still logs `FinishDeployment recovery failed` (`:160-163`).
+throw abandoned every later step. Each per-step catch logs `[DEPLOY-GUARD] recovery <step>` —
+except `SetFallAvoidSystemActive`, whose catch is empty, so that step's failure is silent
+(`:153`). The outer catch still logs `FinishDeployment recovery failed` (`:162-165`).
 
 **Patched members.** `DeploymentMissionController.FinishDeployment` (finalizer). Replayed
 but not patched: `Mission.OnAfterDeploymentFinished`,
@@ -154,7 +155,8 @@ but not patched: `Mission.OnAfterDeploymentFinished`,
 **Limitations.** The tail replay is a hand-maintained mirror of vanilla's tail — a game
 update that changes `FinishDeployment`'s tail silently makes the recovery incomplete.
 `AfterDeploymentFinished` is resolved by name via `AccessTools` and silently skipped if
-renamed. Like the `SetupTeams` guard it suppresses the crash-to-desktop but does **not** restore
+renamed. A failed `SetFallAvoidSystemActive` writes nothing to the log (`:153`), so absence of a
+`[DEPLOY-GUARD] recovery SetFallAvoidSystemActive` line is not evidence that step succeeded. Like the `SetupTeams` guard it suppresses the crash-to-desktop but does **not** restore
 the missing player-side troops; auto battle mode (README item 15) is what prevents the empty
 player side.
 
@@ -206,12 +208,12 @@ a party whose fields are synced piecemeal during a co-op join can, for a few tic
 (`Payload/PartyAiCrashGuard.cs:12-23`).
 
 **Mechanism.** Harmony **prefix** on `MobilePartyAi.Tick`, patched via `AccessTools.Method`
-(`:39-44`). Reads the private `_mobileParty` field through `AccessTools.Field` (`:37`,
-`:65-75`) and, if the party is in exactly the proven-inconsistent state —
+(`:51-54`). Reads the private `_mobileParty` field through `AccessTools.Field` (`:49`,
+`:81-91`) and, if the party is in exactly the proven-inconsistent state —
 `DefaultBehavior == AiBehavior.DefendSettlement && TargetSettlement == null &&
 TargetParty == null && ShortTermTargetParty == null` — returns false to skip that party's AI
-tick entirely (`:86-93`). Self-heals when sync completes. Any exception inside the prefix is
-swallowed and the tick runs normally (fail-open, `:94-98`).
+tick entirely (`:102-108`). Self-heals when sync completes. Any exception inside the prefix is
+swallowed and the tick runs normally (fail-open, `:110-114`).
 
 **Patched members.** `TaleWorlds.CampaignSystem.Party.MobilePartyAi.Tick` (prefix). Read by
 reflection: `MobilePartyAi._mobileParty`. Read: `MobileParty.DefaultBehavior`,
@@ -219,10 +221,10 @@ reflection: `MobilePartyAi._mobileParty`. Read: `MobileParty.DefaultBehavior`,
 
 **Limitations.** Guards only the one proven inconsistent shape; any other half-synced shape
 falls through to layer 2. Depends on the private field name `_mobileParty` — if renamed,
-`PartyOf()` returns null and the prefix becomes a no-op (`:69`, `:82-84`).
+`PartyOf()` returns null and the prefix becomes a no-op (`:85`, `:98-100`).
 
 **Self-test.** `party-ai-guard.contract`, registered once for all three layers at
-`Payload/PartyAiCrashGuard.cs:48` and defined at `:186-201`: all three targets **and** the
+`Payload/PartyAiCrashGuard.cs:48` and defined at `:185-201`: all three targets **and** the
 private `_mobileParty` field re-resolve, the layer-1 prefix passes through (returns `true`) on a
 null party, and both finalizers stay inert on a null exception. Health component `party-ai-guard`
 (`:71`, not critical — layers 2 and 3 still work with layer 1 inert); the apply line reads
@@ -236,15 +238,15 @@ behaviour-changing prefix on every party tick, not a finalizer (`:22-25`).
 `PartyAiCrashGuard` · **Tag** `[AI-GUARD]` · **Config** none · **Scope** both
 
 **Bug.** Any other escaping exception from `MobilePartyAi.GetBehaviors` during the campaign
-party-AI tick is a crash to desktop (`Payload/PartyAiCrashGuard.cs:23-25`).
+party-AI tick is a crash to desktop (`Payload/PartyAiCrashGuard.cs:26-27`).
 
-**Mechanism.** Harmony **finalizer** on `MobilePartyAi.GetBehaviors` (`:45-50`). Because
+**Mechanism.** Harmony **finalizer** on `MobilePartyAi.GetBehaviors` (`:57-60`). Because
 `GetBehaviors` returns results through by-ref parameters, the finalizer takes them by ref
 and substitutes a safe answer: `bestAiBehavior = AiBehavior.Hold`, `behaviorObject = null`,
 `bestTargetPoint = party.Position` (or `default(CampaignVec2)` when the party is
-unresolvable) — "hold at current position this tick" instead of a crash (`:101-123`).
+unresolvable) — "hold at current position this tick" instead of a crash (`:117-139`).
 Returns null to swallow the exception; records a fire under `party-ai-guard`; the recovery
-block is itself try/caught (`:117-121`).
+block is itself try/caught (`:134-137`).
 
 **Patched members.** `MobilePartyAi.GetBehaviors` (finalizer; signature
 `ref AiBehavior bestAiBehavior, ref IInteractablePoint behaviorObject, ref CampaignVec2 bestTargetPoint`).
@@ -264,13 +266,13 @@ null exception and requires `null` back, `:195-197`). Fires counted via
 
 **Bug.** Second guarded organ of the same disease (crash 2026-08-19 ~20:28): per-party
 encounter handling inside the campaign tick NREs on a half-synced party
-(`Payload/PartyAiCrashGuard.cs:125-130`).
+(`Payload/PartyAiCrashGuard.cs:141-146`).
 
 **Mechanism.** Harmony **finalizer** on `EncounterManager.HandleEncounterForMobileParty`
-(`:51-56`, `:131-147`). Swallows the exception (returns null), records a fire under
+(`:63-66`, `:147-163`). Swallows the exception (returns null), records a fire under
 `party-ai-guard`, logs the offending party's `StringId`. Safe by construction: skipping one
 party's encounter handling for a tick is benign — it reruns next tick and the party heals
-when its sync completes (`:127-130`).
+when its sync completes (`:143-146`).
 
 **Patched members.** `TaleWorlds.CampaignSystem.EncounterManager.HandleEncounterForMobileParty`
 (finalizer, parameter `mobileParty`).
@@ -287,10 +289,10 @@ inertness check, `:187-197`). Fire id `party-ai-guard` (`:155`).
 `PartyAiCrashGuard` · **Tag** `[AI-GUARD]` · **Config** none · **Scope** n/a
 (instrumentation)
 
-**Mechanism.** `LogSkip()` (`:149-167`) counts layer-1 skips in `_skipsSinceLog` and emits at
+**Mechanism.** `LogSkip()` (`:165-183`) counts layer-1 skips in `_skipsSinceLog` and emits at
 most one line per 5000 ms, reporting the party `StringId` plus "N skip(s) since last
 report", then resets the counter. `Environment.TickCount` wraparound is handled by the extra
-`now >= _lastSkipLogTick` term (`:155`). The whole body is try/caught.
+`now >= _lastSkipLogTick` term (`:171`). The whole body is try/caught.
 
 **Limitations.** The 5000 ms window is a compile-time constant; the count is global, not
 per-party.
@@ -314,25 +316,25 @@ taken from runtime stack traces in `CrashGuard.log` (`Payload/EncounterLoopGuard
 **Mechanism.** Signature-gated loop breaker in two halves, **both always-on**.
 
 *The stamp.* Harmony **prefix** on every declared `PlayerEncounter.Finish` overload, installed by
-this class itself (`PatchFinish`, `:70-72`, `:135-169`) and resolved with
+this class itself (`PatchFinish`, `:70-72`, `:136-169`) and resolved with
 `AccessTools.TypeByName("TaleWorlds.CampaignSystem.Encounters.PlayerEncounter")`. `FinishPrefix`
 calls `NoteEncounterFinish()` (`:171-174`), which records `_lastFinishTick`. **New in v1.3.2:**
 until then the stamp was written only by the `[TRACE]` tracer's own `Finish` hook, which exists
 only with `tracing: true`, so under the shipped default the breaker could never trip
-(audit 2026-09-04, `:23-25`).
+(audit 2026-09-04, `:24-26`).
 
 *The breaker.* Harmony **prefix** on every declared
 `BattleSyncBehavior.ApplyEncounterRequestNow` overload, found by name over `GetMethods` with
-`Public|NonPublic|Static|Instance|DeclaredOnly` (`:88-105`); the type is located with
-`PeerDetection.FindCoopType("BattleSyncBehavior")` (`:73`). Constants: `TripCount=4`,
-`WindowMs=15000`, `RetryAfterMs=60000`, `FinishChainMs=4000` (`:34-37`). A four-slot ring
-buffer of timestamps (`:41`, `:210-213`) trips when four signature hits land inside 15 s; once
+`Public|NonPublic|Static|Instance|DeclaredOnly` (`:91-107`); the type is located with
+`PeerDetection.FindCoopType("BattleSyncBehavior")` (`:74`). Constants: `TripCount=4`,
+`WindowMs=15000`, `RetryAfterMs=60000`, `FinishChainMs=4000` (`:35-38`). A four-slot ring
+buffer of timestamps (`:44`, `:212-214`) trips when four signature hits land inside 15 s; once
 tripped, applications are suppressed and after 60 s of suppression exactly one retry is let
-through so the system self-recovers, re-tripping if it has not (`:190-202`). Only
+through so the system self-recovers, re-tripping if it has not (`:193-206`). Only
 applications that closely follow a **local** `PlayerEncounter.Finish` (within
-`FinishChainMs` — `FollowsFinish`, `:176-179`, `:204-207`) count toward tripping — the loop
+`FinishChainMs` — `FollowsFinish`, `:177-180`, `:208-211`) count toward tripping — the loop
 signature is finish → immediate re-application, so a partner's legitimate join storm is never
-suppressed. Any exception in the prefix returns true (fail-open, `:224-227`).
+suppressed. Any exception in the prefix returns true (fail-open, `:226-229`).
 
 **Patched members.** `TaleWorlds.CampaignSystem.Encounters.PlayerEncounter.Finish` (prefix, all
 declared overloads — ours, always-on) and BannerlordTogether
@@ -348,8 +350,9 @@ loaded yet) and is retried at `OnGameStart` (`Payload/PayloadEntry.cs:131`).
 **Limitations.** It suppresses the request rather than consuming the stuck queue entry, so the
 root defect — an unconsumed pending-request entry in BT — remains. Trip state (`_tripped` /
 `_recentCalls`) is global, not per-request; the constants are compile-time, not configurable.
-Without BannerlordTogether nothing is patched on the BT side, and the health entry then reads
-healthy with the detail `inert — BannerlordTogether not loaded`.
+Without BannerlordTogether nothing is patched on the BT side; the guard is then reported
+**healthy**, and neither the `inert — BannerlordTogether not loaded` detail nor any
+`[ENCOUNTER-GUARD]` line reaches the log (see **Health** below).
 
 **Self-test.** `encounter-loop-guard.contract` (`:244-262`): `PlayerEncounter.Finish` re-resolves;
 `BattleSyncBehavior.ApplyEncounterRequestNow` re-resolves **when BT is loaded** (a missing BT is a
@@ -358,13 +361,18 @@ means no signature, 3 s after a finish is the signature, 5 s after is not, a 4th
 oldest trips, 19 s does not, an empty slot does not.
 
 **Health.** Component `encounter-loop-guard`, reported exactly once per session (`_reported`
-latch). Healthy with `inert — BannerlordTogether not loaded` when BT is absent; **degraded** when
+latch). BT absent → reported **healthy**, and the `inert — BannerlordTogether not loaded` detail
+is passed to `Diag.Report` but never rendered: on the ok branch `Report` stores only the
+component name and `HealthSummary` prints only a count of healthy components
+(`Harness/Diag.cs:73-76,89`); the `Log.Info` in that branch is inside `if (btLoaded)`, so nothing
+reaches `CrashGuard.log` either (`Payload/EncounterLoopGuard.cs:82-87`) — do not grep for that
+string. **Degraded** when
 BT is loaded but `BattleSyncBehavior` (`:83`) or `ApplyEncounterRequestNow` (`:121`) is missing —
 i.e. a BT rename shows up in `MOD HEALTH:` instead of silently disabling the guard; degraded with
 `PlayerEncounter.Finish not hooked — loop signature unavailable` when the stamp failed to install
 (`:114`). Application logs
 `[ENCOUNTER-GUARD] encounter-request loop breaker active (N method(s); local-Finish stamp hooked=…)`
-(`:115`); fires recorded as `SelfHealing.RecordFire("encounter-loop-guard")` (`:219`).
+(`:116`); fires recorded as `SelfHealing.RecordFire("encounter-loop-guard")` (`:219`).
 
 ### Map-incident guard — root fix: `SiegeProgressChange` consequence lambda
 
@@ -519,7 +527,7 @@ members `EncounterManager.HandleEncounters`, BT's
 
 `Apply()` returns silently when `BannerlordTogether.CoopSubModule` is absent — "vanilla needs
 no guard" (`:57-61`) — and is retried at `OnBeforeInitialModuleScreen` for a late-loading BT
-assembly (`Payload/PayloadEntry.cs:120`). BT's own method early-outs when not host.
+assembly (`Payload/PayloadEntry.cs:122`). BT's own method early-outs when not host.
 
 **Limitations.** Treats the symptom (frame starvation), not the cause (an unbounded campaign
 tick); the upstream fix is to bound per-frame cost or move the background tick off the
@@ -557,13 +565,13 @@ session is sabotaged.
 - **Vanilla:** for a fixed list of 24 native battle/deployment/spawn methods, read
   `Harmony.GetPatchInfo(method)` (`Payload/BattleMode.cs:428`), record every **foreign**
   prefix/postfix/finalizer/transpiler into a static stash (owner, kind, `MethodInfo`,
-  priority, `before[]`, `after[]` — `:81-89`, `:479-487`), then
+  priority, `before[]`, `after[]` — `:80-88`, `:485-493`), then
   `harmony.Unpatch(method, HarmonyPatchType.All, owner)` once per distinct foreign owner
   (`:443`).
 - **Co-op:** walk the stash, skip anything already present (`IsPresent`), and
   re-apply each stashed patch under a `new Harmony(stashed.Owner)` with the original
   priority/before/after, dispatching kind 0→prefix, 1→postfix, 2→finalizer (5th `Patch` arg),
-  3→transpiler (4th `Patch` arg) (`:288-306`).
+  3→transpiler (4th `Patch` arg) (`:289-325`).
 
 No third-party code is read, copied or modified — only runtime patch metadata.
 
@@ -601,16 +609,17 @@ The lift/restore target list is 24 methods (native, not patched by this mod — 
 - `SandboxBattleInitializationModel.GetAllAvailableTroopTypes`
 - `BattleAgentLogic.OnAgentBuild`, `.CheckUpgrade`, `.OnAgentHit`, `.OnAgentRemoved`
 
-`IsClient()==true` short-circuits straight to co-op (`:266-270`).
+`IsClient()==true` short-circuits straight to co-op (`WantVanilla`, `:218-222`; the peer probe
+is skipped for a client in `DecideAndApply`, `:247-251`).
 
 Every unresolved lift target is now logged **once** rather than silently skipped —
 `[BATTLE-MODE] lift target type not found: <type> — its BT patches cannot be lifted (game
 update?)` and `[BATTLE-MODE] lift target method not found: <Type>.<Method> (game update?)`,
-deduplicated through the `WarnedUnresolved` set (`:331-341`, `:352-357`). An unresolved target
+deduplicated through the `WarnedUnresolved` set (`:343-352`, `:364-367`). An unresolved target
 means BT's patch on it cannot be lifted, i.e. a game rename has re-exposed part of the solo bug.
 
 **Limitations.** (1) Scope is battle-mission methods only — campaign/map co-op machinery is
-deliberately not listed (`:50-51`). (2) The stash is a static `Dictionary` (`:91`) and
+deliberately not listed (`:50-51`). (2) The stash is a static `Dictionary` (`:90`) and
 `PayloadEntry` statics are fresh per hot-reload generation
 (`Payload/PayloadEntry.cs:8-11`), so a payload reload while in vanilla mode loses the stash
 and previously-lifted foreign patches can never be restored by that generation. (3) Only
@@ -629,7 +638,7 @@ battles strip the player side), while an unresolved **lift target** degrades one
 only and is reported non-critical (`:125-130`). An exception during apply reports critical
 (`:136`).
 
-**Self-test.** `battle-mode.contract` (registered `:118`, defined `:568-601`). It re-resolves all
+**Self-test.** `battle-mode.contract` (registered `:118`, defined `:569-599`). It re-resolves all
 24 lift targets **and** both chokepoints, then verifies four decision surfaces without needing a
 live session: the `WantVanilla` table (7 rows: `solo`→vanilla; `coop`→co-op; auto+client→co-op;
 auto+confidently-no-session→vanilla; auto+remote-connected→co-op; auto+unreadable→co-op;
@@ -672,7 +681,7 @@ still hits the empty-battle bug; the documented escape hatch is `battleMode=solo
 (`:225-231`).
 
 **Self-test.** Pinned by `battle-mode.contract`: extracting the policy into `WantVanilla` is what
-makes the seven-row decision table testable without a live session (`:582-590`).
+makes the seven-row decision table testable without a live session (`:579-586`).
 
 ### Self-patch exclusion (`IsOwnOwner`)
 
@@ -692,7 +701,7 @@ finalizer on the two deployment targets (`Payload/DeploymentCrashGuards.cs:70`).
 **Limitations.** Prefix match on `bltogether` — a third-party mod whose Harmony id happened to
 start with `bltogether` would be treated as ours and never lifted.
 
-**Self-test.** Pinned by `battle-mode.contract` (`:591-592`): accepts
+**Self-test.** Pinned by `battle-mode.contract` (`:587-588`): accepts
 `bltogether.crashguard.gen3` and the legacy flat `bltogether.crashguard`, rejects
 `BannerlordTogether.mod`, `null` and `""`.
 
@@ -722,24 +731,24 @@ pinned by `battle-mode.contract`).
 **Bug.** v2.0 shipped a different key name (`soloVanillaBattles`) that would otherwise silently
 stop working. Separately, until v1.3.2 this class carried a **second config writer**: when no
 file existed it wrote a two-key stub `{ "battleMode": "auto", "timeAlwaysFlows": true }`. That
-writer is deleted (`:549-552`) — if the harness write had failed, the stub left the player with an
+writer is deleted (`:550-553`) — if the harness write had failed, the stub left the player with an
 undocumented config file that mentioned two of the seventeen keys. `Harness/GuardConfig.cs` and its
 fully documented `DefaultJson` template are now the only writer, and it materializes the file on
 the harness's first read, before any payload code runs.
 
-**Mechanism.** `ReadConfig` (`:546-572`) reads `GuardConfig.Path` if the file exists (empty string
+**Mechanism.** `ReadConfig` (`:546-567`) reads `GuardConfig.Path` if the file exists (empty string
 if not) and hands the text to `ParseMode` (`:527-544`), which regex-scrapes
 `"battleMode"\s*:\s*"(auto|solo|coop)"`; failing that, `"soloVanillaBattles"\s*:\s*false` →
 `coop`; anything else → `auto`. The log line names the branch, including
 `(no guardconfig.json yet — defaults)` and `(legacy soloVanillaBattles=false)`. A read failure
-logs and defaults to `auto` (`:566-570`). The result is cached for the life of the payload
+logs and defaults to `auto` (`:562-566`). The result is cached for the life of the payload
 generation in `_configMode` via the `ConfigMode` property (`:96-106`).
 
 **Limitations.** Regex scraping, not real JSON parsing — a commented-out or nested duplicate
 key would match. Because the value is cached, editing `battleMode` needs a hot-reload, unlike
 the `tracing` flag which is read fresh.
 
-**Self-test.** The parser is pinned by `battle-mode.contract` (`:593-597`): `"solo"`, `"coop"`,
+**Self-test.** The parser is pinned by `battle-mode.contract` (`:589-593`): `"solo"`, `"coop"`,
 legacy `false`→`coop`, legacy `true`→`auto`, `{}`→`auto`, `null`→`auto`. `ParseMode` is
 `internal` (not private) precisely so the self-test can exercise it on literal text.
 
@@ -1103,23 +1112,24 @@ not a tracer: it reports the critical health component `movementorder-typeinit` 
 
 **Bug.** A village raid (or any unexpected event) suddenly drops the player into a 3D scene,
 or the map menu switches to something the player never chose, and nothing in the log says
-which code did it or who called it (`Payload/TracePatches.cs:14-31`).
+which code did it or who called it (`Payload/TracePatches.cs:20-24`).
 
 **Mechanism.** Harmony void prefixes/postfixes on the **nine** chokepoints every mission/menu
-transition must pass through (`:37-45`); each appends a `[TRACE]` line with formatted args plus
-a filtered caller stack (`:34-47`, `:86-202`). The class header's summary list (`:22-30`) names
+transition must pass through (`:41-49`); each appends a `[TRACE]` line with formatted args plus
+a filtered caller stack (hooks `:90-205`; helpers `FormatArgs` `:209-243`, `CallStack`
+`:245-293`). The class header's summary list (`:26-34`) names
 only six — it collapses `PlayerEncounter.StartBattle`/`Finish` onto one bullet and omits
 `EncounterManager.StartPartyEncounter` and `MapEvent.CanPartyJoinBattle` entirely; the `Apply`
 body is authoritative. Patching is by **method name over every declared
-overload** (`PatchByName`, `:49-82`), so a game update that adds or changes an overload
-degrades to a logged "no patchable method" instead of a crash (`:72-75`).
+overload** (`PatchByName`, `:53-86`), so a game update that adds or changes an overload
+degrades to a logged "no patchable method" instead of a crash (`:76-79`).
 
-**Patched members.** `MissionState.OpenNew` (prefix, `:37`); `GameMenu.ActivateGameMenu`
-(prefix, `:38`); `GameMenu.SwitchToMenu` (prefix, `:39`);
-`EncounterManager.StartSettlementEncounter` (prefix, `:40`);
-`EncounterManager.StartPartyEncounter` (prefix, `:41`); `MapEvent.CanPartyJoinBattle`
-(postfix, `:42`); `PlayerEncounter.StartBattle` (prefix, `:43`); `PlayerEncounter.Finish`
-(prefix, `:44`); `DefaultEncounterGameMenuModel.GetGenericStateMenu` (postfix, `:45`).
+**Patched members.** `MissionState.OpenNew` (prefix, `:41`); `GameMenu.ActivateGameMenu`
+(prefix, `:42`); `GameMenu.SwitchToMenu` (prefix, `:43`);
+`EncounterManager.StartSettlementEncounter` (prefix, `:44`);
+`EncounterManager.StartPartyEncounter` (prefix, `:45`); `MapEvent.CanPartyJoinBattle`
+(postfix, `:46`); `PlayerEncounter.StartBattle` (prefix, `:47`); `PlayerEncounter.Finish`
+(prefix, `:48`); `DefaultEncounterGameMenuModel.GetGenericStateMenu` (postfix, `:49`).
 
 **Limitations.** The class header's claim "Never changes behavior — every hook is a void
 prefix/postfix" is **literally true since v1.3.2** (`:14-21`). It was not before: three hooks
@@ -1135,7 +1145,7 @@ kept frames and drop `HarmonyLib`, `BLTDeploymentCrashGuard` and `System.*` fram
 `ToString()`'d and truncated at 80 chars.
 
 **Self-test.** None registered, and no `Diag.Report`; it self-reports only the count line
-`[TRACE] tracer active on N method overload(s)` (`:46`). Nothing else depends on it any more, so
+`[TRACE] tracer active on N method overload(s)` (`:50`). Nothing else depends on it any more, so
 its absence costs only log detail.
 
 ### Battle command/ownership tracer and control-map dump
@@ -1222,7 +1232,7 @@ mode out of dedicated server mode") (`Payload/RoleTrace.cs:7-15`).
 before/after snapshot of eleven `CoopSession` members (`:44-59`, `:100-110`), and `Tick()`
 re-snapshots at most once a second and logs only on change (`:69-98`), so the exact instant
 and shape of the role drop is captured. `Tick` is wired from `PayloadEntry.Tick`
-(`Payload/PayloadEntry.cs:148`).
+(`Payload/PayloadEntry.cs:150`).
 
 **Patched members.** `TaleWorlds.Core.MBSaveLoad.LoadSaveGameData`, falling back to
 `TaleWorlds.SaveSystem.MBSaveLoad` (prefix + postfix, `:44-58`). Reads by static reflection:
@@ -1309,7 +1319,7 @@ thread counts (`MemoryLine`, `:74-93`) alongside an engine snapshot: `Mission`
 (`StateContext`, `:99-157`). Also provides `LiveGameStack(skip)` — the current thread's
 game-only frames — used by the exception capture and the `MovementOrder` probe (`:159-196`).
 `PayloadEntry` sets `RuntimeDiagnostics.Enabled = true` only under `tracing`
-(`Payload/PayloadEntry.cs:91`); `Heartbeat`/`Mark` no-op when disabled (`:36-40`, `:59-63`).
+(`Payload/PayloadEntry.cs:93`); `Heartbeat`/`Mark` no-op when disabled (`:36-40`, `:59-63`).
 
 **Patched members.** None. Reads `Mission.Current` + `.Mode` + `.CurrentState` + `.Scene`
 (`:112-120`); `GameStateManager.Current.ActiveState` (`:130-138`); `Campaign.Current` (`:150`);
@@ -1471,7 +1481,7 @@ and `filename` headers, 120 s timeouts, and a role+machine-tagged filename
 `blt-<RoleTag>-<MachineName>.log` so server and client uploads are distinguishable
 (`:126-182`, `:150-159`).
 
-**Patched members.** None; driven from `PayloadEntry.Tick` (`Payload/PayloadEntry.cs:149`).
+**Patched members.** None; driven from `PayloadEntry.Tick` (`Payload/PayloadEntry.cs:151`).
 Reads `Log.CurrentPath` and `Log.RoleTag` from the harness (`:106`, `:150`) and calls
 `Log.Screen` on first success (`:171`).
 
@@ -1549,8 +1559,11 @@ method fails to resolve (`:41-46`). `noSickness=false` disables it with `Diag ok
 die of old age. Both prefixes swallow their own exceptions and pass through (return true) on
 error (`:96-99`, `:129-133`). Design constraint: it must **not** skip `DailyTickHero`
 wholesale, because that is exactly the third-party NoSickness mod's bug — aging and
-come-of-age events skipped, ill flag never cleared (`:20-23`). `CHANGELOG.md` additionally
-records that the fix stands down entirely if the standalone NoSickness mod is present.
+come-of-age events skipped, ill flag never cleared (`:20-23`). `CHANGELOG.md` records the
+correction: the guard never stood down for the standalone *NoSickness* mod — it coexists with
+it (this guard only ever cures and never increments ill days), and the false "stands down
+automatically" wording was removed from `_noSickness` in v1.3.2 (see § *Self-documenting config
+with regex reader*).
 
 **Self-test.** `illness-death-guard.contract` — re-resolves both targets by name at test time
 (deliberately not reusing the apply-time resolve, so a rename or move reddens the test) and
@@ -1845,15 +1858,15 @@ local hero spawns AI-controlled. Field report 2026-08-19 20:11: "I spawned as an
 spawned as me" (`Payload/PlayerIdentityGuard.cs:9-15`).
 
 **Mechanism.** Not a Harmony patch — a polling corrector run from `PayloadEntry.Tick`
-(`Payload/PayloadEntry.cs:146`), throttled to once per second (`:37-42`). If
+(`Payload/PayloadEntry.cs:148`), throttled to once per second (`:37-42`). If
 `Mission.MainAgent`'s `Character` is not `Hero.MainHero.CharacterObject` (`:69-72`) and an
 active human agent with that character exists in `mission.Agents` (`:74-82`), it hands the
-impostor back to AI (`controlled.Controller = AgentControllerType.AI`, `:93-96`), sets
-`myAgent.Controller = AgentControllerType.Player` (`:103`), then repairs ownership:
-`Team.GeneralAgent` (`:110-113`), `Team.PlayerOrderController.Owner` (`:118-122`) and every
+impostor back to AI (`controlled.Controller = AgentControllerType.AI`, `:94-97`), sets
+`myAgent.Controller = AgentControllerType.Player` (`:104`), then repairs ownership:
+`Team.GeneralAgent` (`:111-114`), `Team.PlayerOrderController.Owner` (`:119-123`) and every
 `Formation.PlayerOwner` in `Team.FormationsIncludingSpecialAndEmpty` that pointed at the
-impostor (`:127-133`). Each repair step is in its own try/catch so a partial repair still
-completes; the player is told via `Log.Screen` (`:138`).
+impostor (`:128-134`). Each repair step is in its own try/catch so a partial repair still
+completes; the player is told via `Log.Screen` (`:139`).
 
 **Patched members.** None patched. Written: `Agent.Controller`
 (`AgentControllerType.AI`/`.Player`), `Team.GeneralAgent`, `OrderController.Owner` (via
@@ -1895,8 +1908,8 @@ loader's identity — verified by assembly scan, `SharedSaveMode` is a bare sess
 **Mechanism.** A per-machine hero-identity map, `hero-identity.json`, written next to
 `guardconfig.json` (`:42-45`), keyed by `Campaign.UniqueGameId` → `Hero.StringId`. Armed per
 campaign by `PayloadEntry.OnGameStart` → `OnGameStart()` (`:61-66`,
-`Payload/PayloadEntry.cs:132`), then claimed from `PayloadEntry.Tick` → `Tick()` (`:68-97`,
-`Payload/PayloadEntry.cs:153`) once `Campaign.Current` and `Hero.MainHero` exist **and**
+`Payload/PayloadEntry.cs:134`), then claimed from `PayloadEntry.Tick` → `Tick()` (`:68-97`,
+`Payload/PayloadEntry.cs:155`) once `Campaign.Current` and `Hero.MainHero` exist **and**
 `Mission.Current` is null — never swap identity inside a mission (`:78-81`). `Claim()`
 (`:99-174`): if a hero is recorded and alive but is not `MainHero`, the player is switched with
 vanilla's `ChangePlayerCharacterAction.Apply(target)` — the same mechanism death-succession
@@ -1941,7 +1954,7 @@ vanilla succession action has not been renamed.
 **README item** 5 · **Source** `Payload/ClientHeroCreationGuard.cs` · **Class**
 `ClientHeroCreationGuard` · **Tag** `[HEROCREATE-GUARD]` · **Config** none · **Scope** client
 condition; the patch is installed unconditionally for every session
-(`Payload/PayloadEntry.cs:52`)
+(`Payload/PayloadEntry.cs:54`)
 
 **Bug.** Crash 2026-08-19 during client character creation, at the moment of picking a culture
 and advancing: NRE in `DefaultSettlementValueModel.FindFarthestDistanceBetweenSettlementsInClan`,
@@ -1963,18 +1976,18 @@ and the original exception message, shows a `Log.Screen` note, and returns null 
 exception is swallowed and culture application completes (`:61-88`).
 
 **Patched members.** `DefaultSettlementValueModel.FindMostSuitableHomeSettlement(Clan)`
-(finalizer). Read: `Clan.InitialHomeSettlement` (`:71`), `Settlement.All` / `.Count` / `[0]`
-(`:73-76`).
+(finalizer). Read: `Clan.InitialHomeSettlement` (`:73`), `Settlement.All` / `.Count` / `[0]`
+(`:75-77`).
 
 **Limitations.** Suppresses the symptom rather than fixing the null
 `clan.MapFaction.FactionMidSettlement` — the returned home settlement can be an arbitrary first
-settlement. If the recovery path itself throws, `__result` is set to null (`:81-85`), which can
+settlement. If the recovery path itself throws, `__result` is set to null (`:84-88`), which can
 still NRE downstream. A missing target is no longer silent: the guard reports the health
 component `hero-creation-guard` as degraded with
 `FindMostSuitableHomeSettlement(Clan) not found` and logs "guard inactive (game update?)"
 (`:44-49`).
 
-**Self-test.** `hero-creation-guard.contract` (registered `:42`, defined `:91-99`): the target
+**Self-test.** `hero-creation-guard.contract` (registered `:42`, defined `:92-100`): the target
 re-resolves, and the finalizer is inert on a null exception — it returns `null` **and** leaves
 `__result` untouched, so it cannot overwrite a good result on a non-exception call. Health
 component `hero-creation-guard` (`:46`, `:51`, `:56`); fire id `hero-creation-guard` (`:69`).
@@ -2021,8 +2034,8 @@ the last four as the readiness gate.
 
 **Limitations.** Only takes effect on a fresh process where the prefix beats BT's first (and
 only) verify; on a mid-game payload hot-reload it just installs the prefix, since BT will not
-verify again (`Payload/PayloadEntry.cs:72-74`). Retried from `OnBeforeInitialModuleScreen` in
-case the co-op assembly loaded late (`Payload/PayloadEntry.cs:117`); latched by `_applied`
+verify again (`Payload/PayloadEntry.cs:74-76`). Retried from `OnBeforeInitialModuleScreen` in
+case the co-op assembly loaded late (`Payload/PayloadEntry.cs:119`); latched by `_applied`
 (`:36-38`, `:83`). If BT is absent it reports `Diag ok` with "no BT present" (`:61-66`) — not a
 failure. If the engine action-cache types cannot be resolved, or BT's verify method is not
 found, it refuses to activate and reports `Diag critical:true` (`:68-80`). Mirror priming is
@@ -2051,10 +2064,10 @@ the host, and speed desync. BT does not surface this to the player at all, so th
 silently plays on broken (`Payload/BootstrapWatch.cs:7-15`).
 
 **Mechanism.** Filesystem watcher, no Harmony patch. Two entry points: `CheckAtStartup()` from
-`PayloadEntry.Apply` (`:24-27`, `Payload/PayloadEntry.cs:96`) scanning logs written within the
-last 24 h, and `Tick()` from `PayloadEntry.Tick` (`:29-48`, `Payload/PayloadEntry.cs:150`) every
+`PayloadEntry.Apply` (`:24-27`, `Payload/PayloadEntry.cs:98`) scanning logs written within the
+last 24 h, and `Tick()` from `PayloadEntry.Tick` (`:29-48`, `Payload/PayloadEntry.cs:152`) every
 120 s scanning logs written within the last 30 minutes, latched by `_warned`. `Scan()`
-(`:50-95`) walks the Desktop for `bt-sync-client.txt` / `bt-sync-host.txt` /
+(`:50-96`) walks the Desktop for `bt-sync-client.txt` / `bt-sync-host.txt` /
 `bt-sync-solo.txt`, finds the **last** `BootstrapAborted` occurrence (`FullFind` whole-file at
 startup, `TailFind` 256 KB tail mid-session), compares its offset against a persisted per-log
 handled-offset ledger so a given abort is acted on only once, then calls `ClearStaleCache()`,
@@ -2068,16 +2081,16 @@ silently before this session's bootstrap; the mid-session pass logs and shows `L
 `<module root>/bootstrapwatch.state` (`logName|offset` lines).
 
 **Limitations.** Offsets from `FullFind` are approximate — the line-consumption counter assumes
-2-byte line endings (`consumed += line.Length + 2`, `:209`) — so the ledger compare is
-heuristic, not exact. Mid-session `TailFind` only reads the last 262144 bytes (`:228`).
+2-byte line endings (`consumed += line.Length + 2`, `:210`) — so the ledger compare is
+heuristic, not exact. Mid-session `TailFind` only reads the last 262144 bytes (`:229`).
 `_warned` latches after a non-startup warning so there is only one on-screen warning per
-session (`:31-34`, `:81`; note `_warned = !startup`, so the startup pass deliberately does not
+session (`:33-36`, `:82`; note `_warned = !startup`, so the startup pass deliberately does not
 latch). Only fires for logs modified inside the age window. It cannot repair the current
 session — the remedy is a restart. Renaming can fail per file if locked; failures are logged and
-the cleared count under-reports (`:118-122`). Module paths are derived from `Assembly.Location`
-by walking up three levels for the `Modules` dir and two for the module root (`:105-107`,
-`:136-137`), so a non-standard install layout defeats it. All errors are swallowed silently at
-the `Scan`/`Tick` level (`:44-47`, `:92-94`). Registers no self-test and no `Diag` component, so
+the cleared count under-reports (`:117-123`). Module paths are derived from `Assembly.Location`
+by walking up three levels for the `Modules` dir and two for the module root (`:106-107`,
+`:137-138`), so a non-standard install layout defeats it. All errors are swallowed silently at
+the `Scan`/`Tick` level (`:45-47`, `:93-95`). Registers no self-test and no `Diag` component, so
 it is absent from `MOD HEALTH:` and `[SELFTEST]`; it does record a fire on every handled abort
 (`SelfHealing.RecordFire("bootstrap-watch")`, `:80`), so `GUARD ACTIVITY:` carries
 `bootstrap-watch=<count>` — retirable once BT regenerates its cache itself.
@@ -2125,7 +2138,7 @@ enum `af`: `af.bI = 0` = `Unknown`, `af.bi = 1` = `Separate`.
 before the patch keep the inlined original (`:26-28`), so a mid-session hot-reload cannot
 un-inline existing callers. If BT is absent or the type/getter was renamed it reports `Diag`
 "ClanModeSyncBehavior.CurrentMode not found" and is retried from
-`PayloadEntry.OnBeforeInitialModuleScreen` (`Payload/PayloadEntry.cs:118`), latched by
+`PayloadEntry.OnBeforeInitialModuleScreen` (`Payload/PayloadEntry.cs:120`), latched by
 `_applied`. It depends on the raw enum value 1 meaning `Separate` — a BT enum reordering would
 silently return the wrong mode. The 2 s verdict cache means up to 2 s of stale verdict right
 after a peer connects or disconnects. Peer confidence is only as good as `PeerDetection`: a null
@@ -2199,7 +2212,7 @@ crashing (`:104-109`). BT release hooks are best-effort: missing methods are log
 and skipped (`:183-186`). Formation indices 8 (general) and 9 (bodyguard) are never touched. The
 take-over only issues a MOVE order when the captured `WorldPosition` is valid (`:429-432`).
 `OnMissionInit()` zeroes both counters, the one-shot flags and all three depth counters
-(`:161-165`; called from `Payload/PayloadEntry.cs:138`). Every patch body fails **open** into
+(`:161-165`; called from `Payload/PayloadEntry.cs:140`). Every patch body fails **open** into
 vanilla behaviour. A BT client stands down entirely (`InScope` returns false via
 `IsBtClient`, `:221`), logging once that the host's command assignment is authoritative and
 advising "host the session (shared-save host handoff)" (`:399-405`). `CHANGELOG.md` records the
@@ -2430,7 +2443,7 @@ then patch each of `ReleaseHostMainFormationsToAi`, `ReleaseClientOwnedFormation
 **count** of successfully hooked methods, reported in the activation line (`:129-131`).
 `RetryBt(harmony)` re-runs the scan once if BT's assembly loaded after the payload
 (`_btRetried`, only when `_applied && _btPatched == 0`) (`:142-155`); called from
-`Payload/PayloadEntry.cs:121`.
+`Payload/PayloadEntry.cs:123`.
 
 **Patched members.** BT `SpNativeBattleHostMissionBehavior.ReleaseHostMainFormationsToAi`,
 `.ReleaseClientOwnedFormationsToAi`, `.ReleaseFieldBattleSourceFormationsToAi`.
@@ -2581,7 +2594,7 @@ should be able to command my own army while the host commands theirs" (`:16-17`)
 horse archers), client party in 4–7 (V–VIII, same order) (`:34-38`). Enforced at three points:
 a postfix on **every** `Mission.SpawnTroop` overload returning `Agent` (`:79-87`, `:188-212`),
 a postfix on `Mission.OnDeploymentFinished` (`:95`, `:214-228`), and a 500 ms `Tick()` called
-from `PayloadEntry` (`:49`, `:122-147`; `Payload/PayloadEntry.cs:155`). Constants:
+from `PayloadEntry` (`:49`, `:122-147`; `Payload/PayloadEntry.cs:157`). Constants:
 `BlockSize = 4`, `EnforceIntervalMs = 500`, `ResolveRetryMs = 2000` (`:48-51`) because the Order of
 Battle screen and reinforcements re-sort by class. Placement logic in `Place()`: resolve the
 agent's owning `PartyBase` via `(agent.Origin as PartyAgentOrigin).Party`, compute the target
@@ -2802,7 +2815,7 @@ is per-campaign. Subscribing at `Apply` time would either throw or bind to a dea
 the host would silently never broadcast a birth (`:59-62`, `:78-79`).
 
 **Mechanism.** `OnGameStart()` (`:80-96`), called from `PayloadEntry.OnGameStart`
-(`Payload/PayloadEntry.cs:131`). Idempotent: it returns immediately when disabled, when
+(`Payload/PayloadEntry.cs:133`). Idempotent: it returns immediately when disabled, when
 `Campaign.Current` is null, or when `ReferenceEquals(_subscribedCampaign, Campaign.Current)` —
 so a re-entry does not double-subscribe and loading a new campaign re-subscribes. It uses a
 stable static `Sentinel` object as the listener owner (`:75`, `:88`), as
@@ -3205,7 +3218,7 @@ doing so is an engine-corruption and crash path.
 
 **Mechanism.** The receive prefix does only thread-safe byte parsing, then enqueues under a lock
 into a static `Queue<T>` (`PregnancySyncGuard.cs:40-41`, `:326-333`; `StashSyncGuard.cs:57-58`,
-`:248-254`). `PayloadEntry.Tick` (`Payload/PayloadEntry.cs:151-152`) calls each guard's `Tick`,
+`:248-254`). `PayloadEntry.Tick` (`Payload/PayloadEntry.cs:153-154`) calls each guard's `Tick`,
 which dequeues under the same lock and does the engine work on the main thread
 (`PregnancySyncGuard.cs:99-127`, `StashSyncGuard.cs:270-300`). Each drained item is wrapped in
 its own try/catch so "a throw here … must never escape onto the game loop. Drop this birth and
@@ -3375,7 +3388,7 @@ disabled by the host." (observed live 2026-08-19) (`:12-17`). BT ships
 `AllowClientTimeControl` off (`docs/UPSTREAM_CONTRIBUTION.md:64-67`).
 
 **Mechanism.** Not a Harmony patch — a polled reflection driver. `ShareTimeControl.Tick()` is
-called every frame from `PayloadEntry.Tick` (`Payload/PayloadEntry.cs:147`) and self-throttles
+called every frame from `PayloadEntry.Tick` (`Payload/PayloadEntry.cs:149`) and self-throttles
 to one attempt per 3000 ms via `Environment.TickCount` with a wraparound guard (`:62-67`).
 `Resolve()` (`:152-188`) finds `CoopSubModule` and `CoopSession` via
 `PeerDetection.FindCoopType`, then
@@ -3411,7 +3424,7 @@ BannerlordTogether resolved, and it is driven only from `PayloadEntry.Tick` — 
 lifecycle retry. If BT's assembly were not loaded on the first application tick, shared time
 control would stay off for the whole process. `TimeEnforcementGuard` (`:56-59`) and
 `JoinSyncPauseEscape` (`:69-73`) instead return without latching and are re-applied from
-`OnBeforeInitialModuleScreen` / `OnGameStart` (`Payload/PayloadEntry.cs:119`, `:122`, `:128`).
+`OnBeforeInitialModuleScreen` / `OnGameStart` (`Payload/PayloadEntry.cs:121`, `:124`, `:130`).
 Latch the *success*, not the *attempt*.
 
 **Self-test.** None registered. Health evidence is the
@@ -3582,7 +3595,7 @@ if `ToggleHostManualPause` is missing or does not return bool, or if `MapPauseRe
 `Diag.Report(false)` (`:82-93`); a second gate covers the reason query, the cancel router and
 both boxed enum values (`:100-107`). `_applied` latches; `Apply` is retried from
 `PayloadEntry.OnBeforeInitialModuleScreen` because BT may load late
-(`Payload/PayloadEntry.cs:119`; `:69-73`). `FindTransferCancel` scans only the first assembly
+(`Payload/PayloadEntry.cs:121`; `:69-73`). `FindTransferCancel` scans only the first assembly
 named exactly `BannerlordTogether` and returns null if the fingerprint misses (`:169-226`).
 Resolved targets are pinned against BT v0.5.0.1 (`:45`). Cancelling is destructive to the
 joiner's in-flight transfer — hence the two-press consent gate.
@@ -3853,7 +3866,7 @@ session; any failure yields an empty string (`:26-48`). `Bool(key, fallback)` ma
 fallback (`:50-80`). Every setting ships with a sibling `"_<key>"` documentation string in the
 default file (`:82-115`), which is never read back. This `DefaultJson` template is the **only**
 writer of `guardconfig.json`; `BattleMode`'s two-key stub writer was deleted in v1.3.2
-(`Payload/BattleMode.cs:549-552`), so a player can no longer end up with an undocumented file.
+(`Payload/BattleMode.cs:550-553`), so a player can no longer end up with an undocumented file.
 
 Two `_<key>` doc strings are worth reading as documentation in their own right. `_noSickness`
 was corrected in v1.3.2: it used to claim the guard "stands down automatically if the
@@ -3927,6 +3940,14 @@ fixed-name / Roslyn-compiled case (`:1-9`).
 These are not in-game guards. They are the mechanisms that get the right two DLLs onto a
 player's machine, keep the version honest, and get evidence back off the machine. None of them
 reads `guardconfig.json` at runtime except where noted.
+
+The release entries here (§ *Release-manifest integrity check at install time*, § *`dist/` is
+tracked on purpose*, § *One-step release*, § *Player-script drift guard*) describe what each
+mechanism does, not the order to do it in. The ordered checklist — bump the version, run
+`tools/release.sh`, re-stamp the hand-written version literals, write the changelog entry, add
+the doc rows, lint the player-facing scripts, pass the pre-release verification gate, commit,
+push — is `docs/RELEASE.md`. Follow it; do not reconstruct a release procedure from these
+entries.
 
 ### Locked-DLL in-place update (rename-aside `.prev`)
 
@@ -4091,7 +4112,7 @@ round-trips for days.
 
 Then `Compress-Archive` the stage to `%TEMP%\bltguard-diagnostics.zip` (`:80`), upload with a
 72 h litterbox link falling back to `0x0.st` (`:86-89`), and put the URL on the clipboard
-(`:93-94`). The `:newest` helper (`:107-118`) is what caps each game-log pattern to its N newest
+(`:94-95`). The `:newest` helper (`:107-117`) is what caps each game-log pattern to its N newest
 files. Every copy is `>nul 2>&1` so a missing file is skipped, not fatal.
 
 **Limitations.** Depends on `powershell -NoProfile -Command Compress-Archive` (`:80`) — a
@@ -4175,13 +4196,13 @@ mod fixes, mid-session.
 **Mechanism.** "Fresh statics and a per-generation Harmony owner id
 (`bltogether.crashguard.gen{N}`); the new generation is applied first, then the previous
 generation is `UnpatchAll`'d — a failed reload keeps the previous generation, so the game is
-never left unpatched" (`HOTRELOAD.md:10-13`). Success is visible in the log as
-`[HOTRELOAD] gen2 applied (reload), unpatched …gen1` and the engine reloads within about 400 ms
-of the DLL landing (`HOTRELOAD.md:34`).
+never left unpatched" (`HOTRELOAD.md` § *Hot-reload dev workflow (no game restart)*, intro).
+Success is visible in the log as `[HOTRELOAD] gen2 applied (reload), unpatched …gen1` and the
+engine reloads within about 400 ms of the DLL landing (`HOTRELOAD.md` § *A) Build-and-drop*).
 
 **Limitations.** Both generations are briefly patched simultaneously — a double-patch window
 between apply and unpatch. Old assemblies cannot unload on .NET Framework, so roughly 1–3 MB
-leaks per reload (`HOTRELOAD.md:63`).
+leaks per reload (`HOTRELOAD.md` § *Trade-offs and known gaps*).
 
 ### Two-condition hot-reload gate
 
@@ -4195,8 +4216,8 @@ in-process.
 **Mechanism.** Hot-reload requires **both** `"hotReload": true` in `guardconfig.json` **and** an
 empty marker file `.hotreload-dev` in the module root
 (`Modules/BLTDeploymentCrashGuard/.hotreload-dev`). "Both conditions are required — this makes
-runtime code loading impossible on a normal player install" (`HOTRELOAD.md:15-21`). The section
-header is explicit: "Enabling hot-reload (dev only — never ship this on)".
+runtime code loading impossible on a normal player install" (`HOTRELOAD.md` § *Enabling
+hot-reload (dev only — never ship this on)*). The section heading itself carries the warning.
 
 ### Roslyn edit-`.cs` auto-reload (mode B)
 
@@ -4208,13 +4229,14 @@ header is explicit: "Enabling hot-reload (dev only — never ship this on)".
 csproj `:17-19` sets `DefineConstants ROSLYN`; `:25-27` adds `Microsoft.CodeAnalysis.CSharp
 4.8.0` conditionally), set `"hotReloadRoslyn": true`, and point `"payloadSourceDir"` at the repo
 `Payload/` folder; then "editing any `Payload/*.cs` triggers a runtime Roslyn recompile +
-reload — no `dotnet build`" (`HOTRELOAD.md:36-45`). On compile failure "the engine logs it and
-falls back to the prebuilt DLL" (`:47-48`).
+reload — no `dotnet build`" (`HOTRELOAD.md` § *B) Edit-.cs auto-reload*). On compile failure
+"the engine logs it and falls back to the prebuilt DLL" (same section).
 
 **Limitations.** "Roslyn on .NET Framework 4.8 inside Bannerlord can bind-conflict with
 ButterLib's older `System.Collections.Immutable` / `System.Reflection.Metadata`"
-(`HOTRELOAD.md:46-47`). Mode (A) build-and-drop is described as "default, bulletproof, zero
-extra deps" (`:24`) and mode (B) as "slicker, fragile on net472" (`:36`).
+(`HOTRELOAD.md` § *B) Edit-.cs auto-reload*). The two mode headings state the trade-off
+themselves: mode (A) is "Build-and-drop (default, bulletproof, zero extra deps)", mode (B)
+"Edit-.cs auto-reload (Roslyn, slicker, fragile on net472)".
 
 ### Battle-mode stash: documented reload gap
 
@@ -4278,7 +4300,7 @@ from.
 `BLTDeploymentCrashGuard.dll`, `SubModuleClassType BLTDeploymentCrashGuard.SubModule`, with an
 empty `<Assemblies />` (`:15-22`).
 
-**Limitations.** `Optional="true"` does **not** guarantee load order after BT — `install.cmd:70-71`
+**Limitations.** `Optional="true"` does **not** guarantee load order after BT — `install.cmd:102`
 has to tell the player to tick the mod "in the Singleplayer mods list, AFTER BannerlordTogether"
 by hand. `<Assemblies />` is empty, so the payload DLL is invisible to the launcher and must be
 loaded by the harness itself.
@@ -4319,21 +4341,21 @@ half-updated `dist/` shipped a mismatched pair silently (`tools/release.sh:3-9`)
 **Mechanism.** One script produces the whole set from one build. It reads `<Version>` out of
 `Directory.Build.props` (the single version source), builds both projects in Release unless
 `--no-build` is passed, and refuses to continue unless `SubModule.xml` is already stamped
-`v$VERSION` (`:21-36`). It then copies the three files into the game module
-(`$BANNERLORD_DIR/Modules/BLTDeploymentCrashGuard`, defaulting to the standard Steam path) and
+`v$VERSION` (`:24-37`, the stamp check itself at `:37`). It then copies the three files into the
+game module (`$BANNERLORD_DIR/Modules/BLTDeploymentCrashGuard`, defaulting to the Steam path) and
 into `dist/`; a locked destination (game running) is reported, not fatal (`:38-52`). It writes
 `dist/manifest.txt` — a `version=<v>` line followed by `<sha256>  <file>` for each of the three
-files (`:54-62`) — and finally verifies the SHA256 of every file matches across **build output,
+files (`:53-60`) — and finally verifies the SHA256 of every file matches across **build output,
 `dist/` and the game module**, printing `OK` or `MISMATCH` per file and exiting 1 on any
-mismatch (`:64-80`). Only a fully matching set prints "release-ready".
+mismatch (`:62-77`). Only a fully matching set prints "release-ready".
 
 **Limitations.** Bash + `sha256sum` + `dotnet build`; the default game path is a Steam layout
 and anything else needs `BANNERLORD_DIR`. The version check is a substring match for `v$VERSION`
 in `SubModule.xml`, so it catches a stale stamp, not a malformed one. It does not commit or push
-— "Pushing dist/ to GitHub IS the release" is left to the operator (`:16`), so the release is
+— "Pushing dist/ to GitHub IS the release" is left to the operator (`:15`), so the release is
 only atomic if `dist/` and `CHANGELOG.md` land in one push. Running it with the game open skips
 the module copies and then reports NOT release-ready, telling you to close the game and re-run
-with `--no-build` (`:81-84`).
+with `--no-build` (`:73-76`).
 
 ### Player-script drift guard (`tools/lint-scripts.sh`)
 
@@ -4411,10 +4433,10 @@ is a client-session condition.
 | `[CLIENT-FIX]` | `Payload/ClientBootstrapFix.cs` |
 | `[CONTROL]` | `Payload/ControlTrace.cs` |
 | `[CONVO-CAM]` | `Payload/ConversationCameraCrashGuard.cs` |
-| `[DEPLOY-GUARD]` | `Payload/DeploymentCrashGuards.cs` (all three classes; new in v1.3.2 — these lines were previously untagged) |
 | `[COOP-BATTLE]` | `Payload/CoopBattleTrace.cs` |
 | `[COOP-CMD]` | `Payload/CoopCommandSplit.cs` |
 | `[DEADHERO]` | `Payload/DeadHeroReactivationFix.cs` |
+| `[DEPLOY-GUARD]` | `Payload/DeploymentCrashGuards.cs` (all three classes; new in v1.3.2 — these lines were previously untagged) |
 | `[DIAG]` | `Payload/RuntimeDiagnostics.cs` |
 | `[ENCOUNTER-GUARD]` | `Payload/EncounterLoopGuard.cs` |
 | `[GATE]` | `Payload/SiegeGatePromptFix.cs` **and** `Payload/CivilianGateCloseFix.cs` (shared tag) |
@@ -4441,15 +4463,15 @@ is a client-session condition.
 | `[TIME-FLOW]` | `Payload/TimeFlowPatch.cs` |
 | `[TIME-GUARD]` | `Payload/TimeEnforcementGuard.cs` |
 | `[TRACE]` | `Payload/TracePatches.cs` |
-| `GUARD ACTIVITY:` | `Harness/SelfHealing.cs:67`, emitted from `Payload/PayloadEntry.cs:189-209` |
+| `GUARD ACTIVITY:` | `Harness/SelfHealing.cs:67`, emitted from `Payload/PayloadEntry.cs:191-211` |
 | `MOD HEALTH:` | `Harness/Diag.cs:89` |
 | `===== BLT Deployment Crash Guard … =====` | `Harness/Diag.cs:60` |
 | `[Deploy Guard]` (on-screen prefix) | `Harness/Log.cs:126` |
 | `CRASH GUARD NOT ACTIVE — payload failed to load, all fixes are OFF` (on-screen) | `Harness/HotReload.cs:261`, raised by `EnsureLoaded` (`:252-263`) |
-| `[H]` / `[C]` / `[S]` / `[?]` (role tag) | `Harness/Log.cs:19,69`; set from `Payload/PayloadEntry.cs:173,177,181` |
+| `[H]` / `[C]` / `[S]` / `[?]` (role tag) | `Harness/Log.cs:19,69`; set from `Payload/PayloadEntry.cs:175,179,183` |
 | `[SELFTEST]` | `Harness/SelfHealing.cs` (self-test results) |
-| `[DEPLOY-GUARD] SUPPRESSED crash in DeploymentMissionController.…`, `[DEPLOY-GUARD] recovery …`, `[DEPLOY-GUARD] FinishDeployment recovery failed` | `Payload/DeploymentCrashGuards.cs:107,127,142,148-157,162` (untagged before v1.3.2 — the literal text still greps) |
-| *(untagged)* `payload build …`, `SAFE MODE …`, `tracing ENABLED …`, `patches applied …`, `FAILED to apply patches …` | `Payload/PayloadEntry.cs:29,33,92,101,110` |
+| `[DEPLOY-GUARD] SUPPRESSED crash in DeploymentMissionController.…`, `[DEPLOY-GUARD] recovery …`, `[DEPLOY-GUARD] FinishDeployment recovery failed` | `Payload/DeploymentCrashGuards.cs:107,128,144,149-159,164` (untagged before v1.3.2 — the literal text still greps) |
+| *(untagged)* `payload build …`, `SAFE MODE …`, `tracing ENABLED …`, `patches applied …`, `FAILED to apply patches …` | `Payload/PayloadEntry.cs:29,33,94,103,112` |
 | `CHARGEN-FC <ExceptionType> @ <Type.Method>` | throttle key surfaced inside `[repeat]` lines — `Payload/CharacterCreationTrace.cs:177` |
 
 Not ours, but seen in the same logs: `[SPNATIVE ORDER-GUARD]` and `[HARMONY]` are
@@ -4464,8 +4486,8 @@ by `Harness/GuardConfig.cs:84-113`; those `_`-prefixed siblings are never read.
 | Key | Default | Read at |
 |---|---|---|
 | `safeMode` | false | `Payload/PayloadEntry.cs:31` (declared `Harness/GuardConfig.cs:86`) |
-| `battleMode` | `"auto"` | `Payload/BattleMode.cs:536` via `ParseMode` (`GuardConfig.cs:88`) |
-| `soloVanillaBattles` | — (legacy v2.0) | `Payload/BattleMode.cs:540` — only the literal `false` is honoured, mapping to `coop` |
+| `battleMode` | `"auto"` | `Payload/BattleMode.cs:534` via `ParseMode` (`GuardConfig.cs:88`) |
+| `soloVanillaBattles` | — (legacy v2.0) | `Payload/BattleMode.cs:539` — only the literal `false` is honoured, mapping to `coop` |
 | `timeAlwaysFlows` | true | `Payload/TimeFlowPatch.cs:90` (`GuardConfig.cs:89`). Written **only** by `Harness/GuardConfig.cs`'s `DefaultJson`; `BattleMode`'s two-key stub writer was deleted in v1.3.2 |
 | `shareTimeControl` | true | `Payload/ShareTimeControl.cs:190-209` (`GuardConfig.cs:90`) |
 | `noSickness` | true | `Payload/IllnessDeathGuard.cs:38` (`GuardConfig.cs:92`) |
@@ -4475,8 +4497,8 @@ by `Harness/GuardConfig.cs:84-113`; those `_`-prefixed siblings are never read.
 | `coopOwnArmyCommand` | true | `Payload/CoopCommandSplit.cs:72` (`GuardConfig.cs:100`) |
 | `siegeCommandAll` | true | `Payload/SiegeCommandGuard.cs:87` (`GuardConfig.cs:102`) |
 | `myHero` | `""` | `Payload/CoopHeroIdentityLock.cs:129` (`GuardConfig.cs:104`) |
-| `tracing` | false | `Payload/PayloadEntry.cs:211-232` (fresh from disk; `GuardConfig.cs:106`); read directly by `Payload/SiegeGatePromptFix.cs:74` and `Payload/PregnancySync/PregnancySyncGuard.cs:147` |
-| `selfTest` | false | `Payload/PayloadEntry.cs:103` (`GuardConfig.cs:107`); runs `Harness/SelfHealing.cs:108-110` |
+| `tracing` | false | `Payload/PayloadEntry.cs:217-234` (fresh from disk; `GuardConfig.cs:106`); read directly by `Payload/SiegeGatePromptFix.cs:74` and `Payload/PregnancySync/PregnancySyncGuard.cs:147` |
+| `selfTest` | false | `Payload/PayloadEntry.cs:105` (`GuardConfig.cs:107`); runs `Harness/SelfHealing.cs:108-110` |
 | `logStreamBin` | `""` | `Payload/LogStreamer.cs:62-63` (`GuardConfig.cs:109`) |
 | `hotReload` | false | `Harness/HotReload.cs:70` (`GuardConfig.cs:111`) — also requires a `.hotreload-dev` marker file |
 | `hotReloadRoslyn` | false | `Harness/HotReload.cs:71` (`GuardConfig.cs:112`) — also requires `PayloadCompiler.CompiledIn` |
@@ -4484,7 +4506,7 @@ by `Harness/GuardConfig.cs:84-113`; those `_`-prefixed siblings are never read.
 
 Not JSON keys, but part of the same configuration surface: the `logstream.txt` sidecar in the
 module root, which takes precedence over `logStreamBin` (`Payload/LogStreamer.cs:48-58`,
-written by `install.cmd:62-64`); the `.hotreload-dev` marker file; and the `BANNERLORD_DIR` and
+written by `install.cmd:93-96`); the `.hotreload-dev` marker file; and the `BANNERLORD_DIR` and
 `BLTGUARD_BIN` environment variables read by `install.cmd`.
 
 ### Index 3: patched member → fix
@@ -4612,9 +4634,9 @@ on-screen text is prefixed `[Deploy Guard]` by `Harness/Log.cs:126`.
 
 | On-screen message | File |
 |---|---|
-| `battles set to native/vanilla (<detail>)` | `Payload/BattleMode.cs:174` |
-| `co-op battle sync restored (<detail>)` | `Payload/BattleMode.cs:222` |
-| `co-op mod did NOT fully load — cache auto-cleared, RESTART THE GAME` | `Payload/BootstrapWatch.cs:87` |
+| `battles set to native/vanilla (<detail>)` | `Payload/BattleMode.cs:284` |
+| `co-op battle sync restored (<detail>)` | `Payload/BattleMode.cs:333` |
+| `co-op mod did NOT fully load — cache auto-cleared, RESTART THE GAME` | `Payload/BootstrapWatch.cs:88` |
 | `no clan member can lead a new party right now — hover a greyed card for the reason …` | `Payload/ClanPartyCreationAdvisor.cs:148` |
 | `<name>: new party created with no troops yet — click it on the map and exchange troops to fill it` | `Payload/ClanPartyCreationAdvisor.cs:182` |
 | `<name>: party created — opening the troop exchange` | `Payload/ClanPartyCreationAdvisor.cs:191` |
@@ -4622,13 +4644,13 @@ on-screen text is prefixed `[Deploy Guard]` by `Harness/Log.cs:126`.
 | `could not open the troop exchange automatically — click the new party on the map to fill it` | `Payload/ClanPartyCreationAdvisor.cs:264` |
 | `prevented a clan-screen crash (co-op half-sync) — the clan screen was closed` | `Payload/ClanScreenCrashGuard.cs:54` |
 | `co-op sync patches verified — client bootstrap fixed` | `Payload/ClientBootstrapFix.cs:182` |
-| `prevented a hero-creation crash (half-synced world) — continuing` | `Payload/ClientHeroCreationGuard.cs:68` |
+| `prevented a hero-creation crash (half-synced world) — continuing` | `Payload/ClientHeroCreationGuard.cs:82` |
 | `Co-op: <host> commands I–IV, <client> commands V–VIII (own army each)` | `Payload/CoopCommandSplit.cs:390` |
 | `playing as <hero> — this machine's hero (save was last played as <hero>)` | `Payload/CoopHeroIdentityLock.cs:173` |
 | `a companion who died while away could not return` | `Payload/DeadHeroReactivationFix.cs:82` |
-| `prevented a deployment-setup crash (details in Modules/BLTDeploymentCrashGuard/CrashGuard.log)` | `Payload/DeploymentCrashGuards.cs:24` |
-| `prevented a deployment-finish crash (details in Modules/BLTDeploymentCrashGuard/CrashGuard.log)` | `Payload/DeploymentCrashGuards.cs:78` |
-| `broke a stuck encounter loop (details in CrashGuard.log)` | `Payload/EncounterLoopGuard.cs:123` |
+| `prevented a deployment-setup crash (details in Modules/BLTDeploymentCrashGuard/CrashGuard.log)` | `Payload/DeploymentCrashGuards.cs:108` |
+| `prevented a deployment-finish crash (details in Modules/BLTDeploymentCrashGuard/CrashGuard.log)` | `Payload/DeploymentCrashGuards.cs:166` |
+| `broke a stuck encounter loop (details in CrashGuard.log)` | `Payload/EncounterLoopGuard.cs:221` |
 | `your sickness was cured (no-sickness guard)` | `Payload/IllnessDeathGuard.cs:126` |
 | `time is held by a joining player's sync (<reason>) — press pause again within <N>s to cancel their join` | `Payload/JoinSyncPauseEscape.cs:251` |
 | `join sync cancelled — time is yours again (the joining player can reconnect)` | `Payload/JoinSyncPauseEscape.cs:327` |
@@ -4636,7 +4658,7 @@ on-screen text is prefixed `[Deploy Guard]` by `Harness/Log.cs:126`.
 | `log streaming active` | `Payload/LogStreamer.cs:171` |
 | `marriage barter cancelled BEFORE any gold moved — co-op clan sync isn't ready yet, try again in a moment` | `Payload/MarriageBarterGuard.cs:90` |
 | `SAFE MODE active — this mod is doing nothing (guardconfig.json)` | `Payload/PayloadEntry.cs:34` |
-| `fixed player identity — you are back in control of your own character` | `Payload/PlayerIdentityGuard.cs:138` |
+| `fixed player identity — you are back in control of your own character` | `Payload/PlayerIdentityGuard.cs:139` |
 | `<hero> is pregnant` | `Payload/PregnancySync/PregnancySyncGuard.cs:176` |
 | `a child was born in your co-op family: <name>` | `Payload/PregnancySync/PregnancySyncGuard.cs:381` |
 | `shared time control enabled — either player controls speed` | `Payload/ShareTimeControl.cs:107` |
