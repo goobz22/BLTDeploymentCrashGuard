@@ -60,7 +60,7 @@ start, placed next to the pitfall they prevent.
 | 10 | [BannerlordTogether — interoperating with a peer mod](#10-bannerlordtogether--interoperating-with-a-peer-mod) | B1–B20 |
 | 11 | [Co-op sync — wire protocols and shared state](#11-co-op-sync--wire-protocols-and-shared-state) | S1–S17 |
 | 12 | [Tooling, build and deploy](#12-tooling-build-and-deploy) | T1–T24 |
-| 13 | [Process and diagnosis discipline](#13-process-and-diagnosis-discipline) | P1–P17 |
+| 13 | [Process and diagnosis discipline](#13-process-and-diagnosis-discipline) | P1–P19 |
 
 ---
 
@@ -2273,9 +2273,14 @@ at least one session.
   landmines. Trust the code; when a diagnostic's scope is widened or a default is flipped, the
   changelog entry, the spec **and** the file header are all things that silently go stale, so fix them
   in the same change.
-- **Now** — CHANGELOG.md:20-24 against `Payload/CharacterCreationTrace.cs:19-27,38-49,133-150`;
-  `docs/SPEC-pregnancy-coop-sync.md:47,58,61` against
-  `Payload/PregnancySync/PregnancySyncGuard.cs:28-30,45` and `Harness/GuardConfig.cs:94`.
+- **Now** — the spec half (b) and (c) was corrected in place on 2026-09-04, each line marked
+  "(corrected 2026-09-04)" so the drift stays visible rather than being quietly erased: see
+  `docs/SPEC-pregnancy-coop-sync.md` § *Files* and § *Proof strategy*, checked against
+  `Payload/PregnancySync/PregnancySyncGuard.cs:28-30,47` and `Harness/GuardConfig.cs:94`. Two copies
+  of the same claim are still open and are the standing example of why one fact needs one home:
+  CHANGELOG.md:20-24 against `Payload/CharacterCreationTrace.cs:19-27,38-49,133-150`, and the guard's
+  own header still reading "Default OFF until validated live" beside
+  `GuardConfig.Bool("pregnancySync", true)` (`Payload/PregnancySync/PregnancySyncGuard.cs:28,47`).
 
 ### P6 · Believing a "log-only" header
 
@@ -2283,11 +2288,17 @@ at least one session.
   void prefix/postfix that appends a `[TRACE]` line". Three of its hooks call into behaviour-carrying
   code: `BattleMode.DecideAndApply("mission-open")`, `BattleMode.DecideAndApply("start-battle")` and
   `EncounterLoopGuard.NoteEncounterFinish()`.
-- **Lesson** — Turning tracing on is **not** behaviour-neutral in this mod: battle-mode re-decisions
-  happen at extra points and the encounter-loop guard sees extra finish notifications. Do not treat a
-  tracing-on reproduction as identical to a tracing-off one, and do not trust a header over the code.
-  Keep decision hooks out of debug-only code paths in the first place — see **E30**.
-- **Now** — `Payload/TracePatches.cs:15-16` against `:86-91,179-183,185-189`.
+- **Lesson** — Turning tracing on was **not** behaviour-neutral in this mod: battle-mode re-decisions
+  happened at extra points and the encounter-loop guard saw extra finish notifications, so a
+  tracing-on reproduction was not identical to a tracing-off one. Do not trust a header over the code.
+  Keep decision hooks out of debug-only code paths in the first place — see **E30** and **P18**, which
+  is the other half of this bug: the same hooks were also the *only* ones, so the behaviour vanished
+  with tracing off.
+- **Now** — fixed 2026-09-04: the three calls were removed from the tracer and the decision points
+  moved to the guards that own them (`Payload/BattleMode.cs:110-150`,
+  `Payload/EncounterLoopGuard.cs:70-73,136-173`), and the header now states the claim is literally true
+  with the date it became true (`Payload/TracePatches.cs:14-24`). `TracePatches` contains no call to
+  `BattleMode.DecideAndApply` or `EncounterLoopGuard.NoteEncounterFinish`.
 
 ### P7 · Reading a quiet log as proof that nothing happened
 
@@ -2320,21 +2331,26 @@ at least one session.
 ### P9 · Leaving the most central component unpinned
 
 - **What happened** — House convention is that every guard reports via `Diag.Report` and registers a
-  `SelfHealing.RegisterTest`. `BattleMode.cs` and `PayloadEntry.cs` — the two most central files — do
-  neither, and they are not alone: `TimeFlowPatch`, `PartyAiCrashGuard`, `EncounterLoopGuard`,
-  `MapClickSpeedKeeper`, `ClientHeroCreationGuard`, `TimeEnforcementGuard`, `ShareTimeControl`,
-  `MovementOrderTypeInitGuard`, `PlayerIdentityGuard`, `BootstrapWatch` and `DeploymentCrashGuards`
-  report no health entry and pin no self-test either — thirteen of the thirty non-diagnostic files in
-  `Payload/`. Today a renamed `BattleTargets` type is a silent `continue`.
-  The ten diagnostics files also register nothing, deliberately.
-- **Lesson** — The component everyone depends on is the easiest one to leave unpinned. Where the
-  convention is deliberately broken, say what replaces it: for the tracers, the **load line is** the
-  health report, and only the load-bearing fix (`MovementOrderTypeInitGuard`) prints an outcome that
-  distinguishes "fixed" from "too late".
-- **Now** — absence of `Diag.Report`/`SelfHealing.RegisterTest` in `Payload/BattleMode.cs` and
-  `Payload/PayloadEntry.cs` (the entry point only *consumes* the two subsystems, at
-  `Payload/PayloadEntry.cs:102,105`), against `Payload/ClanModeSoloFix.cs:54-55` and
-  `Payload/ClientBootstrapFix.cs:85-86`; the silent `continue` at `Payload/BattleMode.cs:231-234`.
+  `SelfHealing.RegisterTest`. `BattleMode.cs` — the most central guard in the mod — did neither, and
+  it was not alone: `PartyAiCrashGuard`, `EncounterLoopGuard`, `ClientHeroCreationGuard`,
+  `MovementOrderTypeInitGuard` and `DeploymentCrashGuards` reported no health entry and pinned no
+  self-test either. A renamed `BattleTargets` type was a silent `continue`, so the mod's single
+  load-bearing fix could be half-installed and the board still read clean.
+- **Lesson** — The component everyone depends on is the easiest one to leave unpinned, precisely
+  because nobody thinks of it as "a guard". Where the convention is deliberately broken, say what
+  replaces it: for the tracers, the **load line is** the health report.
+- **Now** — fixed 2026-09-04. Those six now report and each registers a `<component>.contract` test:
+  `battle-mode` (`Payload/BattleMode.cs:118,130,136`), `encounter-loop-guard`
+  (`Payload/EncounterLoopGuard.cs:68,83,114,121,130`), `deployment-guards` via a separate health class
+  (`Payload/DeploymentCrashGuards.cs:35,42,48`), `party-ai-guard`
+  (`Payload/PartyAiCrashGuard.cs:48,71,76`), `hero-creation-guard`
+  (`Payload/ClientHeroCreationGuard.cs:42,46,51,56`) and `movementorder-typeinit`
+  (`Payload/MovementOrderTypeInitGuard.cs:61,65,78,85,92`). An unresolved lift target is no longer
+  silent either — it logs once, naming the type or the method (`Payload/BattleMode.cs:349,366`).
+  What deliberately still reports nothing is the maintained list in `docs/DIAGNOSTICS.md` § *What
+  `MOD HEALTH:` does not cover*; `PayloadEntry` only *consumes* the two subsystems
+  (`Payload/PayloadEntry.cs:104,107`). See **P19** for why the gap read as health rather than as a
+  gap.
 
 ### P10 · Assuming tests would have caught it
 
@@ -2446,6 +2462,67 @@ at least one session.
   `Payload/CoopCommandSplit.cs:416-444`; `Payload/DeadHeroReactivationFix.cs:157-179,163`;
   `Payload/IllnessDeathGuard.cs:136-148`; `Payload/ClanScreenCrashGuard.cs:68-81`;
   `Payload/CoopHeroIdentityLock.cs:316-327`.
+
+### P18 · Behaviour that rides on a tracing-only hook disappears with tracing off
+
+- **What happened** — Two of this mod's load-bearing behaviours were reachable **only** through hooks
+  installed by the diagnostic tracer, which runs only when `guardconfig.json` has `"tracing": true`.
+  `BattleMode`'s two decision points, `PlayerEncounter.StartBattle` and `MissionState.OpenNew`, lived
+  in `TracePatches`; so did the `PlayerEncounter.Finish` stamp that `EncounterLoopGuard` needs to
+  recognise its loop signature. Tracing is **off** by default (`Harness/GuardConfig.cs:106`), so on a
+  normal player install the battle-mode decision was never re-taken at a chokepoint — and the only
+  decision that ever lifts BT's battle patches is the one taken at `StartBattle`
+  (`docs/ENGINE-NOTES.md` § *When a co-op mod's battle patches are installed, relative to our
+  lifecycle hooks*), so the first solo battle of a session opened with the player side stripped. The
+  encounter-loop breaker was worse: with no `Finish` stamp, `FollowsFinish` was never true, so the
+  breaker could not trip at all, ever, on any player install.
+- **Why it survived review** — Every symptom pointed away from the cause. The behaviour worked
+  perfectly in every developer repro, because a developer reproducing a bug turns tracing **on**. The
+  debug configuration was the only configuration in which the fix existed, so the more carefully it
+  was tested, the more reliably the bug was hidden.
+- **Lesson** — A decision point belongs to the guard that owns it, never to a tracer or any other
+  debug-gated code path. State the rule as a property of the build, not of a code review: **turning
+  diagnostics on must not change what the mod does, only what it writes down.** The two tests that
+  catch this class cost nothing — grep the debug-gated file for calls into non-diagnostic types, and
+  ask of every fix "which config flags must be at their default for this to run?". Where a tracer
+  header claims "log-only", make the claim checkable: **P6** is the same bug read from the other
+  side, where the header was believed over the code.
+- **Now** — fixed 2026-09-04. `BattleMode.Apply` hooks both chokepoints itself, always-on
+  (`Payload/BattleMode.cs:110-150`), and `EncounterLoopGuard.Apply` hooks `PlayerEncounter.Finish`
+  itself (`Payload/EncounterLoopGuard.cs:70-73,136-173`), each recorded in its own header with the
+  date and the consequence (`Payload/BattleMode.cs:24-34`;
+  `Payload/EncounterLoopGuard.cs:24-26`). `TracePatches` no longer calls
+  `BattleMode.DecideAndApply` or `EncounterLoopGuard.NoteEncounterFinish` at all
+  (`Payload/TracePatches.cs:14-24`). Both are now pinned by a self-test that runs independently of
+  tracing: `battle-mode.contract` re-resolves both chokepoints, and
+  `encounter-loop-guard.contract` pins `FollowsFinish` / `WindowTripped`
+  (`Payload/EncounterLoopGuard.cs:244-260`).
+
+### P19 · A component without `Diag.Report` is invisible to `MOD HEALTH:`, so its silent failure reads as healthy
+
+- **What happened** — `MOD HEALTH:` prints one row per component that called `Diag.Report`
+  (`Harness/Diag.cs`). A component that never calls it contributes **no row** — and a board with no
+  red rows is read as "everything is fine", not as "this component was never asked". Six components
+  were in that state, including `battle-mode`, the mod's single most load-bearing fix, and
+  `deployment-guards`, the two crash finalizers the mod is named after. Because they were attribute
+  patches applied by `harmony.PatchAll`, which reports nothing, a rename on the BT or game side would
+  have unhooked them while the health summary stayed clean and the player saw only battles that no
+  longer worked.
+- **Lesson** — Absence of evidence renders as evidence of absence on any board that lists only what
+  reported. Two consequences. First: **every** exit path of `Apply` reports, including the
+  "target type not found" early return and the config-disabled return (disabled on purpose is
+  `(component, true, "disabled by config")` — healthy, and *present*). Second: where a patch style
+  cannot report for itself, pair it with something that can — attribute-applied finalizers get a
+  separate health class that runs after `PatchAll` and verifies the finalizers are actually on their
+  targets, which is a stronger check than "`Apply` did not throw". Any component that is deliberately
+  exempt belongs on a maintained list, so the exemption is a decision someone can review rather than
+  an omission nobody can see.
+- **Now** — fixed 2026-09-04 for all six; the ids, the call sites and the surviving deliberate
+  exemptions are in **P9**. The pattern for attribute patches is `DeploymentCrashGuardHealth`
+  (`Payload/DeploymentCrashGuards.cs:20-89`), called from `Payload/PayloadEntry.cs:45-46` immediately
+  after `PatchAll`; it re-resolves `SetupTeams` and `FinishDeployment`, asserts one of **our** owner
+  ids holds a finalizer on each (`:58-77`), and reports `critical: true` because their absence
+  re-exposes a crash-to-desktop.
 
 > **Good to know — the one-key kill switch, and why it earns its place.**
 > `safeMode` returns from `PayloadEntry.Apply` **before any patch is installed**, so a player — or a

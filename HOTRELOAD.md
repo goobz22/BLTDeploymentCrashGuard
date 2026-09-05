@@ -199,7 +199,10 @@ three shipped files — `BLTDeploymentCrashGuard.dll` (harness) and
 `Modules/BLTDeploymentCrashGuard/bin/Win64_Shipping_Client/`, and `SubModule.xml` into the module
 root — then into `dist/`, writes `dist/manifest.txt`, and verifies the SHA256 of every file matches
 across build output, `dist/` and the game module. `SubModule.xml` still points at the harness; the
-harness loads the payload itself.
+harness loads the payload itself. Every **harness** build re-stamps the repo-root `SubModule.xml`
+with the `Directory.Build.props` `<Version>`, but no build ever writes into `dist/` — the mode-(B)
+`dotnet build -c Release -p:Roslyn=true` above leaves `dist/` untouched, so a dev build can never
+desync `dist/` from its manifest. Only `tools/release.sh` changes `dist/`, as one set.
 
 ```
 tools/release.sh              # build both, deploy, manifest, verify
@@ -237,9 +240,9 @@ intro).
 - Harness changes need a restart.
 - Known Phase-B gap: `BattleMode`'s foreign-patch stash does not yet survive a reload — reloading
   while in `battleMode=solo` (vanilla, BT battle patches lifted) can leave them lifted. The stash is
-  a payload static (`Payload/BattleMode.cs:75`), and every payload static is fresh per generation;
+  a payload static (`Payload/BattleMode.cs:90`), and every payload static is fresh per generation;
   state that must *survive* a reload belongs in the harness `ISharedState` bag instead. Note the
-  `ISharedState` doc comment (`Harness/Contracts.cs:24-28`) already lists "BattleMode's
+  `ISharedState` doc comment (`Harness/Contracts.cs:25-30`) already lists "BattleMode's
   foreign-patch stash" among what the bag holds; the code above is the authority, and the stash is
   not in the bag today. Until it moves: iterate with `"battleMode": "coop"` (nothing is lifted, so
   nothing can be lost), or restart after a reload done in vanilla mode. Reloading in

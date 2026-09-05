@@ -1358,17 +1358,19 @@ The ids in use here are `setup-teams-guard`, `finish-deployment-guard`, `party-a
 `Payload/BootstrapWatch.cs:80`). Grep `RecordFire(` for the current set rather than trusting this
 list — every one of those ids is a row in `GUARD ACTIVITY:`.
 
-**A fire id without a health row is only half the pair, and the missing half is the dangerous one.** A
-component that records fires but never calls `Diag.Report` cannot be read against the table above: it
-contributes no row to `MOD HEALTH:`, so "renamed and never hooked" and "hooked and never needed" both
-render as silence. Twelve components were in that state until 2026-09-04, including `BattleMode` and
-both flagship deployment finalizers; six of them — `battle-mode`, `encounter-loop-guard`,
-`deployment-guards`, `party-ai-guard`, `hero-creation-guard` and `movementorder-typeinit` — now report
-and register a `<component>.contract` test, and two more (`player-identity-guard`, `bootstrap-watch`)
-gained fire counts so their retirement becomes measurable. What is still deliberately absent is a
-maintained list, not an accident: `docs/DIAGNOSTICS.md` § *What `MOD HEALTH:` does not cover*. If you
-adopt this pattern, keep the equivalent list — an exemption you can read is a decision, an exemption
-you cannot is a blind spot (`docs/MODDING-PITFALLS.md` **P19**).
+**A fire count without a health row is only half the pair, and the missing half is the dangerous one.**
+A component that never calls `Diag.Report` cannot be read against the table above, because it
+contributes no row at all: "renamed and never hooked" and "hooked and never needed" then render
+identically, as silence. Where the component also records fires, the gap is easier to miss — the
+`GUARD ACTIVITY:` row makes it look accounted for. Twelve components were in that state until
+2026-09-04, including `BattleMode` and both flagship deployment finalizers. Six now report and
+register a `<component>.contract` test — `battle-mode`, `encounter-loop-guard`, `deployment-guards`,
+`party-ai-guard`, `hero-creation-guard` and `movementorder-typeinit` — and two more
+(`player-identity-guard`, `bootstrap-watch`) gained fire counts, so their retirement becomes
+measurable. The components that still report nothing do so on purpose and are listed as such in
+`docs/DIAGNOSTICS.md` § *What `MOD HEALTH:` does not cover*. If you adopt this pattern, keep the
+equivalent list: an exemption you can read is a decision, an exemption you cannot is a blind spot
+(`docs/MODDING-PITFALLS.md` **P19**).
 
 **Two ids under one component is legitimate, and needs saying out loud.** The deployment finalizers
 fire as `setup-teams-guard` and `finish-deployment-guard` but report health under the single
@@ -2177,9 +2179,10 @@ the game module, exiting non-zero on any mismatch — the tree is release-ready 
 says so (`tools/release.sh:24-78`). `--no-build` re-deploys and re-verifies existing output;
 `BANNERLORD_DIR` points it at a non-standard install. A locked file (the game is running) is reported
 rather than skipped silently, with the instruction to close the game and re-run with `--no-build`
-(`:40-43,73-77`). Getting `SubModule.xml` into `dist/` at all was a real gap — nothing wrote it until
-the harness build's `StampSubModuleVersion` target was told to copy the freshly stamped file there
-(`Directory.Build.props:12-25`), so the version the launcher shows a player could lag the release.
+(`:40-43,73-77`). Getting `SubModule.xml` into `dist/` at all was a real gap — nothing wrote it, so
+the version the launcher shows a player could lag the release. The script now places it with the
+DLLs; a build-time copy was tried and reverted because it let an unreleased local build rewrite
+`dist/SubModule.xml` out from under the manifest (`docs/MODDING-PITFALLS.md` § *T2*).
 
 **The same manifest is re-checked on the player's machine.** `install.cmd` downloads the three files,
 then downloads `dist/manifest.txt` and verifies each one with `certutil -hashfile … SHA256`, refusing

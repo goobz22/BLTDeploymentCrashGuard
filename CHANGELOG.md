@@ -30,12 +30,17 @@ battle works at all with the default configuration.
   and the config parser (including the legacy `soloVanillaBattles: false` → `coop` mapping).
 - **An unresolvable lift target is no longer silent.** It used to be skipped with a bare `continue`;
   a game rename could therefore re-expose part of the solo bug with nothing in the log. It now logs
-  once per target: `[BATTLE-MODE] lift target type/method not found: … (game update?)`.
+  once per target: `[BATTLE-MODE] lift target type not found: <Type> — its BT patches cannot be
+  lifted (game update?)`, or `[BATTLE-MODE] lift target method not found: <Type>.<Method> (game
+  update?)` when the type resolves but the method does not.
 - **Battle mode records its fires.** `GUARD ACTIVITY:` now counts `battle-mode` every time patches
   are actually lifted or restored, so a session can be checked for "did the mode ever switch".
 - **`BattleMode` no longer writes its own `guardconfig.json`.** It carried a two-key stub writer that
   could leave a player with an undocumented two-line config if the harness's own write had failed;
   the harness `GuardConfig` template (every key with its `_key` explanation) is now the only writer.
+
+### Crash guards: health and self-tests
+
 - **Deployment crash guards report and self-test** (`[DEPLOY-GUARD]`, README #1). The two finalizers
   are installed by `PatchAll`, which reports nothing, so a rename would have silently disarmed the
   mod's oldest fix. A new health check verifies after `PatchAll` that our finalizers really are on
@@ -47,9 +52,6 @@ battle works at all with the default configuration.
   try/catch so one failing step cannot abort the rest. **Stated limitation:** these finalizers
   suppress the crash-to-desktop; they do **not** restore the missing player-side troops. Auto battle
   mode is what prevents the empty player side — these are the last line for when it cannot.
-
-### Crash guards: health and self-tests
-
 - **Encounter-loop breaker could never trip with the shipped config** (`[ENCOUNTER-GUARD]`,
   README #7). The loop signature is "a local `PlayerEncounter.Finish`, then a re-application of the
   pending encounter request within 4 s; four of those inside 15 s". The `Finish` stamp was written
@@ -117,9 +119,10 @@ battle works at all with the default configuration.
   in the guards themselves now, per the two items above). Before this, `tracing=true` changed *when*
   battle mode was decided and *whether* the encounter breaker could trip — so a troubleshooting run
   and a normal run were not the same program.
-- **`MOD HEALTH:` says how to read itself.** The summary line now ends with: *read each detail: a
-  BannerlordTogether OR game update may have renamed a member; a detail saying 'inert', 'not loaded'
-  or 'older game build' is on purpose*. Harness change — next launch.
+- **`MOD HEALTH:` says how to read itself.** When a component is NOT resolved, the summary line now
+  ends with: *read each detail: a BannerlordTogether OR game update may have renamed a member; a
+  detail saying 'inert', 'not loaded' or 'older game build' is on purpose*. A clean line is
+  unchanged: `MOD HEALTH: <n> active, all resolved`. Harness change — next launch.
 - **New health components reported:** `battle-mode`, `encounter-loop-guard`, `deployment-guards`,
   `party-ai-guard`, `hero-creation-guard`, `movementorder-typeinit`, each with a matching
   `<component>.contract` self-test under `selfTest=true`. The two deployment finalizers keep their
@@ -155,9 +158,12 @@ battle works at all with the default configuration.
   `dist/manifest.txt` and checks each file's SHA256 with `certutil`, refusing a mismatched set with
   a plain explanation ("the release may be mid-update on GitHub — run this again in a minute"). If
   there is no manifest or no `certutil`, it says it is skipping the check rather than failing.
-- **The build now stamps `dist/SubModule.xml` too.** `Directory.Build.props` copies the freshly
-  stamped `SubModule.xml` into `dist/` on every harness build; nothing had ever written that file,
-  which made it the easiest part of a release to ship stale.
+- **`dist/SubModule.xml` is written by the release script, never by the build.** Nothing had ever
+  written that file, which made it the easiest part of a release to ship stale; `tools/release.sh`
+  now places it beside the two DLLs from the same build. A build-time copy was tried first and
+  removed in review: an ordinary local build rewrote `dist/SubModule.xml` out from under
+  `dist/manifest.txt`, which `install.cmd` would have reported as a corrupt release to every player.
+  `tools/lint-scripts.sh` now fails if `dist/` disagrees with its manifest.
 - **`collect-diagnostics.cmd` collects the whole picture.** The bundle is now `CrashGuard.log` plus
   rotated `.1`–`.6`, `guardconfig.json`, `hero-identity.json`, `SubModule.xml`, BannerlordTogether's
   `bt-sync-*.txt`, the game's own logs from `%ProgramData%\Mount and Blade II Bannerlord\logs`
