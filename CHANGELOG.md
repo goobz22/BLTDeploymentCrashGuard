@@ -207,6 +207,14 @@ battle works at all with the default configuration.
   (`version=` plus a SHA256 per file), verifies every copy hash-matches across build output, `dist/`
   and the game module, and refuses to print "release-ready" on any mismatch. `--no-build` re-deploys
   from existing build output; if the game is running it says which copies were left locked.
+- **`dist/` is stored verbatim (`.gitattributes`: `dist/** -text`).** The first push of this
+  release shipped a `dist/manifest.txt` whose `SubModule.xml` hash was computed on the CRLF file in
+  the working tree, while git's line-ending normalisation had stored — and GitHub served — the LF
+  version. `install.cmd`'s own verification refused it on every machine ("the release may be
+  mid-update on GitHub"), which is what that check is for; nobody received a mismatched install.
+  The attribute stops git touching `dist/` bytes, `tools/lint-scripts.sh` now fails if a manifest
+  file lacks it and, once `dist/` is committed, re-hashes the committed blob against the manifest,
+  and `docs/RELEASE.md` § *9. Push* ends with hashing what GitHub actually serves.
 - **`install.cmd` verifies what it downloaded.** After fetching the three files it downloads
   `dist/manifest.txt` and checks each file's SHA256 with `certutil`, refusing a mismatched set with
   a plain explanation ("the release may be mid-update on GitHub — run this again in a minute"). If

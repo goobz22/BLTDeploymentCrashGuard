@@ -143,9 +143,17 @@ tools/lint-scripts.sh
 ```
 
 It fails if `install.cmd`, `share-log.cmd` and `collect-diagnostics.cmd` do not carry identical
-Steam-library search lists (they had already drifted to 11 / 11 / 6 entries), or if `install.cmd`
-does not both download and verify every file listed in `dist/manifest.txt`. Run it after touching
-any of the three scripts and before every release.
+Steam-library search lists (they had already drifted to 11 / 11 / 6 entries), if `install.cmd`
+does not both download and verify every file listed in `dist/manifest.txt`, if a `dist/` file does
+not hash to its manifest line, or if a manifest file is not marked `-text` in `.gitattributes`.
+Once `dist/` is committed it also re-hashes the **committed blob** of each file — the bytes GitHub
+will serve — against the manifest. That last check exists because of the first v1.3.2 push
+(2026-09-04): `core.autocrlf` normalised the CRLF `dist/SubModule.xml` to LF at check-in, GitHub
+served the LF bytes, and every `install.cmd` rejected the release as "mid-update". `.gitattributes`
+now stores `dist/**` verbatim; after changing that file, `git add --renormalize dist` is what makes
+git re-read the bytes (a plain `git add` keeps the old blob when the file's stat data is unchanged).
+Run the lint after touching any of the three scripts, **after the release commit**, and before
+every push.
 
 ## 7. Pre-release verification gate
 
@@ -200,6 +208,19 @@ git push origin main
 installer fetches each file separately, `dist/manifest.txt` must be pushed **with** the files it
 describes — a push that lands the DLLs without the manifest, or the other way round, is the
 "release may be mid-update on GitHub" state the installer is written to detect and refuse.
+
+Then verify what players actually receive — the served bytes, not the local files:
+
+```bash
+for f in BLTDeploymentCrashGuard.dll BLTDeploymentCrashGuard.Payload.dll SubModule.xml; do
+  curl -fsSL "https://raw.githubusercontent.com/goobz22/BLTDeploymentCrashGuard/main/dist/$f" | sha256sum
+done
+curl -fsSL https://raw.githubusercontent.com/goobz22/BLTDeploymentCrashGuard/main/dist/manifest.txt
+```
+
+Every hash must appear in the served manifest. (The raw CDN can lag a few minutes behind the
+push; re-run rather than assume.) This is the check that caught the 2026-09-04 line-ending
+mismatch after the push, when the pre-push lint of the day could not.
 
 ## What a player sees on an update
 

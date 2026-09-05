@@ -2211,6 +2211,27 @@ behind most of this section.
 > `Payload/BLTDeploymentCrashGuard.Payload.csproj:6,37-38`; `Harness/GuardConfig.cs:17-24`;
 > `tools/il-probes/README.md:30-32`.
 
+### T25 · Hashing the working tree, shipping the repository
+
+- **What happened** — The first push of v1.3.2 (2026-09-04) was refused by every player's
+  `install.cmd`. `tools/release.sh` had hashed `dist/SubModule.xml` on disk — a CRLF file, written
+  by MSBuild on Windows — and written that hash into `dist/manifest.txt`. `core.autocrlf=true`
+  classified the XML as text and stored it LF-normalised, so `raw.githubusercontent.com` served
+  bytes with a different SHA256, and the installer's own manifest check (T-series, above) did what
+  it was built to do: "the release may be mid-update on GitHub", previous files put back. The two
+  DLLs, being binary, matched. The pre-push lint compared the working tree to the manifest and
+  passed; nothing compared the **committed blob** to it.
+- **Lesson** — A hash manifest is only as good as the bytes the consumer receives. Hash what will be
+  served, or make sure what is served is what was hashed: mark shipped files `-text` in
+  `.gitattributes` so git never rewrites them, verify the committed blob against the manifest, and
+  after the push hash what the CDN actually returns. A related trap: after adding the attribute a
+  plain `git add` keeps the old normalised blob when the file's stat data is unchanged — only
+  `git add --renormalize` re-reads the bytes.
+- **Now** — `.gitattributes` (`dist/** -text`); `tools/lint-scripts.sh` checks 4 (the attribute on
+  every manifest file; the `HEAD:dist/<file>` blob hash once `dist/` is committed);
+  `docs/RELEASE.md` § *6. Lint the player-facing scripts* and § *9. Push — this is the release*
+  (hash the served files after every push).
+
 ---
 
 ## 13. Process and diagnosis discipline

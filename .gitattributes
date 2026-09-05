@@ -1,0 +1,7 @@
+# dist/ is shipped verbatim. install.cmd verifies every downloaded file's SHA256 against
+# dist/manifest.txt, and tools/release.sh computes those hashes on the bytes in the working tree.
+# Git must therefore never normalise line endings on check-in (core.autocrlf=true does, for any
+# file it classifies as text): a CRLF SubModule.xml hashed on disk was stored and served as LF,
+# and every install.cmd rejected the first v1.3.2 push (2026-09-04). tools/lint-scripts.sh fails
+# if this attribute is missing for a manifest file.
+dist/** -text

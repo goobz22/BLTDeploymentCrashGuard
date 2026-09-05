@@ -34,6 +34,17 @@ if [ -f "$ROOT/dist/manifest.txt" ]; then
       actual=$(sha256sum "$ROOT/dist/$name" | cut -c1-64)
       if [ "$actual" != "$hash" ]; then echo "dist/$name does not match dist/manifest.txt (run tools/release.sh; never hand-copy into dist/)"; fail=1; fi
     fi
+    # 4. What GitHub serves must hash to what the manifest says. Git normalises line endings of
+    #    files it classifies as text at check-in (core.autocrlf), so a CRLF SubModule.xml hashed on
+    #    disk was stored and served as LF, and every install.cmd rejected the first v1.3.2 push
+    #    (2026-09-04). dist/ must be stored verbatim: .gitattributes `dist/** -text`, checked here,
+    #    plus — once dist/ is committed — the committed blob itself must hash to the manifest value.
+    attr=$(env -u GIT_DIR git -C "$ROOT" check-attr text -- "dist/$name" 2>/dev/null | sed -E 's/.*: text: //')
+    if [ "$attr" != "unset" ]; then echo "dist/$name is not marked -text in .gitattributes (text attribute is '$attr'): git would normalise its line endings on check-in and GitHub would serve bytes that do not match dist/manifest.txt"; fail=1; fi
+    if env -u GIT_DIR git -C "$ROOT" cat-file -e "HEAD:dist/$name" 2>/dev/null && env -u GIT_DIR git -C "$ROOT" diff --quiet HEAD -- "dist/$name" 2>/dev/null; then
+      blob=$(env -u GIT_DIR git -C "$ROOT" show "HEAD:dist/$name" | sha256sum | cut -c1-64)
+      if [ "$blob" != "$hash" ]; then echo "HEAD:dist/$name (the bytes GitHub serves) hashes to $blob but dist/manifest.txt says $hash — the committed blob was normalised; re-add it with dist/** -text in .gitattributes"; fail=1; fi
+    fi
   done < <(awk 'NF==2{print $1, $2}' "$ROOT/dist/manifest.txt")
   [ "$count" -eq 3 ] || { echo "dist/manifest.txt lists $count file(s); expected 3 (harness DLL, payload DLL, SubModule.xml)"; fail=1; }
   echo "manifest cross-checked against install.cmd and dist/ hashes ($count files)"

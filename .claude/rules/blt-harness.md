@@ -143,6 +143,15 @@ carry the same 11 entries, and `tools/lint-scripts.sh` fails if they diverge aga
 does not both download and verify every file listed in `dist/manifest.txt`. Run it after touching any
 of the three and before every release. Edit all three together.
 
+**`dist/` bytes are the release, so git must never touch them.** `.gitattributes` marks `dist/**`
+`-text`: with `core.autocrlf=true` git normalised the CRLF `dist/SubModule.xml` to LF at check-in,
+GitHub served the LF bytes, and every `install.cmd` rejected the first v1.3.2 push against the
+manifest hash computed on the CRLF file (2026-09-04). `tools/lint-scripts.sh` fails on a manifest
+file without the attribute and, once `dist/` is committed, on a committed blob that does not hash
+to its manifest line. After editing `.gitattributes`, `git add --renormalize dist` — a plain
+`git add` keeps the old blob when the file's stat data is unchanged. After every push, hash what
+`raw.githubusercontent.com` serves (`docs/RELEASE.md` § *9. Push — this is the release*).
+
 **While the game is running the harness DLL is locked.** Deploy the payload only — it hot-reloads via
 shadow copy and logs `[HOTRELOAD] gen2 applied` (`HOTRELOAD.md` § *A) Build-and-drop (default,
 bulletproof, zero extra deps)*). Harness changes and load-time fixes need a **fresh launch**, not a
