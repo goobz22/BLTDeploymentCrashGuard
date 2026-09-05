@@ -4,115 +4,175 @@ paths: ["Payload/**", "tests/**"]
 
 # Payload guards — conventions
 
-One concern per `Payload/*.cs` file, with a header comment stating the bug, the IL evidence and
-the fix (models: `Payload/SiegeCommandGuard.cs:14-54`, `Payload/CoopCommandSplit.cs:14-43`,
-`Payload/MovementOrderTypeInitGuard.cs:11-40`). The payload hot-reloads as a whole assembly, so
-statics are fresh every generation — never assume state survives a reload.
-
-The wire-format test suites under `tests/` **link** payload sources rather than copying them
-(`tests/BirthPayloadTest/BirthPayloadTest.csproj:17-18`,
+One concern per `Payload/*.cs`, header comment stating the bug, the IL evidence and the fix (models:
+`Payload/SiegeCommandGuard.cs:14-54`, `Payload/MovementOrderTypeInitGuard.cs:11-43`). The payload
+hot-reloads as a whole assembly — statics are fresh every generation. The `tests/` suites **link**
+payload sources rather than copying them (`tests/BirthPayloadTest/BirthPayloadTest.csproj:17-18`,
 `tests/StashPayloadTest/StashPayloadTest.csproj:21-24`), so editing a `Payload/*Sync/*Data.cs` or
-`*WireFraming.cs` file changes what those projects compile — build them after touching one.
+`*WireFraming.cs` changes what they compile — build them after touching one.
 
-## Shape of a guard
+## The conforming skeleton
 
-Static class with one `Apply(Harmony harmony)` wired from `Payload/PayloadEntry.cs:47-77`:
+Every numbered comment is a rule.
 
-1. **Latch.** `if (_applied) return;` at the top; set `_applied = true` only after the patches
-   install (`Payload/SiegeCommandGuard.cs:81-84,128`). `Apply` is deliberately called again on the
-   module screen and at game start so a late-loading BannerlordTogether assembly still gets hooked
-   (module screen `Payload/PayloadEntry.cs:115-124`, game start `Payload/PayloadEntry.cs:126-133`;
-   `SiegeCommandGuard.RetryBt`, `SiegeCommandGuard.cs:142-155`).
-2. **Config gate first.** Read the guard's own key and return early when off, reporting *healthy*:
-   `GuardConfig.Bool("siegeCommandAll", true)` → `Diag.Report(Component, true, "disabled by config")`
-   (`Payload/SiegeCommandGuard.cs:87-91`, `Payload/CoopCommandSplit.cs:72-76`).
-3. **Resolve every game/BT member by NAME** through `AccessTools` — `Method`, `Property`, `Field`,
-   `Constructor`, `TypeByName` (`SiegeCommandGuard.cs:93-102`). Never a compile-time reference to BT;
-   `SubModule.xml` declares it `Optional="true"`.
-4. **Self-disable on an unresolved member.** If any required member is null, log the tag line, call
-   `Diag.Report(Component, false, "members not resolved")` and return without patching
-   (`SiegeCommandGuard.cs:104-109`, `CoopCommandSplit.cs:90-94`). Degrading to inert is the contract:
-   a game/BT rename must unhook a feature, never crash. `critical: true` escalates to an on-screen
-   warning (`Harness/Diag.cs:71-99`).
-5. **Wrap `Apply` in try/catch** → `Diag.Report(Component, false, ex.Message)` (`SiegeCommandGuard.cs:135-139`).
-   Do not swallow inside `PayloadEntry.Apply` itself: it rethrows so the harness keeps the previous
-   generation (`Payload/PayloadEntry.cs:108-112`).
-6. **Register a self-test** — `SelfHealing.RegisterTest(SelfTest)` (`SiegeCommandGuard.cs:133`,
-   `CoopCommandSplit.cs:99`). It must pin both the *members* (re-resolve them by name) and the
-   *decision logic* against known inputs, returning `SelfHealing.TestResult.Of(name, pass, detail)` —
-   see `CoopCommandSplit.cs:416-443`. Runs at startup under `selfTest=true`
-   (`Harness/SelfHealing.cs:108-141`). Tests are cleared per generation; fire counts are not.
-7. **Record fires.** `SelfHealing.RecordFire(Component)` each time the guard actually suppresses a
-   crash or corrects state (`CoopCommandSplit.cs:204,259`). A permanently-inert guard is evidence the
-   upstream bug is gone (`Harness/SelfHealing.cs:6-25`).
+```csharp
+// Payload/ExampleGuard.cs — header: the bug, the IL evidence, the fix.
+internal static class ExampleGuard
+{
+    internal const string Component = "example-guard";  // kebab-case; ALSO the RecordFire id
+    private const string Tag = "[EXAMPLE]";             // this guard's only log tag
+    private static bool _applied;
+
+    internal static void Apply(Harmony harmony)
+    {
+        if (_applied || harmony == null) return;         // 1. latch — Apply is retried
+        try
+        {
+            if (!GuardConfig.Bool("exampleGuard", true)) // 2. config gate FIRST
+            {
+                Log.Info(Tag + " DISABLED (guardconfig exampleGuard=false) — <vanilla consequence>");
+                Diag.Report(Component, true, "disabled by config");  // off on purpose is HEALTHY
+                return;
+            }
+            MethodInfo target = AccessTools.Method(typeof(Foo), "Bar");  // 3. resolve BY NAME
+            if (target == null)                                          // 4. self-disable, no throw
+            {
+                Log.Info(Tag + " inactive — Foo.Bar not resolved (game update?)");
+                Diag.Report(Component, false, "members not resolved");
+                return;
+            }
+            harmony.Patch(target, new HarmonyMethod(typeof(ExampleGuard), nameof(Prefix)));
+            _applied = true;
+            Log.Info(Tag + " active — <what the player gets>");
+            Diag.Report(Component, true, "");            // 5. EVERY exit path reports
+            SelfHealing.RegisterTest(SelfTest);          // 6. members AND decision logic
+        }
+        catch (Exception ex)
+        {
+            Log.Info(Tag + " apply failed: " + ex.Message);
+            Diag.Report(Component, false, ex.Message);
+        }
+    }
+
+    private static bool Prefix()
+    {
+        try { /* … */ SelfHealing.RecordFire(Component); return false; }  // 7. count each fire
+        catch (Exception ex) { Log.Info(Tag + " " + ex.Message); return true; }  // fail open → vanilla
+    }
+
+    internal static void OnMissionInit()   // 8. per-battle counters, depth flags, cached parties
+    { _blocked = 0; _announced = false; _cachedParty = null; }
+
+    private static SelfHealing.TestResult SelfTest()
+    {
+        bool pass = AccessTools.Method(typeof(Foo), "Bar") != null  // re-resolve the members
+                    && WantSuppress(broken: true) && !WantSuppress(broken: false);  // pin the table
+        return SelfHealing.TestResult.Of(Component + ".contract", pass, "<detail>");
+    }
+}
+```
+
+Wiring — the exact line, in the always-on block of `PayloadEntry.Apply` (`Payload/PayloadEntry.cs:49-73`):
+
+```csharp
+ExampleGuard.Apply(harmony);
+```
+
+plus `ExampleGuard.OnMissionInit();` in `PayloadEntry.OnMissionInit` (`:137-143`), and a retry in
+`OnBeforeInitialModuleScreen` (`:117-126`) if BannerlordTogether can load late
+(`SiegeCommandGuard.RetryBt`, `:142-155`); a load-time fix goes first, before `harmony.PatchAll`
+(`:42,45`). `Apply` must not swallow — it rethrows so the harness keeps the previous generation
+(`:110-114`). Live examples: `SiegeCommandGuard.cs:87-109`, `CoopCommandSplit.cs:204,259,416-441`.
+Tests clear per generation, fire counts do not (`Harness/SelfHealing.cs:44-57,97-105`).
+
+## Ids: one convention, one documented exception
+
+kebab-case; the `Diag.Report` component id **is** the `SelfHealing.RecordFire` id; the self-test is
+`"<component>.contract"` — only the pipeline suites deviate (`pregnancy-sync.loopback`,
+`stash-sync.loopback`, `client-bootstrap-fix.wiring`). The exception: the two deployment finalizers
+fire as `setup-teams-guard` / `finish-deployment-guard` (`Payload/DeploymentCrashGuards.cs:106,127`)
+under the single `deployment-guards` component — two rows in `GUARD ACTIVITY:`, one in `MOD HEALTH:`.
+All three ids get a row in `docs/FIX-REFERENCE.md` § *Index 5: MOD HEALTH / SELFTEST component id →
+file / README item*.
+
+## `critical: true` is earned
+
+It puts a warning on the player's screen (`Harness/Diag.cs:71-99`) — use it only when the fix's
+absence re-exposes a **crash-to-desktop** or makes **battles unplayable**, never for a degraded
+feature. The complete set: `deployment-guards` (`Payload/DeploymentCrashGuards.cs:42,48`),
+`movementorder-typeinit` (`Payload/MovementOrderTypeInitGuard.cs:65,78,85,92`),
+`client-bootstrap-fix` (`Payload/ClientBootstrapFix.cs:71,78`), `bg-tick-budget-guard` on an
+unresolved `TryBackgroundCampaignTick` (`Payload/BackgroundTickBudgetGuard.cs:66`), and `battle-mode`
+when a chokepoint hook is missing or `Apply` throws (`Payload/BattleMode.cs:130,136`) — an unresolved
+lift target degrades and is **not** critical: it costs one lifted method, not the player side. Adding
+or removing one updates the same list in `CLAUDE.md` § *Conventions for guards/fixes*, same commit.
+
+## Health: no guard is exempt any more
+
+`DeploymentCrashGuards` is no longer the anti-pattern: its attribute finalizers are installed by
+`harmony.PatchAll`, which reports nothing, but `DeploymentCrashGuardHealth` runs straight after
+(`Payload/PayloadEntry.cs:45-46`), verifies they really sit on `SetupTeams`/`FinishDeployment`, reports
+and registers a self-test (`Payload/DeploymentCrashGuards.cs:26-49`). Attribute patching is fine —
+pair it with a health class. `battle-mode`, `encounter-loop-guard`, `deployment-guards`,
+`party-ai-guard`, `hero-creation-guard` and `movementorder-typeinit` now all report health and register
+a `.contract` test; the maintained list of what still never reaches `MOD HEALTH:` is
+`docs/DIAGNOSTICS.md` § *What `MOD HEALTH:` does not cover* — wire new code up, do not join it.
+
+**A decision point is hooked by its guard, never by a tracer.** `TracePatches` is log-only, literally
+so since v1.3.2 (`Payload/TracePatches.cs:14-21`). `BattleMode`'s `StartBattle`/`OpenNew` decisions and
+`EncounterLoopGuard`'s `Finish` stamp used to live in it, so under the default `tracing=false` the
+first solo battle ran with the player side stripped and the breaker could never trip
+(`Payload/BattleMode.cs:110-137`, `Payload/EncounterLoopGuard.cs:70-73,136`).
 
 ## Logging
 
-- **One tag per guard.** New guards declare a `private const string Tag` and use it on every line;
-  today only two files do (`SiegeCommandGuard.cs:57`, `CoopCommandSplit.cs:46`) — older guards still
-  write the tag inline (`MovementOrderTypeInitGuard.cs:53,64,69,76`), so treat the constant as the
-  convention for new code, not a description of the tree. Tags that hold the one-guard invariant:
-  `[SIEGE-CMD]`, `[COOP-CMD]`, `[MO-INIT]`, `[TIME-GUARD]`.
-- **Two tags are already shared and must not grow.** `[GATE]` is emitted by both
-  `Payload/CivilianGateCloseFix.cs` and `Payload/SiegeGatePromptFix.cs`; `[IDENTITY]` by both
-  `Payload/CoopHeroIdentityLock.cs` and `Payload/PlayerIdentityGuard.cs`. A grep on either mixes
-  unrelated events, which the README warns players about (`README.md:468-472`). Do not add a third
-  component to either — a new gate or identity fix takes its own tag.
-- The tag is the grep handle; register it in the README tag legend (`README.md:461-490`) and in
-  `docs/FIX-REFERENCE.md`'s log-tag index (`docs/FIX-REFERENCE.md:4059`).
+- **One tag per guard**, a `const string Tag` used on every line — eight files do it
+  (`SiegeCommandGuard.cs:57`, `CoopCommandSplit.cs:46`, `BattleMode.cs:46`,
+  `DeploymentCrashGuards.cs:23`, `EncounterLoopGuard.cs:31`, `MovementOrderTypeInitGuard.cs:47`,
+  `PartyAiCrashGuard.cs:33`, `ClientHeroCreationGuard.cs:30`).
+- **`[GATE]` and `[IDENTITY]` are already shared by two components each** (`CivilianGateCloseFix` +
+  `SiegeGatePromptFix`; `CoopHeroIdentityLock` + `PlayerIdentityGuard`) and must not grow — a grep on
+  either mixes unrelated events, which the README warns players about (§ *Diagnostics & robustness*,
+  item 27's grep-tag legend). Register a new tag there and in `docs/FIX-REFERENCE.md` § *Index 1*.
 - **High-frequency lines go through `TraceThrottle.Emit(key, msg)`** (`Payload/TraceThrottle.cs:38-84`),
-  never `Log.Info` — the first occurrence logs in full, repeats collapse to
-  `[repeat] key ×N in Ys`. A per-tick tracer without it filled the 8 MB log in minutes and rotated the
-  evidence away (`Payload/TraceThrottle.cs:7-12`). It lives in the payload on purpose so the fix can
-  hot-reload.
+  never `Log.Info`: repeats collapse to `[repeat] key ×N in Ys`. A per-tick tracer without it filled
+  the 8 MB log in minutes and rotated the evidence away (`:7-12`). Put the *deciding* value in the
+  dedup key — `[TIME]` keys on the vetoing prefix (`Payload/TimeTrace.cs:126-128`).
 
-## Per-mission and per-generation state
+## Per-mission state, load order, co-op scoping
 
-Every guard with battle state exposes `OnMissionInit()` that resets counters, depth flags and cached
-parties, called from `Payload/PayloadEntry.cs:135-142` (`SiegeCommandGuard.cs:157-166`,
-`CoopCommandSplit.cs:108-121`). Reentrancy flags are `[ThreadStatic]` (`SiegeCommandGuard.cs:62-66`).
+`OnMissionInit()` resets counters, depth flags and cached parties, called from
+`Payload/PayloadEntry.cs:137-143` (`SiegeCommandGuard.cs:157-166`, `CoopCommandSplit.cs:108-121`);
+reentrancy flags are `[ThreadStatic]` (`SiegeCommandGuard.cs:62-66`). `PlayerIdentityGuard` is the
+exception — it resets in `Tick` via `ReferenceEquals(Mission.Current, _lastMission)`
+(`Payload/PlayerIdentityGuard.cs:29,49-51`).
 
-## Load order
+`MovementOrderTypeInitGuard.ApplyEarly(harmony)` runs first, before `PatchAll` (`PayloadEntry.cs:38-45`).
+Any fix that must run before the game touches a type goes there — patching `Formation`/`OrderController`
+makes the CLR prepare the `beforefieldinit` `MovementOrder` struct, and a failed type initializer is
+cached for the process (`Payload/MovementOrderTypeInitGuard.cs:14-34`); its self-test is the load-time
+exemplar, pinning the premise, the ctor, the one transpiled site and the null-safe helper (`:152-166`).
+Load-time fixes do **not** survive a hot-reload — `HOTRELOAD.md` § *What a reload cannot do (fresh
+launch required)* lists the four cases.
 
-`MovementOrderTypeInitGuard.ApplyEarly(harmony)` runs **first** in `PayloadEntry.Apply`, before
-`harmony.PatchAll` and every other guard (`Payload/PayloadEntry.cs:38-45`). Any fix that must run
-before the game touches a type goes in that early slot — patching `Formation`/`OrderController` makes
-the CLR prepare the `beforefieldinit` `MovementOrder` struct, and a failed type initializer is cached
-for the process (`Payload/MovementOrderTypeInitGuard.cs:13-31`). Load-time fixes do **not** take effect
-on a hot-reload; they need a fresh launch — `HOTRELOAD.md:139-147` lists the four cases
-(harness changes, `MovementOrderTypeInitGuard`, `ClientBootstrapFix`, `ClanModeSoloFix`).
-
-`MovementOrderTypeInitGuard` is the exemplar of the **early slot only** — copy its ordering, not the
-rest of it. Its exits log `[MO-INIT]` but never call `Diag.Report`
-(`MovementOrderTypeInitGuard.cs:53-54,74-77`; the file contains no `Diag.Report`) and it registers
-no self-test (no `SelfHealing.RegisterTest`), so it is absent from `MOD HEALTH:` and untested under
-`selfTest=true` — exactly what steps 4 and 6 above exist to prevent. Those steps still apply to a
-new early-slot fix.
-
-## Co-op scoping
-
-Scope every behaviour change by role through `PeerDetection`. The class and its tri-state contract
-("values only; nulls mean unknown") are at `Payload/BattleMode.cs:386-390`; the members are
-`IsClient()` (`BattleMode.cs:506`), `AnyRemotePeerConnected()` (`BattleMode.cs:511`) and
-`ReadCoopStaticString(...)` (`BattleMode.cs:565`). The first two are
-tri-state: `null` means unknown, so compare `== true` (`SiegeCommandGuard.cs:230-236`,
-`CoopCommandSplit.cs:341-342`). Typical scopes: solo+host act, client stands down
-(`SiegeCommandGuard.cs:207-221`); or inert outside a live session. The role tag on each log line
-(`S`/`H`/`C`) comes from the same source (`PayloadEntry.cs:161-183`).
+Scope every behaviour change by role through `PeerDetection`, never hand-rolled reflection: the class
+and its tri-state contract ("values only; nulls mean unknown") are at `Payload/BattleMode.cs:614-618`,
+members `IsClient()` (`:755`), `AnyRemotePeerConnected()` (`:760`), `ReadCoopStaticBool/String`
+(`:808,814`), `FindCoopType` (`:706`), `Snapshot()` (`:646`). `null` means unknown, so compare
+`== true` (`SiegeCommandGuard.cs:234`) and **fail toward co-op** (`AnyRemotePeerConnected() != false`):
+a wrong "alone" sabotages a live session.
 
 ## Adding a fix — the checklist
 
-1. New `Payload/<Name>.cs` with the header, tag, `Component`, config gate, self-test; wire into
-   `PayloadEntry.Apply` (and `OnMissionInit`/`Tick` if it needs them).
-2. New config key: add it **with its `_key` explanation line** to `GuardConfig.DefaultJson`
-   (`Harness/GuardConfig.cs:82-115`) *and* a row in the README `## Config` table.
-3. `README.md` — a numbered item under Crash fixes (`README.md:77`), Co-op & gameplay fixes
-   (`README.md:172`) or Diagnostics & robustness (`README.md:444`), plus the tag in the legend
-   (`README.md:461-490`).
-4. `docs/FIX-REFERENCE.md` — a full entry (README item · Source · Class · Tag · Config · Scope, then
-   Mechanism / Patched members / Limitations / Self-test) and a row in each of the **five** indexes
-   that applies (`docs/FIX-REFERENCE.md:4044,4059,4118,4149,4266`; see `.claude/rules/blt-docs-tools.md`).
-5. `CHANGELOG.md` — an entry under the version being released.
-6. Newly proven engine or BT behaviour → `docs/ENGINE-NOTES.md` / `docs/BT-INTERNALS.md` with evidence
-   and date; a reverted attempt or gotcha → `docs/MODDING-PITFALLS.md`; a reusable technique →
-   `docs/MODDING-GUIDE.md`.
+1. New `Payload/<Name>.cs` on the skeleton; wire into `PayloadEntry.Apply` (and
+   `OnMissionInit`/`Tick`/the module-screen retry if needed).
+2. New config key: the key **with its `_key` explanation line** in `GuardConfig.DefaultJson`
+   (`Harness/GuardConfig.cs:82-115`) *and* a row in the README `## Config` table. That template is
+   written only when `guardconfig.json` is absent, so an existing install keeps its old text.
+3. `README.md` — a numbered item under § *Crash fixes*, § *Co-op & gameplay fixes* or
+   § *Diagnostics & robustness*, plus the tag in that section's legend.
+4. `docs/FIX-REFERENCE.md` — a full entry and a row in each index that applies, Index 5 included;
+   `CHANGELOG.md` under the version being released. Details: `.claude/rules/blt-docs-tools.md`;
+   shipping it: `docs/RELEASE.md`.
+5. Newly proven engine or BT behaviour → `docs/ENGINE-NOTES.md` / `docs/BT-INTERNALS.md` with evidence
+   and date; a reverted attempt → `docs/MODDING-PITFALLS.md`; a technique → `docs/MODDING-GUIDE.md`.
